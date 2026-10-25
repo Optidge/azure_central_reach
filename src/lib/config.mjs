@@ -1,3 +1,12 @@
+/**
+ * CentralReach: no account/tenant ID env var — OAuth/API uses CR_CLIENT_ID,
+ * CR_CLIENT_SECRET, CR_API_KEY with CR_BASE_URL / CR_TOKEN_URL only.
+ *
+ * Not loaded by this repo (omit from Azure for this app): HUBSPOT_FIELD_ADMIN_TOKEN,
+ * HUBSPOT_SETTINGS_CLIENT_SECRET, HUBSPOT_FIELD_ADMIN_USER_IDS, HUBSPOT_PUBLIC_BASE_URL,
+ * FIELD_MAPPING_DEMO_MODE, ALLOW_UNVERIFIED_TYPED_METADATA_WRITES.
+ * See README.md → Configuration Notes for optional keys that are read elsewhere in src/.
+ */
 const REQUIRED_ENV_NAMES = [
   "CR_CLIENT_ID",
   "CR_CLIENT_SECRET",

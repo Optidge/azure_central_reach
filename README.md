@@ -65,6 +65,40 @@ Do not enable scheduled intake polling until the deployed manual intake endpoint
 - `local.settings.json` is local-only and must never be committed.
 - Azure Function App settings configured in Azure do not automatically sync to local.
 - Environment variables for deployed environments belong in Function App settings.
+- **Required names** for intake and full sync are defined in `src/lib/config.mjs` (`REQUIRED_ENV_NAMES`, `REQUIRED_INTAKE_ENV_NAMES`). Use `local.settings.example.json` as the template for Azure parity (plus optional keys below).
+
+### CentralReach auth (no account ID)
+
+This app does **not** use a CentralReach account ID (or similar tenant/account setting). Do not add one to Azure or `local.settings.json` for this repo.
+
+Partners Enterprise API auth is only:
+
+- `CR_CLIENT_ID`
+- `CR_CLIENT_SECRET`
+- `CR_API_KEY`
+- `CR_BASE_URL`
+- `CR_TOKEN_URL`
+
+### Optional settings this repo reads (not in required lists)
+
+These are used in code but are not required by `config.mjs` validation:
+
+- `HUBSPOT_PORTAL_ID` — employee HubSpot record link writeback (`buildEmployeePayload.mjs`)
+- `HUBSPOT_PORTAL_ID_TEST`, `HUBSPOT_DEAL_OBJECT_TYPE_ID` — client metadata HubSpot links (`buildClientMetadata.mjs`)
+- `HUBSPOT_EMPLOYEE_ID_PROPERTY`, `ALLOW_EMPLOYEE_CREATE`, `PUT_ONLY_MODE` — employee sync behavior (`config.mjs` runtime flags)
+- `MAX_SEARCH_REQUESTS_PER_SECTION`, `LOOKBACK_MINUTES` — intake search paging/window
+- `CR_CLIENT_CONTACT_FORM` — client payload ContactForm default
+
+### Local-only keys (not used by this Functions repo)
+
+If your `local.settings.json` was copied from another project or tooling, these names are **not read** by this codebase (`config.mjs` and `src/` do not reference them). Safe to omit from Azure Function App settings for this app:
+
+- `HUBSPOT_FIELD_ADMIN_TOKEN`
+- `HUBSPOT_SETTINGS_CLIENT_SECRET`
+- `HUBSPOT_FIELD_ADMIN_USER_IDS`
+- `HUBSPOT_PUBLIC_BASE_URL`
+- `FIELD_MAPPING_DEMO_MODE`
+- `ALLOW_UNVERIFIED_TYPED_METADATA_WRITES`
 
 ## Build Order
 
@@ -129,3 +163,9 @@ Employee poller guidance:
 Canonical AWS business logic reference:
 
 - [https://github.com/ezekielswanson/aws_code/tree/main](https://github.com/ezekielswanson/aws_code/tree/main)
+
+## Documentation
+
+- [V1 in-state integration guide (client, v2)](docs/client-v1-in-state-integration-guide-v2.md) — latest client handoff (Optidge, 22 Oct 2026) for how the V1 in-state HubSpot to CentralReach integration should behave: field map, association labels, dashboard labels, and open gaps.
+- [Current field mappings](docs/hubspot-centralreach-field-mappings-current-state.md)
+- [Sandbox vs production MVP](docs/sandbox_vs_production_mvp.md)
