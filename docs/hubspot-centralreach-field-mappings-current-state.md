@@ -2,6 +2,10 @@
 
 Documentation of field mappings and transforms implemented in the Azure Central Reach integration **as of the current codebase**. This describes what runs today, not planned changes.
 
+**Business source of truth (field map, triggers, labels):** [Google Drive — Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit). See [`docs/SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md). When this file and Google Drive differ, the Drive doc wins for *what we should build*; this file wins for *what the repo does now*.
+
+**Sandbox trigger (Oct 25, 2026):** On portal `50850427`, the primary path is a HubSpot workflow webhook, `POST /api/hubspot-webhook`. The body is `objectTypeId` and `recordId` only. Azure reads the mapped values. `intakePoller` is disabled on `centralreachserverless` until the in-place update test passes. The poller section below is that backup, not the path that ran the create test. See `docs/plans/phase-1a-client-intake-trigger.md`.
+
 **Source of truth in code:** mapping modules under `src/mappings/`, constants in `src/constants/centralReach.mjs`, orchestration in `src/workflows/`.
 
 ---
@@ -22,10 +26,11 @@ Documentation of field mappings and transforms implemented in the Azure Central 
 
 ### Runtime flow
 
-1. **Timer:** `src/functions/intakePoller.mjs` → `src/workflows/intakePollerWorkflow.mjs` searches HubSpot for eligible deals and employee records.
-2. **Queue:** Service Bus messages to `processClientQueue` or `processEmployeeQueue`.
-3. **Sync:** `src/workflows/clientSyncWorkflow.mjs` or `src/workflows/employeeSyncWorkflow.mjs` maps fields and calls CentralReach.
-4. **Writeback:** Same workflows patch HubSpot with link/sync properties only (see sections 4 and 8).
+1. **Webhook (primary, sandbox):** `POST /api/hubspot-webhook` checks signature v2, coalesces repeat notices for 30 seconds, and enqueues the record id. Cases go to `client-sync-queue`. BCBA and BT/RBT go to `employee-sync-queue`.
+2. **Timer (backup, disabled in sandbox):** `src/functions/intakePoller.mjs` → `src/workflows/intakePollerWorkflow.mjs` would search HubSpot and enqueue the same two queues. `AzureWebJobs.intakePoller.Disabled` is true until the in-place update test passes.
+3. **Queue workers (enabled):** `processClientQueue` and `processEmployeeQueue`.
+4. **Sync:** `src/workflows/clientSyncWorkflow.mjs` or `src/workflows/employeeSyncWorkflow.mjs` maps fields and calls CentralReach. Both initiators use this path.
+5. **Writeback:** Same workflows patch HubSpot with the CentralReach contact id, profile link, and `last_sync_*` fields only (see sections 4 and 8).
 
 ### Mapping files (contract today)
 
@@ -53,6 +58,8 @@ Sandbox vs production HubSpot pipeline IDs, custom object type IDs, and stage al
 ## Client (deal) intake trigger — HubSpot polling logic
 
 Azure does **not** watch a single HubSpot property named “intake complete.” For **cases (deals)**, the timer poller treats a record as eligible when it is in a configured **deal pipeline** and **deal stage** (HubSpot’s `dealstage` internal ID). In operations, those stage IDs are the ones that correspond to **Intake Complete** (and any other stages you include in the allowlist).
+
+The primary entry point in sandbox is `POST /api/hubspot-webhook` (`src/functions/hubspotWebhook.mjs`). A HubSpot workflow sends only `objectTypeId` and `recordId`. Azure checks the legacy private-app signature v2 and enqueues the same client or employee sync. The poller schedule and stage filters below are unchanged, and that timer is disabled in sandbox.
 
 ### Schedule and entrypoint
 

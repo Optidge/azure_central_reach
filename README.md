@@ -88,6 +88,9 @@ These are used in code but are not required by `config.mjs` validation:
 - `HUBSPOT_EMPLOYEE_ID_PROPERTY`, `ALLOW_EMPLOYEE_CREATE`, `PUT_ONLY_MODE` — employee sync behavior (`config.mjs` runtime flags)
 - `MAX_SEARCH_REQUESTS_PER_SECTION`, `LOOKBACK_MINUTES` — intake search paging/window
 - `CR_CLIENT_CONTACT_FORM` — client payload ContactForm default
+- `HUBSPOT_WEBHOOK_CLIENT_SECRET` — legacy private-app **client secret** (Auth → Show secret) for `POST /api/hubspot-webhook`. Not the access token. One secret per portal.
+- `HUBSPOT_WEBHOOK_URI` — public URL HubSpot calls, including `https` and path. Required when the function host URL differs from that workflow URL, because v2 signature validation hashes that exact URI.
+- `HUBSPOT_WEBHOOK_COALESCE_SECONDS` — drop repeat notices for the same record inside this window (default 30). `0` disables coalescing.
 
 ### Local-only keys (not used by this Functions repo)
 
@@ -105,6 +108,15 @@ If your `local.settings.json` was copied from another project or tooling, these 
 1. Intake poller / intake queue (phase 1)
 2. Client sync (phase 2)
 3. Employee sync (phase 3)
+
+## HubSpot workflow webhook
+
+`POST /api/hubspot-webhook` accepts an ID-only workflow webhook and enqueues the existing client or employee sync. The timer poller is unchanged and remains the backup.
+
+- Auth on the function is anonymous. The legacy private-app **v2** signature is the check (`X-HubSpot-Signature`, `X-HubSpot-Signature-Version: v2`).
+- Body is `objectTypeId` plus `recordId`. Case is `0-3`. BCBA and BT/RBT must match `HS_BCBA_OBJECT_TYPE_ID` and `HS_BT_RBT_OBJECT_TYPE_ID`.
+- Sandbox object ids currently in use: Case `0-3`, BCBA `2-55656302`, BT/RBT `2-55656309`, portal `50850427`.
+- Set `HUBSPOT_WEBHOOK_CLIENT_SECRET` before expecting HTTP 202. Until then the route returns 503 `MISSING_WEBHOOK_SECRET`.
 
 ## Client Queue Trigger
 
@@ -166,6 +178,6 @@ Canonical AWS business logic reference:
 
 ## Documentation
 
-- [V1 in-state integration guide (client, v2)](docs/client-v1-in-state-integration-guide-v2.md) — latest client handoff (Optidge, 22 Oct 2026) for how the V1 in-state HubSpot to CentralReach integration should behave: field map, association labels, dashboard labels, and open gaps.
-- [Current field mappings](docs/hubspot-centralreach-field-mappings-current-state.md)
+- **[Source of truth (client spec)](docs/SOURCE-OF-TRUTH.md)** — business field map and rules live in [Google Drive (Optidge V2, Oct 2026)](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit); the repo does not mirror that document.
+- [Current field mappings (code as-built)](docs/hubspot-centralreach-field-mappings-current-state.md)
 - [Sandbox vs production MVP](docs/sandbox_vs_production_mvp.md)

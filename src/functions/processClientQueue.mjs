@@ -7,7 +7,8 @@ import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
 const ALLOWED_SOURCES = new Set([
   "intakePoller",
   "clientSyncHttpTest",
-  "manualClientSyncTest"
+  "manualClientSyncTest",
+  "hubspotWorkflow"
 ]);
 
 function asNonEmptyString(value) {

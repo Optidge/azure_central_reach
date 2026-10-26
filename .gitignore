@@ -8,3 +8,5 @@ bin/
 obj/
 .funcignore
 prompts/
+.cursor/skills/verify-azure-central-reach/artifacts/**
+!.cursor/skills/verify-azure-central-reach/artifacts/.gitkeep

@@ -25,16 +25,19 @@ export function buildClientSyncMessage({
   workflow = "clientSync",
   enqueuedAt = new Date().toISOString()
 }) {
-  const messageIdSource = `${dealId}:${hsLastModifiedDate}`;
+  const stamp = hsLastModifiedDate ? String(hsLastModifiedDate) : enqueuedAt;
+  const body = {
+    workflow,
+    source,
+    dealId: String(dealId),
+    enqueuedAt
+  };
+  if (hsLastModifiedDate) {
+    body.hsLastModifiedDate = String(hsLastModifiedDate);
+  }
   return {
-    body: {
-      workflow,
-      source,
-      dealId,
-      hsLastModifiedDate,
-      enqueuedAt
-    },
-    messageId: sha256(messageIdSource)
+    body,
+    messageId: sha256(`${body.dealId}:${stamp}`)
   };
 }
 
@@ -45,9 +48,12 @@ export async function sendClientSyncMessage(message) {
 
   const outboundMessage = buildClientSyncMessage({
     dealId: String(message.dealId),
-    hsLastModifiedDate: String(message.hsLastModifiedDate),
+    hsLastModifiedDate: message.hsLastModifiedDate
+      ? String(message.hsLastModifiedDate)
+      : undefined,
     source: message.source || "intakePoller",
-    workflow: message.workflow || "clientSync"
+    workflow: message.workflow || "clientSync",
+    enqueuedAt: message.enqueuedAt
   });
 
   await clientSyncSender.sendMessages(outboundMessage);
@@ -58,20 +64,41 @@ export async function sendEmployeeSyncMessage(message) {
     throw new Error("Service Bus client is not initialized");
   }
 
-  const recordId = String(message.recordId || "");
-  const employeeType = String(message.employeeType || "");
-  const hsLastModifiedDate = String(message.hsLastModifiedDate || "");
-  const messageIdSource = `${employeeType}:${recordId}:${hsLastModifiedDate}`;
-
-  await employeeSyncSender.sendMessages({
-    body: {
-      recordId,
-      employeeType,
-      hsLastModifiedDate,
-      workflow: message.workflow || "employeeSync",
-      source: message.source || "employeePoller",
-      enqueuedAt: new Date().toISOString()
-    },
-    messageId: sha256(messageIdSource)
+  const outboundMessage = buildEmployeeSyncMessage({
+    recordId: message.recordId,
+    employeeType: message.employeeType,
+    hsLastModifiedDate: message.hsLastModifiedDate,
+    workflow: message.workflow,
+    source: message.source,
+    enqueuedAt: message.enqueuedAt
   });
+
+  await employeeSyncSender.sendMessages(outboundMessage);
+}
+
+export function buildEmployeeSyncMessage({
+  recordId,
+  employeeType,
+  hsLastModifiedDate,
+  workflow = "employeeSync",
+  source = "employeePoller",
+  enqueuedAt = new Date().toISOString()
+}) {
+  const normalizedRecordId = String(recordId || "");
+  const normalizedType = String(employeeType || "");
+  const stamp = hsLastModifiedDate ? String(hsLastModifiedDate) : enqueuedAt;
+  const body = {
+    recordId: normalizedRecordId,
+    employeeType: normalizedType,
+    workflow,
+    source,
+    enqueuedAt
+  };
+  if (hsLastModifiedDate) {
+    body.hsLastModifiedDate = String(hsLastModifiedDate);
+  }
+  return {
+    body,
+    messageId: sha256(`${normalizedType}:${normalizedRecordId}:${stamp}`)
+  };
 }
