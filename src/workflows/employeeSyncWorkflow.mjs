@@ -1,7 +1,7 @@
 import { getConfig } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
-import { sha256 } from "../lib/hash.mjs";
+import { acquireLease, createStateClient, getState, putState, releaseLease } from "../lib/cosmosState.mjs";
 import {
   createHubSpotClient,
   getBtRbtRecordById,
@@ -15,7 +15,19 @@ import {
   buildEmployeePayloadForContactId,
   updateClientMetadata
 } from "../lib/centralReachClient.mjs";
-import { createStateClient, putState } from "../lib/cosmosState.mjs";
+import { CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS } from "../constants/centralReach.mjs";
+import {
+  HubSpotReadError,
+  MAPPING_VERSION,
+  canonicalizeLabels,
+  changedNamesFromHashes,
+  explicitMetadata,
+  fieldHashes,
+  hashMappedState,
+  isStateClientUnavailable,
+  metadataClearFieldIds
+} from "../lib/mappedState.mjs";
+import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { buildEmployeePayload } from "../mappings/employees/buildEmployeePayload.mjs";
 import { validateEmployeePayload } from "../mappings/employees/validateEmployeePayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
@@ -99,75 +111,58 @@ function ensureEmployeeType(employeeType) {
   return normalized;
 }
 
-function parseTimestamp(value) {
-  if (!value) {
-    return null;
-  }
-  const parsed = new Date(value).getTime();
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseBool(value) {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "true" || normalized === "1" || normalized === "yes";
-  }
-  if (typeof value === "number") {
-    return value === 1;
-  }
-  return false;
-}
-
-function shouldSyncBtRbt(properties) {
-  const hsLastModifiedDate = parseTimestamp(properties?.hs_lastmodifieddate);
-  const integrationLastWrite = parseTimestamp(properties?.integration_last_write);
-  if (!integrationLastWrite) {
-    return true;
-  }
-  if (!hsLastModifiedDate) {
-    return false;
-  }
-  return hsLastModifiedDate > integrationLastWrite;
-}
-
-function shouldSyncBcba(properties) {
-  const hsLastModifiedDate = parseTimestamp(properties?.hs_lastmodifieddate);
-  const integrationLastWrite = parseTimestamp(properties?.integration_last_write);
-  const updatedByIntegration = parseBool(properties?.updated_by_integration);
-  if (!integrationLastWrite) {
-    return true;
-  }
-  if (!hsLastModifiedDate) {
-    return false;
-  }
-  if (updatedByIntegration) {
-    return hsLastModifiedDate > integrationLastWrite;
-  }
-  return hsLastModifiedDate > integrationLastWrite;
-}
-
-function stableSortObject(value) {
-  if (Array.isArray(value)) {
-    return value.map(stableSortObject);
-  }
-  if (value && typeof value === "object") {
-    const sorted = {};
-    for (const key of Object.keys(value).sort()) {
-      if (value[key] === undefined) {
-        continue;
-      }
-      sorted[key] = stableSortObject(value[key]);
-    }
-    return sorted;
-  }
-  return value;
-}
-
 function hashPayload(payload) {
-  return sha256(JSON.stringify(stableSortObject(payload || {})));
+  return hashMappedState(payload);
+}
+
+function knownMetadataFieldIds(employeeType) {
+  if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
+    return [
+      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS,
+      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD
+    ];
+  }
+  return [
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NJ,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
+  ];
+}
+
+function asReadFailure(error, scope) {
+  if (error?.code === "HUBSPOT_READ_FAILED") {
+    return error;
+  }
+  const status = error?.response?.status;
+  if (status === 401 || status === 403) {
+    return new HubSpotReadError(scope, status);
+  }
+  return null;
+}
+
+async function claimRecordLock(claim, input) {
+  try {
+    return await claim(input);
+  } catch (error) {
+    if (isStateClientUnavailable(error)) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function readPriorSyncState(readState, pk, id) {
+  try {
+    return await readState({ pk, id });
+  } catch (error) {
+    if (isStateClientUnavailable(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function buildCentralReachContactUrl(contactId) {
@@ -215,7 +210,7 @@ function getWorkflowStateId(employeeType, recordId) {
 }
 
 export async function runEmployeeSyncWorkflow(
-  { recordId, employeeType, hsLastModifiedDate, context },
+  { recordId, employeeType, hsLastModifiedDate, source, context },
   dependencies = {}
 ) {
   const getRuntimeConfig = dependencies.getConfig || getConfig;
@@ -239,6 +234,9 @@ export async function runEmployeeSyncWorkflow(
         employeeIdProperty
       }));
   const saveState = dependencies.putState || putState;
+  const readState = dependencies.getState || getState;
+  const claimLock = dependencies.acquireLease || acquireLease;
+  const unlock = dependencies.releaseLease || releaseLease;
   const mapPayload = dependencies.buildEmployeePayload || buildEmployeePayload;
   const validatePayload = dependencies.validateEmployeePayload || validateEmployeePayload;
   const digestPayload = dependencies.hashPayload || hashPayload;
@@ -263,54 +261,39 @@ export async function runEmployeeSyncWorkflow(
   initCentralReach(config);
   initState(config);
 
+  const stateId = getWorkflowStateId(normalizedEmployeeType, normalizedRecordId);
+  let lockHeld = false;
+  let linkedContactId = null;
   try {
-    const hubspotRecord =
-      normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
-        ? await fetchBtRbt(normalizedRecordId, objectTypeId, properties)
-        : await fetchBcba(normalizedRecordId, objectTypeId, properties);
-    const hubspotProps = hubspotRecord?.properties || {};
-
-    const shouldSync =
-      normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
-        ? shouldSyncBtRbt(hubspotProps)
-        : shouldSyncBcba(hubspotProps);
-
-    if (!shouldSync) {
-      await writeEmployeeWriteback({
-        objectTypeId,
-        recordId: normalizedRecordId,
-        employeeIdProperty,
-        properties: {
-        last_sync_status: "noop",
-        last_sync_at: new Date().toISOString(),
-        last_sync_error: ""
-        }
-      });
-
-      await saveState({
-        pk: EMPLOYEE_STATE_PK,
-        id: getWorkflowStateId(normalizedEmployeeType, normalizedRecordId),
-        type: STATE_TYPES.SUCCESS,
-        ttlSeconds: config.ttl.successTtlSeconds,
-        data: {
-          workflow: "employeeSync",
-          employeeType: normalizedEmployeeType,
-          status: "noop",
-          operation: "noop",
-          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
-          invocationId: context?.invocationId || null,
-          updatedAt: new Date().toISOString()
-        }
-      });
-
-      return {
-        ok: true,
-        recordId: normalizedRecordId,
-        employeeType: normalizedEmployeeType,
-        status: "noop",
-        operation: "noop"
-      };
+    const locked = await claimRecordLock(claimLock, {
+      pk: "sync-lock:employee",
+      id: stateId,
+      ttlSeconds: config.ttl?.leaseTtlSeconds || 120
+    });
+    if (!locked) {
+      const busy = new Error("SyncInProgress");
+      busy.code = "SYNC_IN_PROGRESS";
+      throw busy;
     }
+    lockHeld = true;
+
+    const fetchRecord = async () => {
+      try {
+        return normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
+          ? await fetchBtRbt(normalizedRecordId, objectTypeId, properties)
+          : await fetchBcba(normalizedRecordId, objectTypeId, properties);
+      } catch (error) {
+        const readError = asReadFailure(error, "employee");
+        if (readError) {
+          throw readError;
+        }
+        throw error;
+      }
+    };
+
+    let hubspotRecord = await fetchRecord();
+    hubspotRecord = (await fetchRecord()) || hubspotRecord;
+    const hubspotProps = hubspotRecord?.properties || {};
 
     const mapped = mapPayload({
       record: hubspotRecord,
@@ -332,7 +315,10 @@ export async function runEmployeeSyncWorkflow(
       throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
     }
 
-    const existingContactId = String(hubspotProps?.[employeeIdProperty] || "").trim() || null;
+    const prior = await readPriorSyncState(readState, EMPLOYEE_STATE_PK, stateId);
+    const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
+    const existingContactId =
+      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
     let outboundPayload = mapped.employeePayload;
 
     if (existingContactId) {
@@ -340,12 +326,27 @@ export async function runEmployeeSyncWorkflow(
       outboundPayload = preserveIdentifiers(mapped.employeePayload, existingCrEmployee).payload;
     }
 
+    const omitFieldIds = mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
+      ? [
+          CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
+          CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
+        ]
+      : [];
+    const metadataForCompare = explicitMetadata(
+      mapped.metadataValues,
+      knownMetadataFieldIds(normalizedEmployeeType),
+      omitFieldIds
+    );
     const payloadHashInput = {
       employee: outboundPayload,
-      metadata: mapped.metadataValues || {}
+      metadata: metadataForCompare,
+      labels: canonicalizeLabels(mapped.requiredLabelIds)
     };
 
     const payloadHash = digestPayload(payloadHashInput);
+    const nextFieldHashes = fieldHashes(payloadHashInput);
+    const previousFieldHashes = prior?.data?.fieldHashes || null;
+    const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
     const previousHash = String(hubspotProps?.last_sync_hash || "");
     const canNoopByHash = Boolean(previousHash && previousHash === payloadHash && existingContactId);
     if (canNoopByHash) {
@@ -353,13 +354,16 @@ export async function runEmployeeSyncWorkflow(
         objectTypeId,
         recordId: normalizedRecordId,
         employeeIdProperty,
-        properties: buildWritebackPropertyPatch({
-          employeeType: normalizedEmployeeType,
-          employeeIdProperty,
-          payloadHash,
-          status: "noop",
-          contactId: existingContactId
-        })
+        properties: filterWritebackProperties(
+          buildWritebackPropertyPatch({
+            employeeType: normalizedEmployeeType,
+            employeeIdProperty,
+            payloadHash,
+            status: "noop",
+            contactId: existingContactId
+          }),
+          { kind: "employee", idProperty: employeeIdProperty }
+        )
       });
 
       await saveState({
@@ -374,6 +378,9 @@ export async function runEmployeeSyncWorkflow(
           operation: "noop",
           crContactId: existingContactId,
           payloadHash,
+          fieldHashes: nextFieldHashes,
+          mappingVersion: MAPPING_VERSION,
+          changedFieldNames: changedFields,
           writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed),
           mappingWarningCodes: mappingWarnings.map((item) => item?.code).filter(Boolean),
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
@@ -403,11 +410,15 @@ export async function runEmployeeSyncWorkflow(
 
     const status = syncResult.operation === "blocked" ? "blocked" : "success";
     const contactId = syncResult.crContactId || existingContactId || null;
+    linkedContactId = contactId;
     let metadataSyncSummary = null;
 
-    if (contactId && mapped.metadataValues && Object.keys(mapped.metadataValues).length > 0) {
-      metadataSyncSummary = await pushMetadata(contactId, mapped.metadataValues, {
-        labelIds: mapped.requiredLabelIds || []
+    const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
+    if (contactId && (Object.keys(metadataForCompare).length > 0 || labelIds.length > 0)) {
+      const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadataForCompare);
+      metadataSyncSummary = await pushMetadata(contactId, metadataForCompare, {
+        labelIds,
+        clearFieldIds
       });
       if ((metadataSyncSummary?.failedCount || 0) > 0) {
         logger("warn", "Employee metadata write had failures.", {
@@ -419,21 +430,78 @@ export async function runEmployeeSyncWorkflow(
           failedFieldIds: metadataSyncSummary.failedFieldIds || [],
           invocationId: context?.invocationId || null
         });
+        await writeEmployeeWriteback({
+          objectTypeId,
+          recordId: normalizedRecordId,
+          employeeIdProperty,
+          properties: filterWritebackProperties(
+            {
+              last_sync_status: "error",
+              last_sync_at: new Date().toISOString(),
+              last_sync_error: `MetadataWriteFailed fields: ${(metadataSyncSummary.failedFieldIds || []).join(",")}`.slice(0, 500)
+            },
+            { kind: "employee", idProperty: employeeIdProperty }
+          )
+        });
+        const failed = new Error("MetadataWriteFailed");
+        failed.code = "METADATA_WRITE_FAILED";
+        failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
+        throw failed;
       }
     }
+
+    const confirmedRecord = await fetchRecord();
+    const confirmedMapped = mapPayload({
+      record: confirmedRecord,
+      employeeType: normalizedEmployeeType,
+      config
+    });
+    const confirmedHash = digestPayload({
+      employee: confirmedMapped.employeePayload,
+      metadata: explicitMetadata(
+        confirmedMapped.metadataValues,
+        knownMetadataFieldIds(normalizedEmployeeType),
+        omitFieldIds
+      ),
+      labels: canonicalizeLabels(confirmedMapped.requiredLabelIds)
+    });
+    const sourceHash = digestPayload({
+      employee: mapped.employeePayload,
+      metadata: metadataForCompare,
+      labels: canonicalizeLabels(mapped.requiredLabelIds)
+    });
+    if (confirmedHash !== sourceHash) {
+      const stale = new Error("SyncStale");
+      stale.code = "SYNC_STALE";
+      throw stale;
+    }
+
+    logger("info", "Employee sync compared mapped state.", {
+      workflow: "employeeSync",
+      recordId: normalizedRecordId,
+      employeeType: normalizedEmployeeType,
+      source: source || null,
+      mappingVersion: MAPPING_VERSION,
+      outcome: status,
+      changedFieldNames: changedFields,
+      invocationId: context?.invocationId || null
+    });
 
     const writebackResult = await writeEmployeeWriteback({
       objectTypeId,
       recordId: normalizedRecordId,
       employeeIdProperty,
-      properties: buildWritebackPropertyPatch({
-        employeeType: normalizedEmployeeType,
-        employeeIdProperty,
-        payloadHash,
-        status,
-        contactId,
-        errorMessage: syncResult.reason || ""
-      })
+      properties: filterWritebackProperties(
+        buildWritebackPropertyPatch({
+          employeeType: normalizedEmployeeType,
+          employeeIdProperty,
+          payloadHash,
+          status,
+          contactId,
+          errorMessage: syncResult.reason || ""
+        }),
+        { kind: "employee", idProperty: employeeIdProperty }
+      )
     });
 
     await saveState({
@@ -448,6 +516,9 @@ export async function runEmployeeSyncWorkflow(
         operation: syncResult.operation,
         crContactId: contactId,
         payloadHash,
+        fieldHashes: nextFieldHashes,
+        mappingVersion: MAPPING_VERSION,
+        changedFieldNames: changedFields,
         metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
         metadataFailedCount: metadataSyncSummary?.failedCount ?? null,
         writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed),
@@ -470,6 +541,9 @@ export async function runEmployeeSyncWorkflow(
       writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
     };
   } catch (error) {
+    if (error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE") {
+      throw error;
+    }
     logger(
       "error",
       "Employee sync workflow failed.",
@@ -497,6 +571,8 @@ export async function runEmployeeSyncWorkflow(
           employeeType: normalizedEmployeeType,
           status: "error",
           errorMessage: String(error?.message || "Employee sync failed").slice(0, 500),
+          failedFieldIds: error?.failedFieldIds || [],
+          crContactId: linkedContactId,
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
           invocationId: context?.invocationId || null,
           updatedAt: new Date().toISOString()
@@ -516,5 +592,24 @@ export async function runEmployeeSyncWorkflow(
     }
 
     throw error;
+  } finally {
+    if (lockHeld) {
+      try {
+        await unlock({ pk: "sync-lock:employee", id: stateId });
+      } catch (releaseError) {
+        if (!isStateClientUnavailable(releaseError)) {
+          logger(
+            "error",
+            "Employee sync lock release failed.",
+            buildError({
+              workflow: "employeeSync",
+              stage: "releaseLock",
+              error: releaseError,
+              recordId: normalizedRecordId
+            })
+          );
+        }
+      }
+    }
   }
 }

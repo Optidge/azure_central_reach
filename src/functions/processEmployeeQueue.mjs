@@ -81,6 +81,7 @@ export async function processEmployeeQueue(message, context, dependencies = {}) 
       recordId: validated.recordId,
       employeeType: validated.employeeType,
       hsLastModifiedDate: validated.hsLastModifiedDate,
+      source: asNonEmptyString(payload?.source) || undefined,
       context
     });
 

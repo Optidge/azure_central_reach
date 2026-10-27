@@ -2,6 +2,7 @@ import axios from "axios";
 import { withRetry } from "./retry.mjs";
 import { CENTRAL_REACH_METADATA_FIELD_TYPES } from "../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+import { clientWritePlan } from "./mappedState.mjs";
 
 let centralReachHttpClient = null;
 let centralReachConfig = null;
@@ -164,6 +165,29 @@ async function crRequest(path, { method = "GET", body, suppressRetry = false } =
   return response?.data || null;
 }
 
+async function updateClientByExternalSystemId(payload) {
+  let response;
+  try {
+    response = await crRequest("/contacts/client/byExternalSystemId", {
+      method: "PUT",
+      body: payload
+    });
+  } catch (error) {
+    const status = error?.response?.status;
+    const errorBody = error?.response?.data || {};
+    if (status === 404 || responseLooksNotFound(errorBody)) {
+      return { found: false, crContactId: null };
+    }
+    throw error;
+  }
+
+  const crContactId = extractCrContactId(response);
+  if (!crContactId || responseLooksNotFound(response)) {
+    return { found: false, crContactId: null };
+  }
+  return { found: true, crContactId, operation: "update" };
+}
+
 export async function createOrUpdateClient(payloadOrOptions) {
   const isOptionsObject =
     payloadOrOptions &&
@@ -177,16 +201,25 @@ export async function createOrUpdateClient(payloadOrOptions) {
     throw new Error("CentralReach client payload must be an object");
   }
 
-  if (existingContactId) {
-    const normalizedId = String(existingContactId).trim();
-    await crRequest(`/contacts/client/${normalizedId}`, {
-      method: "PUT",
-      body: payload
-    });
+  let lookedUpContactId = null;
+  if (!String(existingContactId || "").trim()) {
+    const lookedUp = await updateClientByExternalSystemId(payload);
+    if (lookedUp.found) {
+      lookedUpContactId = lookedUp.crContactId;
+    }
+  }
 
+  const plan = clientWritePlan({ existingContactId, lookedUpContactId });
+  if (plan.operation === "update") {
+    if (!lookedUpContactId) {
+      await crRequest(`/contacts/client/${plan.crContactId}`, {
+        method: "PUT",
+        body: payload
+      });
+    }
     return {
       operation: "update",
-      crContactId: normalizedId
+      crContactId: plan.crContactId
     };
   }
 
@@ -373,6 +406,29 @@ async function updateContactLabels(contactId, labelIds) {
   }
 }
 
+async function clearMetadataField(contactId, fieldId) {
+  const normalizedFieldId = Number(fieldId);
+  try {
+    await crRequest(`/contacts/${contactId}/metadata/${normalizedFieldId}`, {
+      method: "DELETE"
+    });
+    return { fieldId: normalizedFieldId, operation: "cleared" };
+  } catch (error) {
+    const status = error?.response?.status;
+    if (status === 404) {
+      return { fieldId: normalizedFieldId, operation: "cleared", alreadyAbsent: true };
+    }
+    if (status === 400 || status === 405 || status === 501) {
+      return { fieldId: normalizedFieldId, operation: "clear_unsupported" };
+    }
+    return {
+      fieldId: normalizedFieldId,
+      operation: "error",
+      errorMessage: String(error?.message || "Metadata clear failed").slice(0, 300)
+    };
+  }
+}
+
 async function updateMetadataField(contactId, fieldId, value) {
   if (value === undefined || value === null || String(value).trim() === "") {
     return { fieldId: Number(fieldId), operation: "skip_empty" };
@@ -418,11 +474,16 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
 
   const values = metadataValues && typeof metadataValues === "object" ? metadataValues : {};
   const labelResult = await updateContactLabels(normalizedContactId, options.labelIds || []);
+  const clearFieldIds = new Set((options.clearFieldIds || []).map((value) => Number(value)));
   const results = [];
 
   for (const [fieldId, value] of Object.entries(values)) {
     try {
-      const result = await updateMetadataField(normalizedContactId, fieldId, value);
+      const blank = value === undefined || value === null || String(value).trim() === "";
+      const result =
+        blank && clearFieldIds.has(Number(fieldId))
+          ? await clearMetadataField(normalizedContactId, fieldId)
+          : await updateMetadataField(normalizedContactId, fieldId, value);
       results.push(result);
     } catch (error) {
       results.push({
@@ -436,11 +497,14 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
   return {
     labelResult,
     totalFields: results.length,
-    updatedCount: results.filter((item) => item.operation === "updated").length,
+    updatedCount: results.filter((item) => item.operation === "updated" || item.operation === "cleared").length,
     skippedEmptyCount: results.filter((item) => item.operation === "skip_empty").length,
-    failedCount: results.filter((item) => item.operation === "error").length,
+    failedCount: results.filter((item) => item.operation === "error" || item.operation === "clear_unsupported").length,
     failedFieldIds: results
-      .filter((item) => item.operation === "error")
+      .filter((item) => item.operation === "error" || item.operation === "clear_unsupported")
+      .map((item) => item.fieldId),
+    clearUnsupportedFieldIds: results
+      .filter((item) => item.operation === "clear_unsupported")
       .map((item) => item.fieldId),
     results
   };

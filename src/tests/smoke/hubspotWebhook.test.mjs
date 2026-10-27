@@ -111,7 +111,7 @@ test("bcba and bt object ids route to the employee queue", () => {
   );
 });
 
-test("repeat notice for the same record is coalesced", async () => {
+test("repeat notice for the same record is still enqueued", async () => {
   const rawBody = JSON.stringify({ objectTypeId: "0-3", recordId: "12345" });
   let sends = 0;
   const response = await hubspotWebhook(signedRequest(rawBody), {}, {
@@ -125,7 +125,9 @@ test("repeat notice for the same record is coalesced", async () => {
 
   assert.equal(response.status, 202);
   assert.equal(response.jsonBody.coalesced, true);
-  assert.equal(sends, 0);
+  assert.equal(response.jsonBody.accepted, true);
+  assert.equal(sends, 1);
+  assert.equal(JSON.stringify(response.jsonBody).includes("phi_"), false);
 });
 
 test("bad signature is rejected and does not enqueue", async () => {

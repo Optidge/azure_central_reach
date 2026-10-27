@@ -33,6 +33,7 @@ test("valid message calls workflow with dealId and hsLastModifiedDate", async ()
   assert.deepEqual(calledWith, {
     dealId: "123",
     hsLastModifiedDate: "1700000000000",
+    source: "intakePoller",
     context: baseContext
   });
 });

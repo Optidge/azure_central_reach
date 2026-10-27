@@ -1,14 +1,25 @@
 import { getConfig } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
-import { sha256 } from "../lib/hash.mjs";
-import { createHubSpotClient, getDealById, updateDealProperties } from "../lib/hubspotClient.mjs";
+import { createHubSpotClient, getDealById, listAssociations, updateDealProperties } from "../lib/hubspotClient.mjs";
 import {
   createCentralReachClient,
   createOrUpdateClient,
   updateClientMetadata
 } from "../lib/centralReachClient.mjs";
-import { createStateClient, putState } from "../lib/cosmosState.mjs";
+import { acquireLease, createStateClient, getState, putState, releaseLease } from "../lib/cosmosState.mjs";
+import {
+  HubSpotReadError,
+  MAPPING_VERSION,
+  buildComparableState,
+  changedNamesFromHashes,
+  fieldHashes,
+  hashMappedState,
+  isStateClientUnavailable,
+  metadataClearFieldIds
+} from "../lib/mappedState.mjs";
+import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
+import { associationsForComparison } from "../constants/staffingAssociations.mjs";
 import { buildClientPayload } from "../mappings/client/buildClientPayload.mjs";
 import { buildClientMetadata } from "../mappings/client/buildClientMetadata.mjs";
 import { validateClientPayload } from "../mappings/client/validateClientPayload.mjs";
@@ -77,24 +88,41 @@ const REQUIRED_DEAL_PROPERTIES = [
   "central_reach_link_to_client"
 ];
 
-function stableSortObject(value) {
-  if (Array.isArray(value)) {
-    return value.map(stableSortObject);
-  }
-
-  if (value && typeof value === "object") {
-    const sorted = {};
-    for (const key of Object.keys(value).sort()) {
-      sorted[key] = stableSortObject(value[key]);
-    }
-    return sorted;
-  }
-
-  return value;
+function hashPayload(payload) {
+  return hashMappedState(payload);
 }
 
-function hashPayload(payload) {
-  return sha256(JSON.stringify(stableSortObject(payload || {})));
+async function claimRecordLock(claim, input) {
+  try {
+    return await claim(input);
+  } catch (error) {
+    if (isStateClientUnavailable(error)) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function readPriorSyncState(readState, pk, id) {
+  try {
+    return await readState({ pk, id });
+  } catch (error) {
+    if (isStateClientUnavailable(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function asReadFailure(error, scope) {
+  if (error?.code === "HUBSPOT_READ_FAILED") {
+    return error;
+  }
+  const status = error?.response?.status;
+  if (status === 401 || status === 403) {
+    return new HubSpotReadError(scope, status);
+  }
+  return null;
 }
 
 function ensureDealId(dealId) {
@@ -114,7 +142,7 @@ function buildCentralReachContactUrl(contactId) {
 }
 
 export async function runClientSyncWorkflow(
-  { dealId, hsLastModifiedDate, context },
+  { dealId, hsLastModifiedDate, source, context },
   dependencies = {}
 ) {
   const getRuntimeConfig = dependencies.getConfig || getConfig;
@@ -126,6 +154,10 @@ export async function runClientSyncWorkflow(
   const upsertClient = dependencies.createOrUpdateClient || createOrUpdateClient;
   const pushMetadata = dependencies.updateClientMetadata || updateClientMetadata;
   const saveState = dependencies.putState || putState;
+  const readState = dependencies.getState || getState;
+  const claimLock = dependencies.acquireLease || acquireLease;
+  const unlock = dependencies.releaseLease || releaseLease;
+  const loadAssociations = dependencies.listAssociations || listAssociations;
   const mapPayload = dependencies.buildClientPayload || buildClientPayload;
   const mapMetadata = dependencies.buildClientMetadata || buildClientMetadata;
   const validatePayload = dependencies.validateClientPayload || validateClientPayload;
@@ -142,58 +174,198 @@ export async function runClientSyncWorkflow(
   initCentralReach(config);
   initState(config);
 
+  let lockHeld = false;
   try {
-    const deal = await fetchDeal(normalizedDealId, [...REQUIRED_DEAL_PROPERTIES, crContactIdProperty]);
+    const locked = await claimRecordLock(claimLock, {
+      pk: "sync-lock:client",
+      id: normalizedDealId,
+      ttlSeconds: config.ttl?.leaseTtlSeconds || 120
+    });
+    if (!locked) {
+      const busy = new Error("SyncInProgress");
+      busy.code = "SYNC_IN_PROGRESS";
+      throw busy;
+    }
+    lockHeld = true;
+
+    const propertyList = [...REQUIRED_DEAL_PROPERTIES, crContactIdProperty];
+    let deal;
+    try {
+      deal = await fetchDeal(normalizedDealId, propertyList);
+      const confirmed = await fetchDeal(normalizedDealId, propertyList);
+      if (confirmed) {
+        deal = confirmed;
+      }
+    } catch (error) {
+      const readError = asReadFailure(error, "deal");
+      if (readError) {
+        throw readError;
+      }
+      throw error;
+    }
+
     const payload = mapPayload({ deal, config });
     const validation = validatePayload(payload);
-
     if (!validation.isValid) {
       throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
     }
 
-    const payloadHash = digestPayload(payload);
+    const metadata = mapMetadata({ deal });
+    let includeRelationships = false;
+    let relationships = [];
+    const bcbaType = config.hubspot.bcbaObjectTypeId;
+    const btType = config.hubspot.btRbtObjectTypeId;
+    if (bcbaType && btType) {
+      try {
+        const [bcbaAssociations, btAssociations] = await Promise.all([
+          loadAssociations({
+            fromObjectType: "deals",
+            fromId: normalizedDealId,
+            toObjectType: bcbaType
+          }),
+          loadAssociations({
+            fromObjectType: "deals",
+            fromId: normalizedDealId,
+            toObjectType: btType
+          })
+        ]);
+        relationships = associationsForComparison([
+          ...(bcbaAssociations || []),
+          ...(btAssociations || [])
+        ]);
+        includeRelationships = true;
+      } catch (error) {
+        if (!String(error?.message || "").includes("not initialized")) {
+          const readError = asReadFailure(error, "associations");
+          if (readError) {
+            throw readError;
+          }
+          throw error;
+        }
+      }
+    }
+
+    const comparable = buildComparableState({
+      core: payload,
+      metadata: metadata.metadataValues,
+      labels: metadata.labelIds,
+      relationships,
+      includeRelationships
+    });
+    const payloadHash = digestPayload(comparable);
+    const nextFieldHashes = fieldHashes(comparable);
+    const prior = await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId);
+    const previousFieldHashes = prior?.data?.fieldHashes || null;
+    const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
+    const hubspotContactId = String(deal?.properties?.[crContactIdProperty] || "").trim();
+    const existingContactId =
+      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
     const existingHash = deal?.properties?.last_sync_hash || null;
-    const existingContactId = deal?.properties?.[crContactIdProperty] || null;
 
     let syncResult;
-    if (existingHash && existingHash === payloadHash) {
+    if (existingHash && existingHash === payloadHash && existingContactId) {
       syncResult = {
         operation: "noop",
-        crContactId: existingContactId ? String(existingContactId) : null
+        crContactId: String(existingContactId)
       };
     } else {
       syncResult = await upsertClient({
         payload,
         existingContactId
       });
+      if (
+        (syncResult?.operation === "create" || !hubspotContactId) &&
+        syncResult?.crContactId
+      ) {
+        await saveState({
+          pk: CLIENT_STATE_PK,
+          id: normalizedDealId,
+          type: "pending_link",
+          ttlSeconds: config.ttl.successTtlSeconds,
+          data: {
+            workflow: "clientSync",
+            crContactId: String(syncResult.crContactId),
+            fieldHashes: previousFieldHashes,
+            updatedAt: new Date().toISOString()
+          }
+        });
+      }
     }
 
-    const metadata = mapMetadata({ deal });
     let metadataSyncSummary = null;
-
-    if (syncResult.crContactId) {
+    if (syncResult.operation !== "noop" && syncResult.crContactId) {
+      const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadata.metadataValues);
       metadataSyncSummary = await pushMetadata(
         syncResult.crContactId,
         metadata.metadataValues,
-        { labelIds: metadata.labelIds }
+        { labelIds: metadata.labelIds, clearFieldIds }
       );
+      if ((metadataSyncSummary?.failedCount || 0) > 0) {
+        const failed = new Error("MetadataWriteFailed");
+        failed.code = "METADATA_WRITE_FAILED";
+        failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
+        throw failed;
+      }
+    }
+
+    let confirmedDeal = deal;
+    try {
+      confirmedDeal = (await fetchDeal(normalizedDealId, propertyList)) || deal;
+    } catch (error) {
+      const readError = asReadFailure(error, "deal-confirm");
+      if (readError) {
+        throw readError;
+      }
+      throw error;
+    }
+    const confirmedPayload = mapPayload({ deal: confirmedDeal, config });
+    const confirmedMetadata = mapMetadata({ deal: confirmedDeal });
+    const confirmedHash = digestPayload(
+      buildComparableState({
+        core: confirmedPayload,
+        metadata: confirmedMetadata.metadataValues,
+        labels: confirmedMetadata.labelIds,
+        relationships,
+        includeRelationships
+      })
+    );
+    if (confirmedHash !== payloadHash) {
+      const stale = new Error("SyncStale");
+      stale.code = "SYNC_STALE";
+      throw stale;
     }
 
     const status = syncResult.operation === "noop" ? "noop" : "success";
-    await pushWriteback(normalizedDealId, {
-      updated_by_integration: true,
-      integration_last_write: new Date().toISOString(),
-      last_sync_at: new Date().toISOString(),
-      last_sync_status: status,
-      last_sync_error: "",
-      last_sync_hash: payloadHash,
-      ...(syncResult.crContactId
-        ? {
-            [crContactIdProperty]: String(syncResult.crContactId),
-            central_reach_link_to_client: buildCentralReachContactUrl(syncResult.crContactId)
-          }
-        : {})
+    logger("info", "Client sync compared mapped state.", {
+      workflow: "clientSync",
+      recordId: normalizedDealId,
+      source: source || null,
+      mappingVersion: MAPPING_VERSION,
+      outcome: status,
+      changedFieldNames: changedFields,
+      invocationId: context?.invocationId || null
     });
+
+    await pushWriteback(
+      normalizedDealId,
+      filterWritebackProperties(
+        {
+          updated_by_integration: true,
+          integration_last_write: new Date().toISOString(),
+          last_sync_at: new Date().toISOString(),
+          last_sync_status: status,
+          last_sync_error: "",
+          last_sync_hash: payloadHash,
+          ...(syncResult.crContactId
+            ? {
+                [crContactIdProperty]: String(syncResult.crContactId),
+                central_reach_link_to_client: buildCentralReachContactUrl(syncResult.crContactId)
+              }
+            : {})
+        },
+        { kind: "client", idProperty: crContactIdProperty }
+      )
+    );
 
     await saveState({
       pk: CLIENT_STATE_PK,
@@ -206,6 +378,9 @@ export async function runClientSyncWorkflow(
         operation: syncResult.operation,
         crContactId: syncResult.crContactId || null,
         payloadHash,
+        fieldHashes: nextFieldHashes,
+        mappingVersion: MAPPING_VERSION,
+        changedFieldNames: changedFields,
         hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
         invocationId: context?.invocationId || null,
         metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
@@ -220,10 +395,14 @@ export async function runClientSyncWorkflow(
       status,
       operation: syncResult.operation,
       crContactId: syncResult.crContactId || null,
+      changedFieldNames: changedFields,
       metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? 0,
       metadataFailedCount: metadataSyncSummary?.failedCount ?? 0
     };
   } catch (error) {
+    if (error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE") {
+      throw error;
+    }
     logger(
       "error",
       "Client sync workflow failed.",
@@ -240,11 +419,20 @@ export async function runClientSyncWorkflow(
     );
 
     try {
-      await pushWriteback(normalizedDealId, {
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: "error",
-        last_sync_error: String(error?.message || "Client sync failed").slice(0, 500)
-      });
+      await pushWriteback(
+        normalizedDealId,
+        filterWritebackProperties(
+          {
+            last_sync_at: new Date().toISOString(),
+            last_sync_status: "error",
+            last_sync_error: String(error?.message || "Client sync failed").slice(0, 500),
+            ...(Array.isArray(error?.failedFieldIds) && error.failedFieldIds.length
+              ? { last_sync_error: `MetadataWriteFailed fields: ${error.failedFieldIds.join(",")}`.slice(0, 500) }
+              : {})
+          },
+          { kind: "client", idProperty: crContactIdProperty }
+        )
+      );
     } catch (writebackError) {
       logger(
         "error",
@@ -268,6 +456,9 @@ export async function runClientSyncWorkflow(
           workflow: "clientSync",
           status: "error",
           errorMessage: String(error?.message || "Client sync failed").slice(0, 500),
+          failedFieldIds: error?.failedFieldIds || [],
+          crContactId: (await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId))?.data
+            ?.crContactId || null,
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
           invocationId: context?.invocationId || null,
           updatedAt: new Date().toISOString()
@@ -287,5 +478,24 @@ export async function runClientSyncWorkflow(
     }
 
     throw error;
+  } finally {
+    if (lockHeld) {
+      try {
+        await unlock({ pk: "sync-lock:client", id: normalizedDealId });
+      } catch (releaseError) {
+        if (!isStateClientUnavailable(releaseError)) {
+          logger(
+            "error",
+            "Client sync lock release failed.",
+            buildError({
+              workflow: "clientSync",
+              stage: "releaseLock",
+              error: releaseError,
+              recordId: normalizedDealId
+            })
+          );
+        }
+      }
+    }
   }
 }

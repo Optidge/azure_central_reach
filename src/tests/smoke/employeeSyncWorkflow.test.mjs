@@ -269,9 +269,12 @@ test("workflow logs warning when metadata write reports failed fields", async ()
     })
   });
 
-  await runEmployeeSyncWorkflow(
-    { recordId: "1", employeeType: "bt_rbt", context: { invocationId: "inv-metadata-fail" } },
-    deps
+  await assert.rejects(
+    runEmployeeSyncWorkflow(
+      { recordId: "1", employeeType: "bt_rbt", context: { invocationId: "inv-metadata-fail" } },
+      deps
+    ),
+    /MetadataWriteFailed/
   );
 
   const metadataWarning = calls.warnings.find(
@@ -279,6 +282,8 @@ test("workflow logs warning when metadata write reports failed fields", async ()
   );
   assert.equal(Boolean(metadataWarning), true);
   assert.equal(metadataWarning.meta.failedFieldIds.includes(138703), true);
+  assert.equal(calls.writebacks.some((item) => item.properties.last_sync_hash), false);
+  assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
 });
 
 test("workflow writes fail state and rethrows errors", async () => {

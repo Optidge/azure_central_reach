@@ -8,7 +8,8 @@ const ALLOWED_SOURCES = new Set([
   "intakePoller",
   "clientSyncHttpTest",
   "manualClientSyncTest",
-  "hubspotWorkflow"
+  "hubspotWorkflow",
+  "linkedRecheck"
 ]);
 
 function asNonEmptyString(value) {
@@ -95,6 +96,7 @@ export async function processClientQueue(message, context, dependencies = {}) {
     await runWorkflow({
       dealId: validated.dealId,
       hsLastModifiedDate: validated.hsLastModifiedDate,
+      source: validated.source,
       context
     });
 

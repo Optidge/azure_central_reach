@@ -26,7 +26,7 @@ Documentation of field mappings, transforms, and **change detection** implemente
 
 ### Runtime flow
 
-1. **Webhook (primary, sandbox):** `POST /api/hubspot-webhook` checks signature v2, coalesces repeat notices for 30 seconds, and enqueues the record id. Cases go to `client-sync-queue`. BCBA and BT/RBT go to `employee-sync-queue`.
+1. **Webhook (primary, sandbox):** `POST /api/hubspot-webhook` checks signature v2 and enqueues the record id. A repeat notice during an in-flight refresh is still enqueued. Cases go to `client-sync-queue`. BCBA and BT/RBT go to `employee-sync-queue`.
 2. **Timer (backup, disabled in sandbox):** `src/functions/intakePoller.mjs` → `src/workflows/intakePollerWorkflow.mjs` would search HubSpot and enqueue the same two queues. `AzureWebJobs.intakePoller.Disabled` is true until the in-place update test passes.
 3. **Queue workers (enabled):** `processClientQueue` and `processEmployeeQueue`.
 4. **Sync:** `src/workflows/clientSyncWorkflow.mjs` or `src/workflows/employeeSyncWorkflow.mjs` maps fields and calls CentralReach. Both initiators use this path.
@@ -131,8 +131,8 @@ Two layers decide whether HubSpot activity becomes a CentralReach write. Webhook
 
 | Layer | Question | Where |
 | --- | --- | --- |
-| **1. Eligibility** | Should this record be synced (or re-synced) at all? | Poller: `shouldSyncDeal` / `shouldSyncBtRbt` / `shouldSyncBcba` in `intakePollerWorkflow.mjs`. Employee sync re-checks the same rules in `employeeSyncWorkflow.mjs`. |
-| **2. Content hash** | Did mapped outbound content change enough to update CentralReach? | Compare SHA-256 to HubSpot `last_sync_hash` in `clientSyncWorkflow.mjs` / `employeeSyncWorkflow.mjs`. |
+| **1. Eligibility** | Should this record be enqueued? | Initial poller search still uses pipeline/stage allowlists plus `hs_lastmodifieddate` vs `integration_last_write`. A separate linked-record recheck (`LINKED_RECHECK_ENABLED`, default on when the poller runs) pages records that already have a CentralReach id, with no stage or timestamp filter. The poller timer stays disabled until separately turned on. |
+| **2. Content hash** | Did the mapped state change? | Webhook and poller workers compare one SHA-256 of core payload, explicit metadata blanks, label ids, and (clients) staffing association ids. Employee workers no longer return before that comparison because the parent timestamp is older than `integration_last_write`. |
 
 ### Layer 1 — Eligibility fields (any HubSpot modification)
 
@@ -150,10 +150,10 @@ These properties are **not** mapped to CentralReach. After a successful (or empl
 
 Hash is SHA-256 of a stable-sorted JSON payload. Match + existing CR contact id → contact body PUT can **noop**.
 
-#### Client (Deal) — contact body only
+#### Client (Deal) — contact body, metadata, labels, and staffing associations
 
-**Code:** `hashPayload(buildClientPayload(...))` vs deal `last_sync_hash`.  
-**Not in hash:** client metadata and labels (allergies, BT names, auth hours, insurance, etc.). On hash match, the contact PUT is skipped but **metadata/labels are still written** to CentralReach.
+**Code:** `hashMappedState` of `{ core, metadata, labels, relationships }` vs deal `last_sync_hash`.  
+On a full hash match, the contact PUT and the metadata/label writes are skipped. A metadata clear is attempted with HTTP DELETE only when a previously synced metadata value becomes blank. Empty-string PUT is not used as a clear. DELETE responses 400, 405, and 501 are recorded as `clear_unsupported` and do not advance `last_sync_hash`. Staffing comparison uses association ids and type ids from the v4 associations API, not name fields. Unlabeled and candidate-only type ids are excluded.
 
 | HubSpot property | Role in hash |
 | --- | --- |
@@ -175,10 +175,10 @@ Hash is SHA-256 of a stable-sorted JSON payload. Match + existing CR contact id 
 
 Also hashed as constants/config on the payload: `ContactForm` (from env / default).
 
-#### BT/RBT — employee body + metadata
+#### BT/RBT — employee body, metadata, and labels
 
-**Code:** `hashPayload({ employee, metadata })` vs record `last_sync_hash`.  
-**Not in hash:** label IDs driven by `bt_rbt_type` / state (labels still applied on sync paths that write).
+**Code:** `hashMappedState({ employee, metadata, labels })` vs record `last_sync_hash`.  
+Label ids are in the hash. Mapped metadata keys are stored as explicit null when blank, except the HubSpot record link when the portal id is not configured (that field is omitted, not cleared).
 
 | HubSpot property | Role in hash |
 | --- | --- |
@@ -196,9 +196,9 @@ Also hashed as constants/config on the payload: `ContactForm` (from env / defaul
 | `street_address__work_`, `city__work_`, `state__work_`, `postal_code__work_` | Work address metadata (`133819`) when non-empty |
 | `hs_object_id` (+ portal / object type) | HubSpot record link metadata (`138703`) when portal id is set |
 
-#### BCBA — employee body + metadata
+#### BCBA — employee body, metadata, and labels
 
-**Code:** same `{ employee, metadata }` hash pattern as BT/RBT.
+**Code:** same `{ employee, metadata, labels }` hash as BT/RBT. Blank mapped metadata is part of the hash. The HubSpot record link is omitted, not cleared, when the portal id is not configured.
 
 | HubSpot property | Role in hash |
 | --- | --- |
