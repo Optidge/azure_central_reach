@@ -5,14 +5,16 @@ import {
   createHubSpotClient,
   searchIntakeCompleteDeals,
   searchEligibleBtRbtRecords,
-  searchEligibleBcbaRecords
+  searchEligibleBcbaRecords,
+  searchRecordsByKnownProperty
 } from "../lib/hubspotClient.mjs";
 import {
   createStateClient,
   acquireLease,
   releaseLease,
   hasState,
-  putState
+  putState,
+  getState
 } from "../lib/cosmosState.mjs";
 import {
   createServiceBusClient,
@@ -86,6 +88,10 @@ export function shouldSyncBcba(candidate) {
   return hsLastModifiedDate > integrationLastWrite;
 }
 
+export function isLinkedForOngoingRefresh(candidate, idProperty) {
+  return Boolean(String(candidate?.properties?.[idProperty] || "").trim());
+}
+
 export function buildIntakeDedupeId(dealId, hsLastModifiedDate) {
   return `${String(dealId)}:${String(hsLastModifiedDate)}`;
 }
@@ -115,6 +121,10 @@ export async function runIntakePollerWorkflow(context) {
     bcbaMessagesEnqueued: 0,
     bcbaSkippedAlreadyProcessed: 0,
     bcbaSkippedShouldSyncFalse: 0,
+    linkedRecheckEnabled: false,
+    linkedClientEnqueued: 0,
+    linkedBtRbtEnqueued: 0,
+    linkedBcbaEnqueued: 0,
     errorsCount: 0
   };
 
@@ -374,6 +384,94 @@ export async function runIntakePollerWorkflow(context) {
     }
 
     summary.messagesEnqueued += summary.btRbtMessagesEnqueued + summary.bcbaMessagesEnqueued;
+
+    if (config.limits.linkedRecheckEnabled) {
+      summary.linkedRecheckEnabled = true;
+      const rechecks = [
+        {
+          entity: "client",
+          objectTypeId: "deals",
+          propertyName: config.limits.crContactIdProperty,
+          limit: config.limits.maxDealsPerRun,
+          countKey: "linkedClientEnqueued",
+          send: async (recordId) =>
+            sendClientSyncMessage({
+              dealId: recordId,
+              source: "linkedRecheck",
+              workflow: "clientSync"
+            })
+        },
+        {
+          entity: "bt_rbt",
+          objectTypeId: config.hubspot.btRbtObjectTypeId,
+          propertyName: config.limits.employeeIdProperty,
+          limit: config.limits.maxBtRbtPerRun,
+          countKey: "linkedBtRbtEnqueued",
+          send: async (recordId) =>
+            sendEmployeeSyncMessage({
+              workflow: "employeeSync",
+              source: "linkedRecheck",
+              employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
+              recordId
+            })
+        },
+        {
+          entity: "bcba",
+          objectTypeId: config.hubspot.bcbaObjectTypeId,
+          propertyName: config.limits.employeeIdProperty,
+          limit: config.limits.maxBcbaPerRun,
+          countKey: "linkedBcbaEnqueued",
+          send: async (recordId) =>
+            sendEmployeeSyncMessage({
+              workflow: "employeeSync",
+              source: "linkedRecheck",
+              employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
+              recordId
+            })
+        }
+      ];
+
+      for (const spec of rechecks) {
+        try {
+          const cursor = await getState({ pk: `recheck:${spec.entity}`, id: "cursor" });
+          const page = await searchRecordsByKnownProperty({
+            objectTypeId: spec.objectTypeId,
+            propertyName: spec.propertyName,
+            properties: ["hs_object_id", spec.propertyName, "hs_lastmodifieddate"],
+            limit: spec.limit,
+            after: cursor?.data?.after || null
+          });
+          for (const candidate of page.results) {
+            const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
+            if (!recordId || !isLinkedForOngoingRefresh(candidate, spec.propertyName)) {
+              continue;
+            }
+            await spec.send(recordId);
+            summary[spec.countKey] += 1;
+          }
+          await putState({
+            pk: `recheck:${spec.entity}`,
+            id: "cursor",
+            type: "recheck-cursor",
+            ttlSeconds: config.ttl.dedupeTtlSeconds,
+            data: { after: page.nextAfter }
+          });
+        } catch (error) {
+          summary.errorsCount += 1;
+          safeLog(
+            "error",
+            "Linked-record recheck failed.",
+            buildErrorLog({
+              workflow: "intakePoller",
+              stage: `linkedRecheck:${spec.entity}`,
+              error
+            })
+          );
+        }
+      }
+      summary.messagesEnqueued +=
+        summary.linkedClientEnqueued + summary.linkedBtRbtEnqueued + summary.linkedBcbaEnqueued;
+    }
 
     return summary;
   } finally {

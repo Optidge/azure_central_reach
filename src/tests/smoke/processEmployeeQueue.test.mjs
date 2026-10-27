@@ -35,6 +35,7 @@ test("valid employee message invokes employee workflow", async () => {
     recordId: "1001",
     employeeType: "bt_rbt",
     hsLastModifiedDate: "1700000000000",
+    source: "employeePoller",
     context: baseContext
   });
 });

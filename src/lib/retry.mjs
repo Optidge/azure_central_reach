@@ -9,6 +9,19 @@ export function isRetriableStatus(status) {
   return status === 429 || (status >= 500 && status <= 599);
 }
 
+export function retryDelayMs(error, fallbackMs, maxDelayMs) {
+  const headers = error?.response?.headers;
+  const raw =
+    headers?.["retry-after"] ||
+    headers?.["Retry-After"] ||
+    (typeof headers?.get === "function" ? headers.get("retry-after") : undefined);
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, maxDelayMs);
+  }
+  return Math.min(fallbackMs, maxDelayMs);
+}
+
 export async function withRetry(fn, options = {}) {
   const {
     maxAttempts = 3,
@@ -30,8 +43,8 @@ export async function withRetry(fn, options = {}) {
         throw error;
       }
 
-      const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
-      await sleep(delayMs);
+      const fallbackMs = baseDelayMs * 2 ** (attempt - 1);
+      await sleep(retryDelayMs(error, fallbackMs, maxDelayMs));
     }
   }
 

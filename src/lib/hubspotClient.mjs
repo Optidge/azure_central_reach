@@ -1,5 +1,6 @@
 import axios from "axios";
 import { withRetry } from "./retry.mjs";
+import { HubSpotReadError } from "./mappedState.mjs";
 
 let hubSpotHttpClient = null;
 const SEARCH_LIMIT = 50;
@@ -453,6 +454,98 @@ export async function getBtRbtRecordById(recordId, objectTypeId, properties = []
 
 export async function getBcbaRecordById(recordId, objectTypeId, properties = []) {
   return getObjectById(objectTypeId, recordId, properties);
+}
+
+function assertHubSpotReady() {
+  if (!hubSpotHttpClient) {
+    throw new Error("HubSpot client is not initialized");
+  }
+}
+
+export async function searchRecordsByKnownProperty({
+  objectTypeId,
+  propertyName,
+  properties = [],
+  limit = 50,
+  after = null
+}) {
+  assertHubSpotReady();
+  const normalizedType = String(objectTypeId || "").trim();
+  const normalizedProperty = String(propertyName || "").trim();
+  if (!normalizedType || !normalizedProperty) {
+    throw new Error("objectTypeId and propertyName are required");
+  }
+
+  const perRequestLimit = Math.min(Math.max(Number(limit) || 1, 1), SEARCH_LIMIT);
+  const payload = {
+    filterGroups: [
+      {
+        filters: [{ propertyName: normalizedProperty, operator: "HAS_PROPERTY" }]
+      }
+    ],
+    properties: properties.length ? properties : [normalizedProperty, "hs_object_id"],
+    sorts: [{ propertyName: "hs_object_id", direction: "ASCENDING" }],
+    limit: perRequestLimit,
+    ...(after ? { after } : {})
+  };
+
+  const searchResult = await runSearch(`/crm/v3/objects/${normalizedType}/search`, payload);
+  return {
+    results: Array.isArray(searchResult?.results) ? searchResult.results : [],
+    nextAfter: searchResult?.paging?.next?.after || null
+  };
+}
+
+export async function listAssociations({ fromObjectType, fromId, toObjectType, maxPages = 20 }) {
+  assertHubSpotReady();
+  const fromType = String(fromObjectType || "").trim();
+  const recordId = String(fromId || "").trim();
+  const toType = String(toObjectType || "").trim();
+  if (!fromType || !recordId || !toType) {
+    throw new Error("fromObjectType, fromId, and toObjectType are required");
+  }
+
+  const collected = [];
+  let after = null;
+  let pages = 0;
+  while (pages < maxPages) {
+    pages += 1;
+    let response;
+    try {
+      response = await withRetry(
+        () =>
+          hubSpotHttpClient.get(
+            `/crm/v4/objects/${fromType}/${recordId}/associations/${toType}`,
+            { params: { limit: 500, ...(after ? { after } : {}) } }
+          ),
+        { maxAttempts: 3, baseDelayMs: 400, maxDelayMs: 5000 }
+      );
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 403 || status === 401) {
+        throw new HubSpotReadError(`associations:${toType}`, status);
+      }
+      throw error;
+    }
+
+    const page = Array.isArray(response?.data?.results) ? response.data.results : [];
+    for (const row of page) {
+      const typeIds = (Array.isArray(row?.associationTypes) ? row.associationTypes : [])
+        .map((item) => Number(item?.typeId))
+        .filter((value) => Number.isFinite(value));
+      collected.push({
+        toObjectId: String(row?.toObjectId ?? ""),
+        typeIds
+      });
+    }
+
+    after = response?.data?.paging?.next?.after || null;
+    if (!after) {
+      break;
+    }
+  }
+
+  return collected;
 }
 
 export async function writeEmployeeIdToObject({

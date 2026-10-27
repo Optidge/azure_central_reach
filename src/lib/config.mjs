@@ -201,7 +201,11 @@ export function getIntakePollerConfig() {
       maxBtRbtPerRun: Number(getRequiredEnv("MAX_BT_RBT_PER_RUN")),
       maxBcbaPerRun: Number(getRequiredEnv("MAX_BCBA_PER_RUN")),
       maxSearchRequestsPerRun: Number(getOptionalEnv("MAX_SEARCH_REQUESTS_PER_SECTION", "1")),
-      lookbackMinutes: Number(getOptionalEnv("LOOKBACK_MINUTES", "15"))
+      lookbackMinutes: Number(getOptionalEnv("LOOKBACK_MINUTES", "15")),
+      linkedRecheckEnabled:
+        String(getOptionalEnv("LINKED_RECHECK_ENABLED", "true")).toLowerCase() !== "false",
+      crContactIdProperty: getOptionalEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY", "client_id_number"),
+      employeeIdProperty: getOptionalEnv("HUBSPOT_EMPLOYEE_ID_PROPERTY", "employee_id")
     },
     ttl: {
       dedupeTtlSeconds: Number(getRequiredEnv("DEDUPE_TTL_SECONDS")),

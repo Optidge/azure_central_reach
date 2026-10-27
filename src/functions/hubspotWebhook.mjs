@@ -161,22 +161,11 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
     : false;
 
   if (coalesced) {
-    safeLog("info", "HubSpot webhook coalesced.", {
+    safeLog("info", "HubSpot webhook overlapped an in-flight refresh. Enqueueing again.", {
       target: resolved.target,
       objectTypeId: resolved.objectTypeId,
       recordId
     });
-    return {
-      status: 202,
-      jsonBody: {
-        ok: true,
-        accepted: true,
-        coalesced: true,
-        target: resolved.target,
-        objectTypeId: resolved.objectTypeId,
-        recordId
-      }
-    };
   }
 
   const enqueuedAt = dependencies.enqueuedAt || new Date().toISOString();
@@ -227,7 +216,7 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
     jsonBody: {
       ok: true,
       accepted: true,
-      coalesced: false,
+      coalesced: Boolean(coalesced),
       target: resolved.target,
       objectTypeId: resolved.objectTypeId,
       recordId
