@@ -1,6 +1,6 @@
-# Current-state HubSpot ↔ CentralReach field mappings
+# HubSpot ↔ CentralReach field mappings: current state and change detection
 
-Documentation of field mappings and transforms implemented in the Azure Central Reach integration **as of the current codebase**. This describes what runs today, not planned changes.
+Documentation of field mappings, transforms, and **change detection** implemented in the Azure Central Reach integration **as of the current codebase** (reference as of **2026-10-27**). This describes what runs today, not planned changes.
 
 **Business source of truth (field map, triggers, labels):** [Google Drive — Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit). See [`docs/SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md). When this file and Google Drive differ, the Drive doc wins for *what we should build*; this file wins for *what the repo does now*.
 
@@ -122,6 +122,106 @@ After a successful client sync, the workflow sets `integration_last_write` and `
 | `DEDUPE_TTL_SECONDS` / `LEASE_TTL_SECONDS` | Cosmos dedupe and poller lease TTL |
 
 *(The same poller also searches BT/RBT and BCBA custom objects by `hs_pipeline` / `hs_pipeline_stage` allowlists; that path is separate from deal intake complete.)*
+
+---
+
+## Change detection (current codebase)
+
+Two layers decide whether HubSpot activity becomes a CentralReach write. Webhooks do **not** filter on specific property names — they enqueue by `objectTypeId` + `recordId` only. Field-level decisions happen in the poller gates and sync workflows.
+
+| Layer | Question | Where |
+| --- | --- | --- |
+| **1. Eligibility** | Should this record be synced (or re-synced) at all? | Poller: `shouldSyncDeal` / `shouldSyncBtRbt` / `shouldSyncBcba` in `intakePollerWorkflow.mjs`. Employee sync re-checks the same rules in `employeeSyncWorkflow.mjs`. |
+| **2. Content hash** | Did mapped outbound content change enough to update CentralReach? | Compare SHA-256 to HubSpot `last_sync_hash` in `clientSyncWorkflow.mjs` / `employeeSyncWorkflow.mjs`. |
+
+### Layer 1 — Eligibility fields (any HubSpot modification)
+
+Rule for all three families: if `integration_last_write` is empty → **sync**; else sync only when `hs_lastmodifieddate` **>** `integration_last_write`.
+
+| Entity | HubSpot fields checked | Notes |
+| --- | --- | --- |
+| **Client (Deal)** | `hs_lastmodifieddate`, `integration_last_write` | Poller search also returns `hs_object_id`. Stage/pipeline filters are eligibility for *finding* candidates, not change detection. |
+| **BT/RBT** | `hs_lastmodifieddate`, `integration_last_write` | Same comparison as deals (`shouldSyncBtRbt` → `shouldSyncDeal`). |
+| **BCBA** | `hs_lastmodifieddate`, `integration_last_write`, `updated_by_integration` | Reads `updated_by_integration`; both branches still require last-modified newer than last write. |
+
+These properties are **not** mapped to CentralReach. After a successful (or employee `noop`/`blocked`) writeback, the workflow sets `integration_last_write` (and usually `updated_by_integration`), which blocks re-enqueue until HubSpot modifies the record again.
+
+### Layer 2 — Content hash fields (`last_sync_hash`)
+
+Hash is SHA-256 of a stable-sorted JSON payload. Match + existing CR contact id → contact body PUT can **noop**.
+
+#### Client (Deal) — contact body only
+
+**Code:** `hashPayload(buildClientPayload(...))` vs deal `last_sync_hash`.  
+**Not in hash:** client metadata and labels (allergies, BT names, auth hours, insurance, etc.). On hash match, the contact PUT is skipped but **metadata/labels are still written** to CentralReach.
+
+| HubSpot property | Role in hash |
+| --- | --- |
+| `hs_object_id` / deal `id` | `ExternalSystemId` |
+| `phi_first_name__cloned_` | `FirstName` |
+| `phi_last_name` | `LastName` |
+| `phi_date_of_birth` | `DateOfBirth` |
+| `phi_gender` | `Gender` |
+| `email` | `PrimaryEmail` |
+| `phone` | `PhoneCell` |
+| `phone_number__second_` | `PhoneHome` |
+| `if_services_will_be_in_more_than_one_location__list_the_other_addres` or `street_address` | `AddressLine1` |
+| `home_apt` | `AddressLine2` |
+| `location_city` | `City` |
+| `location_central_reach` or `location` | `StateProvince` |
+| `postal_code` | `ZipPostalCode` |
+| `guardian_first_name` | `GuardianFirstName` |
+| `guardian_last_name` | `GuardianLastName` |
+
+Also hashed as constants/config on the payload: `ContactForm` (from env / default).
+
+#### BT/RBT — employee body + metadata
+
+**Code:** `hashPayload({ employee, metadata })` vs record `last_sync_hash`.  
+**Not in hash:** label IDs driven by `bt_rbt_type` / state (labels still applied on sync paths that write).
+
+| HubSpot property | Role in hash |
+| --- | --- |
+| `hs_object_id` / record `id` | `externalSystemId` |
+| `bt_name` | `firstName`, `lastName` |
+| `gender` | `gender` |
+| `date_of_birth` | `dateOfBirth` |
+| `email` | `primaryEmail` |
+| `street_home` | `addressLine1` |
+| `home_apt` | `addressLine2` |
+| `location_city` | `city` |
+| `location_home` | `stateProvince` |
+| `postal_code_home` or `postal_code` | `zipPostalCode` |
+| `employee_phone` | `phoneCell` |
+| `street_address__work_`, `city__work_`, `state__work_`, `postal_code__work_` | Work address metadata (`133819`) when non-empty |
+| `hs_object_id` (+ portal / object type) | HubSpot record link metadata (`138703`) when portal id is set |
+
+#### BCBA — employee body + metadata
+
+**Code:** same `{ employee, metadata }` hash pattern as BT/RBT.
+
+| HubSpot property | Role in hash |
+| --- | --- |
+| `hs_object_id` / record `id` | `externalSystemId` |
+| `bcba_name` | `firstName`, `lastName` |
+| `date_of_birth` | `dateOfBirth` |
+| `work_email` | `primaryEmail` |
+| `address` | `addressLine1` |
+| `home_apt` | `addressLine2` |
+| `city_work` | `city` |
+| `home_state` | `stateProvince` |
+| `employee_phone` | `phoneCell` |
+| `email` | BCBA email metadata (`138069`) |
+| `medicaid_id__ny` | metadata `126216` |
+| `medicaid_id__nj` | metadata `138112` |
+| `medicaid_id__co` | metadata `138113` |
+| `credentialed_insurances__ny` | metadata `134444` |
+| `hs_object_id` (+ portal / object type) | HubSpot record link metadata (`138703`) when portal id is set |
+
+### Practical implication
+
+- Layer 1 treats **any** HubSpot record edit (that bumps `hs_lastmodifieddate`) as a candidate once past stage/pipeline filters.
+- Layer 2 decides whether the **mapped CR payload** changed. A deal metadata-only change can still refresh CR metadata while leaving the client contact body on noop. An employee metadata-only change **does** change the hash and prevents a full noop.
 
 ---
 
@@ -370,12 +470,11 @@ State code comes from `location_home` via the same US state normalization used o
 
 ## Callouts (current behavior)
 
-1. **Client change detection:** `last_sync_hash` on the deal reflects only the mapped **client contact body**. Metadata can change on CentralReach even when the deal hash is unchanged and the contact PUT is skipped.
-2. **Employee change detection:** `last_sync_hash` includes **employee body + metadata** in one hash.
+1. **Change detection reference:** Full eligibility + hash field lists are in **[Change detection (current codebase)](#change-detection-current-codebase)** above (as of 2026-10-27).
+2. **Client vs employee hash scope:** Client `last_sync_hash` is **contact body only**; employee hash is **body + metadata**. Client metadata still writes on contact-body noop.
 3. **Employee update preservation:** For records with an existing CR contact ID, outbound PUT may keep CR `externalSystemId` and `primaryEmail` instead of HubSpot-mapped values (`buildEmployeePayloadForContactId`).
 4. **Shared metadata ID:** HubSpot record link for employees uses metadata field **`138703`** for both BT/RBT and BCBA (constant names differ in `centralReach.mjs`; ID is the same).
-5. **Intake eligibility:** Poller and workflows compare `hs_lastmodifieddate` to `integration_last_write` (and BCBA also reads `updated_by_integration`) to decide whether to enqueue or sync; those properties are not mapped to CR fields.
-6. **Metadata empty values:** Blank HubSpot values do not send a CR metadata PUT that clears existing CR values.
+5. **Metadata empty values:** Blank HubSpot values do not send a CR metadata PUT that clears existing CR values.
 
 ---
 
