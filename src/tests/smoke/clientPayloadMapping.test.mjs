@@ -31,9 +31,30 @@ test("buildClientPayload maps and normalizes AWS canonical fields", () => {
   assert.equal(payload.PrimaryEmail, "test@example.com");
   assert.equal(payload.PhoneCell, "2125550101");
   assert.equal(payload.PhoneHome, "2125550202");
+  assert.equal(payload.AddressLine1, "123 Main St");
   assert.equal(payload.StateProvince, "NY");
   assert.equal(payload.Gender, "Male");
   assert.equal(payload.DateOfBirth, "2017-01-14T00:00:00.000Z");
+});
+
+test("buildClientPayload prefers full home address and stateregion", () => {
+  const payload = buildClientPayload({
+    deal: {
+      id: "deal-2",
+      properties: {
+        phi_first_name__cloned_: "Alex",
+        phi_last_name: "Rivera",
+        full_home_address: "9 Guide Ave",
+        service_address__other: "4 Other Rd",
+        street_address: "123 Main St",
+        stateregion: "New Jersey",
+        location_central_reach: "New York"
+      }
+    }
+  });
+
+  assert.equal(payload.AddressLine1, "9 Guide Ave");
+  assert.equal(payload.StateProvince, "NJ");
 });
 
 test("validateClientPayload enforces required names", () => {

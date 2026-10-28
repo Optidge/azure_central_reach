@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+import {
+  enteredInCentralReachContainsYes,
+  runEmployeeSyncWorkflow
+} from "../../workflows/employeeSyncWorkflow.mjs";
 
 function buildDeps(overrides = {}) {
   const calls = {
@@ -30,7 +33,8 @@ function buildDeps(overrides = {}) {
         hs_lastmodifieddate: "2026-05-06T10:00:00.000Z",
         integration_last_write: "2026-05-06T09:00:00.000Z",
         bt_name: "Alex Rivera",
-        employee_id: "100"
+        employee_id: "100",
+        entered_in_centralreach: "Yes"
       }
     }),
     getBcbaRecordById: async () => ({
@@ -39,7 +43,8 @@ function buildDeps(overrides = {}) {
         hs_object_id: "2",
         hs_lastmodifieddate: "2026-05-06T10:00:00.000Z",
         integration_last_write: "2026-05-06T09:00:00.000Z",
-        bcba_name: "Pat Morgan"
+        bcba_name: "Pat Morgan",
+        entered_in_centralreach: "Yes"
       }
     }),
     buildEmployeePayload: () => ({
@@ -96,7 +101,8 @@ test("workflow returns noop when hash is unchanged", async () => {
         integration_last_write: "2026-05-06T09:00:00.000Z",
         bt_name: "Alex Rivera",
         last_sync_hash: "hash-2",
-        employee_id: "100"
+        employee_id: "100",
+        entered_in_centralreach: "Yes"
       }
     }),
     createOrUpdateEmployee: async () => {
@@ -120,7 +126,8 @@ test("hash match does not noop when employee_id is missing", async () => {
         integration_last_write: "2026-05-06T09:00:00.000Z",
         bt_name: "Alex Rivera",
         last_sync_hash: "hash-2",
-        employee_id: ""
+        employee_id: "",
+        entered_in_centralreach: "Yes"
       }
     }),
     createOrUpdateEmployee: async () => {
@@ -142,7 +149,8 @@ test("workflow returns blocked when creation is disabled", async () => {
       properties: {
         hs_object_id: "1",
         hs_lastmodifieddate: "2026-05-06T10:00:00.000Z",
-        bt_name: "Alex Rivera"
+        bt_name: "Alex Rivera",
+        entered_in_centralreach: "Yes"
       }
     }),
     createOrUpdateEmployee: async () => ({ operation: "blocked", reason: "disabled" })
@@ -227,7 +235,8 @@ test("BT/RBT metadata changes prevent hash-based noop", async () => {
         integration_last_write: "2026-05-06T09:00:00.000Z",
         bt_name: "Alex Rivera",
         last_sync_hash: "hash-without-link",
-        employee_id: "100"
+        employee_id: "100",
+        entered_in_centralreach: "Yes"
       }
     }),
     buildEmployeePayload: () => ({
@@ -284,6 +293,37 @@ test("workflow logs warning when metadata write reports failed fields", async ()
   assert.equal(metadataWarning.meta.failedFieldIds.includes(138703), true);
   assert.equal(calls.writebacks.some((item) => item.properties.last_sync_hash), false);
   assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
+});
+
+test("entered_in_centralreach matches the Yes token, not a longer value", () => {
+  assert.equal(enteredInCentralReachContainsYes("Yes"), true);
+  assert.equal(enteredInCentralReachContainsYes("Yes - Active"), false);
+  assert.equal(enteredInCentralReachContainsYes("Yes - Generic"), false);
+  assert.equal(enteredInCentralReachContainsYes(""), false);
+  assert.equal(enteredInCentralReachContainsYes(null), false);
+});
+
+test("workflow skips when entered_in_centralreach does not contain Yes", async () => {
+  const { deps, calls } = buildDeps({
+    getBtRbtRecordById: async () => ({
+      id: "1",
+      properties: {
+        hs_object_id: "1",
+        bt_name: "Alex Rivera",
+        entered_in_centralreach: "Yes - Generic"
+      }
+    }),
+    createOrUpdateEmployee: async () => {
+      throw new Error("should not be called");
+    }
+  });
+
+  const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+  assert.equal(result.status, "skipped");
+  assert.equal(result.operation, "noop");
+  assert.equal(result.reason, "entered_in_centralreach does not contain Yes");
+  assert.equal(calls.writebacks.length, 0);
+  assert.equal(calls.stateWrites.length, 0);
 });
 
 test("workflow writes fail state and rethrows errors", async () => {

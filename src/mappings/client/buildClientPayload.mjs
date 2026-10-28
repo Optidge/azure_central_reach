@@ -129,17 +129,27 @@ export function buildClientPayload({ deal, config }) {
     LastName: props.phi_last_name || null,
     DateOfBirth: toIsoMidnight(props.phi_date_of_birth),
     Gender: mapGender(props.phi_gender),
+    // Section 3: Parent/Guardian Contact email, read from the Case sync (`email`).
     PrimaryEmail: isValidEmail(email) ? email : null,
     PhoneCell: normalizePhone(props.phone),
     PhoneHome: normalizePhone(props.phone_number__second_),
+    // Section 3 address. full_home_address and service_address__other are preferred.
+    // stateregion is the guide mailing state. location_central_reach and location
+    // remain the fallbacks.
     AddressLine1:
-      props.if_services_will_be_in_more_than_one_location__list_the_other_addres ||
+      props.full_home_address ||
+      props.service_address__other ||
+      props.if_services_will_be_in_more_than_one_location__list_the_other_address ||
       props.street_address ||
       null,
     AddressLine2: props.home_apt || null,
     City: props.location_city || null,
-    StateProvince: normalizeStateProvince(props.location_central_reach || props.location),
+    StateProvince: normalizeStateProvince(
+      props.stateregion || props.location_central_reach || props.location
+    ),
     ZipPostalCode: props.postal_code || null,
+    // Waiting on United Care: which guardian is sent when a Case has two
+    // Parent/Guardian contacts. This uses the Case sync fields only.
     GuardianFirstName: props.guardian_first_name || null,
     GuardianLastName: props.guardian_last_name || null
   };

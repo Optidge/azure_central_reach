@@ -37,6 +37,8 @@ const EMPLOYEE_STATE_PK = "sync:employee";
 const BLOCKED_CREATE_MESSAGE =
   "PUT_ONLY_MODE enabled: create disabled until sandbox. Provide an existing employee_id or disable PUT_ONLY_MODE + enable ALLOW_EMPLOYEE_CREATE.";
 
+// None of these properties are in the production sensitive-data tier
+// (Integration V2 API rule #2, portal 50317927).
 const BT_RBT_PROPERTIES = [
   "hs_object_id",
   "employee_id",
@@ -51,12 +53,19 @@ const BT_RBT_PROPERTIES = [
   "date_of_birth",
   "gender",
   "email",
+  "first_name",
+  "last_name",
   "street_home",
   "home_apt",
   "location_city",
   "location_home",
+  "location",
   "postal_code",
   "postal_code_home",
+  "entered_in_centralreach",
+  // Section 6 phone is the Contact mirror on the BT/RBT (`employee_phone`).
+  // Production adds a sync from Contact home and phone. Read this property.
+  // Do not fetch the Contact. The new internal name is not recorded yet.
   "employee_phone",
   "bt_rbt_type",
   "street_address__work_",
@@ -66,6 +75,8 @@ const BT_RBT_PROPERTIES = [
   "central_reach_link_to_rt_rbt"
 ];
 
+// None of these properties, including medicaid_id__ny, medicaid_id__nj, and
+// medicaid_id__co, are in the production sensitive-data tier.
 const BCBA_PROPERTIES = [
   "hs_object_id",
   "employee_id",
@@ -77,13 +88,36 @@ const BCBA_PROPERTIES = [
   "last_sync_status",
   "last_sync_error",
   "bcba_name",
+  "first_name",
+  "last_name",
   "date_of_birth",
+  // Section 5 personal email is the BCBA Contact `email` (association 17).
+  // Read this BCBA property. Do not fetch the Contact. The production sync
+  // property's internal name is not confirmed.
   "email",
+  // Section 5 work email is `ucaba_email_address` on the BCBA, not the Contact.
+  "ucaba_email_address",
   "work_email",
+  "entered_in_centralreach",
   "address",
   "home_apt",
+  "apartment__home",
   "city_work",
+  "city_home",
   "home_state",
+  "state_home",
+  "location",
+  "postal_code_home",
+  "assign_states",
+  "lba_licensure__ny",
+  "work_status",
+  "ny_insurance_labels",
+  // Fetched because it exists on the BCBA object. Guide section 8 has no CR label for it.
+  "nj_insurance_labels",
+  "co_insurance_labels",
+  "cr_billing_hold_label",
+  // Section 5 phone is the Contact mirror on the BCBA (`employee_phone`).
+  // Production adds a sync from Contact home and phone. Do not fetch the Contact.
   "employee_phone",
   "medicaid_id__ny",
   "medicaid_id__nj",
@@ -98,6 +132,15 @@ function ensureRecordId(recordId) {
     throw new Error("recordId is required");
   }
   return normalized;
+}
+
+// Waiting on Sara: how to handle BT/RBT "Yes - Generic" and "No- Made Inactive".
+// The label "Yes - Active" stores Yes and passes. Any other stored value does not.
+export function enteredInCentralReachContainsYes(value) {
+  return String(value ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .includes("Yes");
 }
 
 function ensureEmployeeType(employeeType) {
@@ -128,6 +171,9 @@ function knownMetadataFieldIds(employeeType) {
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NJ,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_AETNA,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_CIGNA,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_CO,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
   ];
 }
@@ -294,6 +340,26 @@ export async function runEmployeeSyncWorkflow(
     let hubspotRecord = await fetchRecord();
     hubspotRecord = (await fetchRecord()) || hubspotRecord;
     const hubspotProps = hubspotRecord?.properties || {};
+
+    if (!enteredInCentralReachContainsYes(hubspotProps.entered_in_centralreach)) {
+      logger("info", "Employee sync skipped; entered_in_centralreach does not contain Yes.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        source: source || null,
+        outcome: "skipped",
+        invocationId: context?.invocationId || null
+      });
+      return {
+        ok: true,
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        status: "skipped",
+        operation: "noop",
+        reason: "entered_in_centralreach does not contain Yes",
+        crContactId: null
+      };
+    }
 
     const mapped = mapPayload({
       record: hubspotRecord,

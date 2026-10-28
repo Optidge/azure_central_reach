@@ -28,6 +28,39 @@ import { STATE_TYPES } from "../constants/state.mjs";
 const CLIENT_STATE_PK = "sync:client";
 const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
 
+// Read synced Case properties below. Do not fetch the Contact or staffing
+// association to fill them. Property sync copies the source onto the Case
+// when that source changes, which is what makes the Case edit detectable.
+//
+// Source of truth placements for the sync properties:
+// - guardian_first_name, guardian_last_name, and primary email: section 3,
+//   Parent/Guardian Contact (firstname, lastname, email). The Case internal
+//   name for guardian email is not recorded yet; `email` is the Case field
+//   read today.
+// - if_services_will_be_in_more_than_one_location__list_the_other_address:
+//   section 3 additional service address. Production's internal name ends in
+//   address. The shorter addres name is not a property on portal 50317927 or
+//   50850427. The payload prefers full_home_address, then service_address__other,
+//   then this field, then street_address.
+// - current_primary_bt, current_primary_bt_2: section 3 and section 4,
+//   Case-to-BT associations Primary BT 1 (76) and Primary BT 2 (143).
+// - supervising_bcba, initial_assessment_bcba: section 4 name rollups on the
+//   Case. The CR supervising-BCBA value in section 3 is the Case text field
+//   ongoing_central_reach_provider_supplier. IA BCBA is association 86.
+// - case_status and staffing_status: section 7, on the Case.
+// The entry gate is enter_in_central_reach contains Yes. create_record is not
+// the trigger. location and stateregion are on sandbox portal 50850427 and
+// are requested below.
+//
+// Production sensitive-data tier (portal 50317927, Integration V2 API rule #2).
+// The webhook enqueues the record id only. This deal GET reads the values.
+// Production needs crm.objects.deals.sensitive.read or HubSpot omits them.
+// Portal 50850427 is a developer test account and cannot mark these sensitive.
+// Fetched: phi_first_name__cloned_, phi_last_name, phi_gender,
+// phi_date_of_birth, insurance_id_1, insurance_id_2, phi__policy_holder_dob,
+// phi_diagnosis (HIPAA category in production).
+// Sensitive in production and not synced, because the field map does not use
+// them: insurance_id_3, insurance_id_4.
 const REQUIRED_DEAL_PROPERTIES = [
   "hs_object_id",
   "hs_lastmodifieddate",
@@ -37,56 +70,105 @@ const REQUIRED_DEAL_PROPERTIES = [
   "last_sync_at",
   "last_sync_status",
   "last_sync_error",
-  "phi_first_name__cloned_",
-  "phi_last_name",
-  "phi_date_of_birth",
-  "phi_gender",
+  "phi_first_name__cloned_", // Production sensitive
+  "phi_last_name", // Production sensitive
+  "phi_date_of_birth", // Production sensitive
+  "phi_gender", // Production sensitive
+  // Section 3 primary email is the Parent/Guardian Contact. Read the Case copy.
   "email",
   "phone",
   "phone_number__second_",
-  "if_services_will_be_in_more_than_one_location__list_the_other_addres",
+  // Section 3 mailing address. full_home_address is preferred for the contact
+  // line when it is filled. street_address remains the fallback.
+  "full_home_address",
+  "service_address__other",
+  "if_services_will_be_in_more_than_one_location__list_the_other_address",
   "street_address",
   "home_apt",
   "location_city",
-  "location_central_reach",
   "location",
+  "stateregion",
+  "location_central_reach",
   "postal_code",
+  "specific_home_location",
+  // Section 3 guardian name is the Parent/Guardian Contact. Read the Case sync.
   "guardian_first_name",
   "guardian_last_name",
+  "enter_in_central_reach",
+  "case_status",
+  // Pending follow-up in the guide: Staffed is not in the CentralReach label
+  // catalog, and Active Case Load is not a metadata field. staffing_status
+  // is fetched and is not turned into a label until that follow-up lands.
+  "staffing_status",
   "allergies",
-  "maladaptive_behaviors__clinical",
+  "allergies__yes__explain",
+  "maladaptive_behaviors__parentguardian",
   "comorbid_diagnosis__clinical",
+  "phi_diagnosis", // Production sensitive (HIPAA category)
+  "diagnosis_other",
+  "important_information",
+  "referral_source",
+  // Section 4 Primary BT associations, read from the Case rollup. Do not fetch type 76 or 143 for the name.
   "current_primary_bt",
   "current_primary_bt_2",
+  "work_schedule_details",
+  "btrbt_work_schedule_2_details",
+  "work_schedule_1_details__for_location_2_other",
+  "work_schedule_2_details__for_location_2_other",
   "bt_work_schedule_confirmed",
   "bt_work_schedule_2_confirmed",
+  "finalized_client_service_hours_post_assessment",
+  "client_service_hours_total",
+  "total_hours_bt1bt2_work_schedule",
   "client_availability_completed",
   "assigned_hours",
+  "initial_auth_tracks",
+  "n97153_approved_assessment_hours_auth_req",
+  "ia_hours_from_the_ia",
   "authorized_hours",
   "auth_start_date",
   "auth_end_date",
+  "ongoing_auth_period_start_date",
+  "ongoing_autrh_period_end_date",
   "physician_name",
   "npi_number",
   "physician_name__commercial",
   "npi_number__commercial",
+  "referring_provider_medicaid_id",
   "most_recent_asd_diagnosis_date_medicaid",
   "most_recent_asd_diagnosis_date_1",
   "most_recent_asd_diagnosis_date_2",
+  // Section 3 supervising BCBA text, then the Case name rollup.
+  // reassessment_bcba_name is the Case rollup for metadata 144602.
+  "ongoing_central_reach_provider_supplier",
   "supervising_bcba",
   "initial_assessment_bcba",
+  "reassessment_bcba_name",
   "policy_holder_name",
-  "phi__policy_holder_dob",
+  "phi__policy_holder_dob", // Production sensitive
   "severity_level_clinical",
   "n1_what_type_of_insurance",
   "n2_what_type_of_insurance",
   "insurance_primary",
   "insurance_1__other__summary",
-  "insurance_id_1",
-  "insurance_id_2",
-  "insurance_id_3",
-  "insurance_id_4",
+  "insurance_id_1", // Production sensitive
+  "insurance_2",
+  "insurance_2__other__summary",
+  // insurance_id_2 is fetched. insurance_id_3 and insurance_id_4 are sensitive
+  // on production portal 50317927 and stay off this list because the field map
+  // does not sync them.
+  "insurance_id_2", // Production sensitive
   "central_reach_link_to_client"
 ];
+
+// Waiting on Sara: some records already in CentralReach were never ticked.
+// Do not treat a CentralReach client id as passing this gate until she decides.
+export function enterInCentralReachContainsYes(value) {
+  return String(value ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .includes("Yes");
+}
 
 function hashPayload(payload) {
   return hashMappedState(payload);
@@ -202,6 +284,27 @@ export async function runClientSyncWorkflow(
         throw readError;
       }
       throw error;
+    }
+
+    if (!enterInCentralReachContainsYes(deal?.properties?.enter_in_central_reach)) {
+      logger("info", "Client sync skipped; enter_in_central_reach does not contain Yes.", {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source: source || null,
+        outcome: "skipped",
+        invocationId: context?.invocationId || null
+      });
+      return {
+        ok: true,
+        dealId: normalizedDealId,
+        status: "skipped",
+        operation: "noop",
+        reason: "enter_in_central_reach does not contain Yes",
+        crContactId: null,
+        changedFieldNames: [],
+        metadataUpdatedCount: 0,
+        metadataFailedCount: 0
+      };
     }
 
     const payload = mapPayload({ deal, config });

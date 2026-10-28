@@ -151,46 +151,159 @@ function buildMissingPortalWarning() {
   };
 }
 
-function requiredBtRbtLabels({ btRbtType, stateCode }) {
-  const labels = [CENTRAL_REACH_EMPLOYEE_LABELS.ALL_EMPLOYEES];
-  if (stateCode === "NY") {
-    labels.push(
-      CENTRAL_REACH_EMPLOYEE_LABELS.BT_NY,
-      CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL,
-      CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE
-    );
-    if (btRbtType === "RBT") {
-      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_NY);
+function checkboxTokens(value) {
+  return String(value ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function workStateCodes(locationValue, fallbackValue) {
+  const codes = [];
+  const seen = new Set();
+  const add = (code) => {
+    // Waiting on United Care: New Mexico and Virginia have no CentralReach
+    // BCBA or BT labels yet. Only NY, NJ, and CO are applied.
+    if ((code === "NY" || code === "NJ" || code === "CO") && !seen.has(code)) {
+      seen.add(code);
+      codes.push(code);
     }
+  };
+  for (const token of checkboxTokens(locationValue)) {
+    add(normalizeStateCode(token));
   }
-  if (stateCode === "CO") {
-    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL, CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE);
-    if (btRbtType === "BT" || btRbtType === "RBT") {
-      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_CO);
+  if (!codes.length) {
+    add(normalizeStateCode(fallbackValue));
+  }
+  return codes;
+}
+
+function checkboxIncludes(value, token) {
+  return checkboxTokens(value).includes(token);
+}
+
+function requiredBtRbtLabels({ btRbtType, stateCodes }) {
+  const labels = [CENTRAL_REACH_EMPLOYEE_LABELS.ALL_EMPLOYEES];
+  const type = String(btRbtType || "").trim().toUpperCase();
+  for (const stateCode of stateCodes) {
+    if (stateCode === "NY" || stateCode === "NJ" || stateCode === "CO") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL);
+    }
+    if (stateCode === "NY") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE);
+      if (type === "BT") {
+        labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BT_NY);
+      }
+      if (type === "RBT") {
+        labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_NY);
+      }
+    }
+    if (stateCode === "NJ") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.NJ_EMPLOYEE);
+      if (type === "BT") {
+        labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BT_NJ);
+      }
+      if (type === "RBT") {
+        labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_NJ);
+      }
+    }
+    if (stateCode === "CO") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE);
+      if (type === "BT") {
+        labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BT_CO);
+      }
+      if (type === "RBT") {
+        labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_CO);
+      }
     }
   }
   return labels;
 }
 
-function requiredBcbaLabels({ stateCode }) {
+function addBcbaCredentialLabels(labels, { nyInsuranceLabels, coInsuranceLabels, billingHold }) {
+  if (checkboxIncludes(nyInsuranceLabels, "MCD FFS-NY")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.ONBOARDING_NY_MEDICAID);
+  }
+  if (checkboxIncludes(nyInsuranceLabels, "Aetna-NY")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.ONBOARDING_AETNA);
+  }
+  if (checkboxIncludes(nyInsuranceLabels, "Cigna-NY")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.ONBOARDING_CIGNA);
+  }
+  if (checkboxIncludes(nyInsuranceLabels, "Carelon-NY")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.ONBOARDING_CARELON);
+  }
+  if (checkboxIncludes(coInsuranceLabels, "MCD-CO")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.ONBOARDING_CO_MEDICAID);
+  }
+  // Waiting on United Care: nj_insurance_labels, Aetna-CO, Cigna-CO, and
+  // Carelon-CO are credentialed in HubSpot and have no CentralReach label.
+  // Billing hold Yes adds 1103437. Setting it back to No does not remove
+  // that label. The CentralReach client only adds labels.
+  if (String(billingHold || "").trim() === "Yes") {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BILLING_HOLD_MEDICAID_AFFILIATION);
+  }
+}
+
+function requiredBcbaLabels({
+  stateCodes,
+  assignStates,
+  lbaLicensureNy,
+  workStatus,
+  nyInsuranceLabels,
+  coInsuranceLabels,
+  billingHold
+}) {
   const labels = [
     CENTRAL_REACH_EMPLOYEE_LABELS.ALL_EMPLOYEES,
     CENTRAL_REACH_EMPLOYEE_LABELS.BCBA,
     CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL
   ];
-  if (stateCode === "NY") {
-    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE);
+  for (const stateCode of stateCodes) {
+    if (stateCode === "NY") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE);
+    }
+    if (stateCode === "NJ") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.NJ_EMPLOYEE);
+    }
+    if (stateCode === "CO") {
+      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE);
+    }
   }
-  if (stateCode === "CO") {
-    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE);
+  if (checkboxIncludes(assignStates, "Assign CO")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_COLORADO);
   }
+  if (checkboxIncludes(assignStates, "Assign NJ")) {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NJ);
+  }
+  const licensure = String(lbaLicensureNy || "").trim();
+  if (licensure === "Yes") {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NY);
+  }
+  if (licensure === "Grad Permit") {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.GRAD_STUDENT_LBA_NY);
+  }
+  if (String(workStatus || "").trim() === "Salaried") {
+    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.SALARIED);
+  }
+  addBcbaCredentialLabels(labels, { nyInsuranceLabels, coInsuranceLabels, billingHold });
   return labels;
+}
+
+function legalName(properties, fullNameKey) {
+  const firstName = trimOrNull(properties.first_name);
+  const lastName = trimOrNull(properties.last_name);
+  if (firstName || lastName) {
+    return { firstName, lastName };
+  }
+  return splitFullName(properties[fullNameKey]);
 }
 
 function buildBtRbtPayload({ record, config }) {
   const properties = record?.properties || {};
-  const { firstName, lastName } = splitFullName(properties.bt_name);
+  const { firstName, lastName } = legalName(properties, "bt_name");
   const stateCode = normalizeStateCode(properties.location_home);
+  const stateCodes = workStateCodes(properties.location, properties.location_home);
   const btRbtType = String(properties.bt_rbt_type || "").trim().toUpperCase() || null;
 
   const employeePayload = {
@@ -205,6 +318,7 @@ function buildBtRbtPayload({ record, config }) {
     city: trimOrNull(properties.location_city),
     stateProvince: stateCode,
     zipPostalCode: trimOrNull(properties.postal_code_home) || trimOrNull(properties.postal_code),
+    // Section 6: Contact phone, read from the BT/RBT mirror `employee_phone`.
     phoneCell: normalizePhone(properties.employee_phone)
   };
 
@@ -241,27 +355,38 @@ function buildBtRbtPayload({ record, config }) {
     employeePayload,
     metadataValues,
     warnings,
-    requiredLabelIds: requiredBtRbtLabels({ btRbtType, stateCode }),
+    requiredLabelIds: requiredBtRbtLabels({ btRbtType, stateCodes }),
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BT_RBT
   };
 }
 
+function credentialFromLabels(labelValue, token, fallback) {
+  if (checkboxTokens(labelValue).length) {
+    return checkboxIncludes(labelValue, token) ? token : null;
+  }
+  return trimOrNull(fallback);
+}
+
 function buildBcbaPayload({ record, config }) {
   const properties = record?.properties || {};
-  const { firstName, lastName } = splitFullName(properties.bcba_name);
-  const stateCode = normalizeStateCode(properties.home_state);
+  const { firstName, lastName } = legalName(properties, "bcba_name");
+  const stateCode = normalizeStateCode(properties.state_home || properties.home_state);
+  const stateCodes = workStateCodes(properties.location, properties.home_state);
 
   const employeePayload = {
     externalSystemId: String(properties.hs_object_id || record?.id || ""),
     firstName,
     lastName,
     dateOfBirth: normalizeDate(properties.date_of_birth),
-    primaryEmail: cleanEmail(properties.work_email),
+    // Section 5 work email is ucaba_email_address. work_email remains the fallback.
+    primaryEmail: cleanEmail(properties.ucaba_email_address) || cleanEmail(properties.work_email),
     addressLine1: trimOrNull(properties.address),
-    addressLine2: trimOrNull(properties.home_apt),
-    city: trimOrNull(properties.city_work),
+    addressLine2: trimOrNull(properties.apartment__home) || trimOrNull(properties.home_apt),
+    city: trimOrNull(properties.city_home) || trimOrNull(properties.city_work),
     stateProvince: stateCode,
+    zipPostalCode: trimOrNull(properties.postal_code_home),
+    // Section 5: Contact phone, read from the BCBA mirror `employee_phone`.
     phoneCell: normalizePhone(properties.employee_phone)
   };
 
@@ -272,6 +397,7 @@ function buildBcbaPayload({ record, config }) {
   });
 
   const metadataValues = {
+    // Section 5 personal email is the BCBA Contact. Read the BCBA sync (`email`).
     [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL]: cleanEmail(properties.email),
     [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY]: trimOrNull(
       properties.medicaid_id__ny
@@ -282,8 +408,26 @@ function buildBcbaPayload({ record, config }) {
     [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO]: trimOrNull(
       properties.medicaid_id__co
     ),
-    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY]: trimOrNull(
-      properties.credentialed_insurances__ny
+    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY]:
+      credentialFromLabels(
+        properties.ny_insurance_labels,
+        "MCD FFS-NY",
+        properties.credentialed_insurances__ny
+      ),
+    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_AETNA]: credentialFromLabels(
+      properties.ny_insurance_labels,
+      "Aetna-NY",
+      null
+    ),
+    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_CIGNA]: credentialFromLabels(
+      properties.ny_insurance_labels,
+      "Cigna-NY",
+      null
+    ),
+    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_CO]: credentialFromLabels(
+      properties.co_insurance_labels,
+      "MCD-CO",
+      null
     )
   };
   const warnings = [];
@@ -299,7 +443,15 @@ function buildBcbaPayload({ record, config }) {
     employeePayload,
     metadataValues,
     warnings,
-    requiredLabelIds: requiredBcbaLabels({ stateCode }),
+    requiredLabelIds: requiredBcbaLabels({
+      stateCodes,
+      assignStates: properties.assign_states,
+      lbaLicensureNy: properties.lba_licensure__ny,
+      workStatus: properties.work_status,
+      nyInsuranceLabels: properties.ny_insurance_labels,
+      coInsuranceLabels: properties.co_insurance_labels,
+      billingHold: properties.cr_billing_hold_label
+    }),
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BCBA
   };

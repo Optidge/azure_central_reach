@@ -1,0 +1,999 @@
+{
+  "portalId": 50850427,
+  "bcbaObjectTypeId": "2-55656302",
+  "btRbtObjectTypeId": "2-55656309",
+  "dealObjectTypeId": "0-3",
+  "associationLabel": {
+    "fromObjectType": "deals",
+    "toObjectType": "2-55656302",
+    "label": "RE BCBA",
+    "name": "re_bcba"
+  },
+  "create": [
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "ongoing_central_reach_provider_supplier",
+      "label": "Ongoing Central Reach Provider/Supplier",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 supervising BCBA used for billing. Distinct from the section 4 name rollup supervising_bcba."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "work_schedule_details",
+      "label": "Work Schedule Details",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 Work Schedule #1 text. Sandbox already has the Confirmed radio bt_work_schedule_confirmed."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "btrbt_work_schedule_2_details",
+      "label": "BT/RBT Work Schedule 2 Details",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 Work Schedule #2 text."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "work_schedule_1_details__for_location_2_other",
+      "label": "Work Schedule 1 Details for Location 2",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 work schedule for the second service location."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "work_schedule_2_details__for_location_2_other",
+      "label": "Work Schedule 2 Details for Location 2",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 second work schedule for the second service location."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "finalized_client_service_hours_post_assessment",
+      "label": "Finalized Client Service Hours Post Assessment",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 client availability text."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "client_service_hours_total",
+      "label": "Client Service Hours Total",
+      "type": "number",
+      "fieldType": "number",
+      "description": "Guide section 3 weekly client service hours."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "initial_assessment",
+      "name": "n97153_approved_assessment_hours_auth_req",
+      "label": "97153 Approved Assessment Hours Auth Required",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 approved hours when prior authorization is required."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "initial_assessment",
+      "name": "ia_hours_from_the_ia",
+      "label": "IA Hours from the IA",
+      "type": "number",
+      "fieldType": "number",
+      "description": "Guide section 3 hours when no prior authorization is required."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "service_address",
+      "name": "full_home_address",
+      "label": "Full Home Address",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 home service address."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "service_address",
+      "name": "service_address__other",
+      "label": "Service Address Other",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 combined address for service location 2."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "phi_-_cases",
+      "name": "allergies__yes__explain",
+      "label": "Allergies Yes Explain",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 allergy explanation. The allergies property already exists."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "phi_-_cases",
+      "name": "diagnosis_other",
+      "label": "Diagnosis Other",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 diagnosis text when the diagnosis choice is Other."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "insurance",
+      "name": "referring_provider_medicaid_id",
+      "label": "Referring Provider Medicaid ID",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 referring provider Medicaid ID."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "insurance",
+      "name": "insurance_id_2",
+      "label": "Insurance ID 2",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 secondary insurance member ID. Treat as sensitive in production."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "insurance",
+      "name": "insurance_2__other__summary",
+      "label": "Insurance 2 Other Summary",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 secondary insurance name when insurance_2 is Other. insurance_2 already exists."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "external_system_id",
+      "label": "External System ID",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide sections 5 and 10. CentralReach external id written back to the BCBA. employee_id already exists."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "first_name",
+      "label": "First Name",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 5 legal first name. Sandbox BCBA records currently store the full name in bcba_name."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "last_name",
+      "label": "Last Name",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 5 legal last name."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "ucaba_email_address",
+      "label": "UCABA Email Address",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 5 work email. The current sync reads work_email."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "postal_code_home",
+      "label": "Postal Code Home",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 5 mailing ZIP. No ZIP property existed on the sandbox BCBA object."
+    },
+    {
+      "objectType": "2-55656309",
+      "objectTypeId": "2-55656309",
+      "groupName": "bt_rbt_information",
+      "name": "external_system_id",
+      "label": "External System ID",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 6 CentralReach external id. The current sync writes employee_id, which already exists."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "initial_assessment",
+      "name": "initial_auth_tracks",
+      "label": "\ud83e\udd16Initial Auth Tracks",
+      "type": "enumeration",
+      "fieldType": "select",
+      "description": "Guide section 3. Branches the two auth-hour fields. Options copied from production portal 50317927 on 2026-10-27.",
+      "options": [
+        {
+          "label": "No Prior Authorization Required",
+          "value": "No Prior Authorization Required",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "Prior Authorization Required",
+          "value": "Prior Authorization Required",
+          "displayOrder": 1,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "phi_-_cases",
+      "name": "maladaptive_behaviors__parentguardian",
+      "label": "Maladaptive Behaviors",
+      "type": "enumeration",
+      "fieldType": "checkbox",
+      "description": "Guide section 3 checkbox. Options copied from production portal 50317927 on 2026-10-27. Production group is dealinformation; sandbox group stays phi_-_cases.",
+      "options": [
+        {
+          "label": "Aggression-Uses Physical Force on Themselves or Others",
+          "value": "Aggression",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "Self-Injurious-Hurts Themselves On Purpose Repeatedly",
+          "value": "Self-Injury",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "Tantrums/Meltdowns-Emotional Outburst with Crying/Screaming",
+          "value": "Tantrums/Meltdowns",
+          "displayOrder": 2,
+          "hidden": false
+        },
+        {
+          "label": "Property Destruction-Breaks, Throws, or Damages Items",
+          "value": "Property Destruction",
+          "displayOrder": 3,
+          "hidden": false
+        },
+        {
+          "label": "Elopement Risk-Wanders/Leaves Room or Area Without Permission",
+          "value": "Elopement",
+          "displayOrder": 4,
+          "hidden": false
+        },
+        {
+          "label": "Mouthing Non Food Items-Frequently Puts Objects In Mouth",
+          "value": "Mouthing Non Food Itemsth",
+          "displayOrder": 5,
+          "hidden": false
+        },
+        {
+          "label": "Repetitive Behaviors-Repeats The Same Movements, Sounds, Or Actions",
+          "value": "Repetitive Behaviors",
+          "displayOrder": 6,
+          "hidden": false
+        },
+        {
+          "label": "Other",
+          "value": "Other",
+          "displayOrder": 7,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "phi_-_cases",
+      "name": "phi_diagnosis",
+      "label": "Diagnosis",
+      "type": "enumeration",
+      "fieldType": "radio",
+      "description": "Production is a sensitive HIPAA enumeration. Label Yes-F84.0 stores Yes. Options and the radio field type were copied from production portal 50317927 on 2026-10-27. The sandbox private app cannot create sensitive properties, so this copy is non-sensitive.",
+      "options": [
+        {
+          "label": "Yes-F84.0",
+          "value": "Yes",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "No",
+          "value": "No",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "Unsure",
+          "value": "Unsure",
+          "displayOrder": 2,
+          "hidden": false
+        },
+        {
+          "label": "Other",
+          "value": "Other",
+          "displayOrder": 3,
+          "hidden": false
+        },
+        {
+          "label": "Yes- Down's Syndrome",
+          "value": "Yes- Down's Syndrome",
+          "displayOrder": 4,
+          "hidden": true
+        }
+      ],
+      "dataSensitivity": "sensitive",
+      "sensitiveDataCategories": [
+        "HIPAA"
+      ]
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "intake_questionnaire",
+      "name": "referral_source",
+      "label": "Referral Source",
+      "type": "enumeration",
+      "fieldType": "select",
+      "description": "Options copied from production portal 50317927 on 2026-10-27. Production marks this calculated and read-only and the properties API returned no calculation formula, so the sandbox property is a writable dropdown with the same options, including four hidden options.",
+      "options": [
+        {
+          "label": "Americare",
+          "value": "Americare",
+          "displayOrder": 0,
+          "hidden": true
+        },
+        {
+          "label": "Bassy-Americare",
+          "value": "Bassy-Americare",
+          "displayOrder": 1,
+          "hidden": true
+        },
+        {
+          "label": "McCarthon Center",
+          "value": "McCarthon Center",
+          "displayOrder": 2,
+          "hidden": true
+        },
+        {
+          "label": "JemCare",
+          "value": "JemCare",
+          "displayOrder": 3,
+          "hidden": true
+        },
+        {
+          "label": "Denver Health-Co",
+          "value": "Denver Health-Co",
+          "displayOrder": 4,
+          "hidden": false
+        },
+        {
+          "label": "Superior Psychological Services-CO",
+          "value": "Superior Psychological Services-CO",
+          "displayOrder": 5,
+          "hidden": false
+        },
+        {
+          "label": "Salud Family Health Center-CO",
+          "value": "Salud Family Health Center-CO",
+          "displayOrder": 6,
+          "hidden": false
+        },
+        {
+          "label": "Family/friend",
+          "value": "Family/friend",
+          "displayOrder": 7,
+          "hidden": false
+        },
+        {
+          "label": "Google",
+          "value": "Google",
+          "displayOrder": 8,
+          "hidden": false
+        },
+        {
+          "label": "Facebook",
+          "value": "Facebook",
+          "displayOrder": 9,
+          "hidden": false
+        },
+        {
+          "label": "Care manager",
+          "value": "Care manager",
+          "displayOrder": 10,
+          "hidden": false
+        },
+        {
+          "label": "School",
+          "value": "School",
+          "displayOrder": 11,
+          "hidden": false
+        },
+        {
+          "label": "Insurance provider",
+          "value": "Insurance provider",
+          "displayOrder": 12,
+          "hidden": false
+        },
+        {
+          "label": "Other",
+          "value": "Other",
+          "displayOrder": 13,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "co_insurance_labels",
+      "label": "CO Insurance Labels",
+      "type": "enumeration",
+      "fieldType": "checkbox",
+      "description": "Guide section 5. Options copied from production portal 50317927 on 2026-10-27. ny_insurance_labels and nj_insurance_labels already exist.",
+      "options": [
+        {
+          "label": "MCD-CO",
+          "value": "MCD-CO",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "Aetna-CO",
+          "value": "Aetna-CO",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "Carelon-CO",
+          "value": "Carelon-CO",
+          "displayOrder": 2,
+          "hidden": false
+        },
+        {
+          "label": "Cigna-CO",
+          "value": "Cigna-CO",
+          "displayOrder": 3,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "work_status",
+      "label": "Hourly or Salary?",
+      "type": "enumeration",
+      "fieldType": "select",
+      "description": "Guide section 5. Production label is Hourly or Salary? The stored values are Salaried and Hourly. Options copied from production portal 50317927 on 2026-10-27. Production description: if theres an offer letter for an hourly rate BCBA is hourly if there is an offer letter with a salary BCBA is salaried, If unsure ask BCBA Recruiter.",
+      "options": [
+        {
+          "label": "Salaried",
+          "value": "Salaried",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "Hourly",
+          "value": "Hourly",
+          "displayOrder": 1,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "assign_states",
+      "label": "Assign States",
+      "type": "enumeration",
+      "fieldType": "checkbox",
+      "description": "Guide section 5 checkbox. Options copied from production portal 50317927 on 2026-10-27.",
+      "options": [
+        {
+          "label": "Assign NY",
+          "value": "Assign NY",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "Assign NJ",
+          "value": "Assign NJ",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "Assign CO",
+          "value": "Assign CO",
+          "displayOrder": 2,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcba_information",
+      "name": "lba_licensure__ny",
+      "label": "\ud83e\udd84LBA Licensure - NY",
+      "type": "enumeration",
+      "fieldType": "select",
+      "description": "Guide section 5. Label Will Apply stores No. Options copied from production portal 50317927 on 2026-10-27. Production group is lba; sandbox has no lba group, so this stays in bcba_information.",
+      "options": [
+        {
+          "label": "Yes",
+          "value": "Yes",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "In Process",
+          "value": "In Process",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "Will Apply",
+          "value": "No",
+          "displayOrder": 2,
+          "hidden": false
+        },
+        {
+          "label": "Grad Permit",
+          "value": "Grad Permit",
+          "displayOrder": 3,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "custom",
+      "name": "location",
+      "label": "Location",
+      "type": "enumeration",
+      "fieldType": "select",
+      "description": "Guide section 7 client state. Options New York, New Jersey, Colorado.Copied from production portal 50317927 on 2026-10-27. Production marks this calculated and read-only, and the properties API returned no calculation formula, so the sandbox property is writable.",
+      "options": [
+        {
+          "label": "New York",
+          "value": "New York",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "New Jersey",
+          "value": "New Jersey",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "Colorado",
+          "value": "Colorado",
+          "displayOrder": 2,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "dealinformation",
+      "name": "stateregion",
+      "label": "State/Region",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 3 mailing state. Copied from production portal 50317927 on 2026-10-27."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "case_staffing",
+      "name": "reassessment_bcba_name",
+      "label": "Reassessment BCBA Name",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Case name rollup for CentralReach metadata 144602 and the RE BCBA association. Production group is automations, which sandbox does not have, so this uses case_staffing.Copied from production portal 50317927 on 2026-10-27. Production marks this calculated and read-only, and the properties API returned no calculation formula, so the sandbox property is writable."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "dealinformation",
+      "name": "total_hours_bt1bt2_work_schedule",
+      "label": "Total Hours BT1+BT2 Work Schedule",
+      "type": "number",
+      "fieldType": "number",
+      "description": "Guide section 3 total assigned hours. Production field type is calculation_equation. The properties API returned calculationFormula \"1 + 1\", which is not a BT-hours equation, so it was not copied. Sandbox property is a writable number. Copied from production portal 50317927 on 2026-10-27."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "dealinformation",
+      "name": "ongoing_auth_period_start_date",
+      "label": "Ongoing Auth period start date",
+      "type": "date",
+      "fieldType": "date",
+      "description": "Guide section 3 auth period start. Copied from production portal 50317927 on 2026-10-27."
+    },
+    {
+      "objectType": "deals",
+      "objectTypeId": "0-3",
+      "groupName": "dealinformation",
+      "name": "ongoing_autrh_period_end_date",
+      "label": "Ongoing Auth period end date",
+      "type": "date",
+      "fieldType": "date",
+      "description": "Guide section 3 auth period end. The production internal name keeps the autrh typo. Copied from production portal 50317927 on 2026-10-27."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcbas_information",
+      "name": "city_home",
+      "label": "City (Home)",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 5 home city mirror of the BCBA Contact.Copied from production portal 50317927 on 2026-10-27. Production marks this calculated and read-only, and the properties API returned no calculation formula, so the sandbox property is writable."
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcbas_information",
+      "name": "state_home",
+      "label": "State (Home)",
+      "type": "enumeration",
+      "fieldType": "select",
+      "description": "Guide section 5 home state. Labels are abbreviations and stored values are full state names.Copied from production portal 50317927 on 2026-10-27. Production marks this calculated and read-only, and the properties API returned no calculation formula, so the sandbox property is writable.",
+      "options": [
+        {
+          "label": "CO",
+          "value": "Colorado",
+          "displayOrder": 0,
+          "hidden": false
+        },
+        {
+          "label": "NY",
+          "value": "New York",
+          "displayOrder": 1,
+          "hidden": false
+        },
+        {
+          "label": "NJ",
+          "value": "New Jersey",
+          "displayOrder": 2,
+          "hidden": false
+        },
+        {
+          "label": "AL",
+          "value": "Alabama",
+          "displayOrder": 3,
+          "hidden": false
+        },
+        {
+          "label": "AK",
+          "value": "Alaska",
+          "displayOrder": 4,
+          "hidden": false
+        },
+        {
+          "label": "AZ",
+          "value": "Arizona",
+          "displayOrder": 5,
+          "hidden": false
+        },
+        {
+          "label": "AR",
+          "value": "Arkansas",
+          "displayOrder": 6,
+          "hidden": false
+        },
+        {
+          "label": "CA",
+          "value": "California",
+          "displayOrder": 7,
+          "hidden": false
+        },
+        {
+          "label": "CT",
+          "value": "Connecticut",
+          "displayOrder": 8,
+          "hidden": false
+        },
+        {
+          "label": "DE",
+          "value": "Delaware",
+          "displayOrder": 9,
+          "hidden": false
+        },
+        {
+          "label": "FL",
+          "value": "Florida",
+          "displayOrder": 10,
+          "hidden": false
+        },
+        {
+          "label": "GA",
+          "value": "Georgia",
+          "displayOrder": 11,
+          "hidden": false
+        },
+        {
+          "label": "HI",
+          "value": "Hawaii",
+          "displayOrder": 12,
+          "hidden": false
+        },
+        {
+          "label": "ID",
+          "value": "Idaho",
+          "displayOrder": 13,
+          "hidden": false
+        },
+        {
+          "label": "IL",
+          "value": "Illinois",
+          "displayOrder": 14,
+          "hidden": false
+        },
+        {
+          "label": "IN",
+          "value": "Indiana",
+          "displayOrder": 15,
+          "hidden": false
+        },
+        {
+          "label": "IA",
+          "value": "Iowa",
+          "displayOrder": 16,
+          "hidden": false
+        },
+        {
+          "label": "KS",
+          "value": "Kansas",
+          "displayOrder": 17,
+          "hidden": false
+        },
+        {
+          "label": "KY",
+          "value": "Kentucky",
+          "displayOrder": 18,
+          "hidden": false
+        },
+        {
+          "label": "LA",
+          "value": "Louisiana",
+          "displayOrder": 19,
+          "hidden": false
+        },
+        {
+          "label": "ME",
+          "value": "Maine",
+          "displayOrder": 20,
+          "hidden": false
+        },
+        {
+          "label": "MD",
+          "value": "Maryland",
+          "displayOrder": 21,
+          "hidden": false
+        },
+        {
+          "label": "MA",
+          "value": "Massachusetts",
+          "displayOrder": 22,
+          "hidden": false
+        },
+        {
+          "label": "MI",
+          "value": "Michigan",
+          "displayOrder": 23,
+          "hidden": false
+        },
+        {
+          "label": "MN",
+          "value": "Minnesota",
+          "displayOrder": 24,
+          "hidden": false
+        },
+        {
+          "label": "MS",
+          "value": "Mississippi",
+          "displayOrder": 25,
+          "hidden": false
+        },
+        {
+          "label": "MO",
+          "value": "Missouri",
+          "displayOrder": 26,
+          "hidden": false
+        },
+        {
+          "label": "MT",
+          "value": "Montana",
+          "displayOrder": 27,
+          "hidden": false
+        },
+        {
+          "label": "NE",
+          "value": "Nebraska",
+          "displayOrder": 28,
+          "hidden": false
+        },
+        {
+          "label": "NV",
+          "value": "Nevada",
+          "displayOrder": 29,
+          "hidden": false
+        },
+        {
+          "label": "NH",
+          "value": "New Hampshire",
+          "displayOrder": 30,
+          "hidden": false
+        },
+        {
+          "label": "NM",
+          "value": "New Mexico",
+          "displayOrder": 31,
+          "hidden": false
+        },
+        {
+          "label": "NC",
+          "value": "North Carolina",
+          "displayOrder": 32,
+          "hidden": false
+        },
+        {
+          "label": "ND",
+          "value": "North Dakota",
+          "displayOrder": 33,
+          "hidden": false
+        },
+        {
+          "label": "OH",
+          "value": "Ohio",
+          "displayOrder": 34,
+          "hidden": false
+        },
+        {
+          "label": "OK",
+          "value": "Oklahoma",
+          "displayOrder": 35,
+          "hidden": false
+        },
+        {
+          "label": "OR",
+          "value": "Oregon",
+          "displayOrder": 36,
+          "hidden": false
+        },
+        {
+          "label": "PA",
+          "value": "Pennsylvania",
+          "displayOrder": 37,
+          "hidden": false
+        },
+        {
+          "label": "RI",
+          "value": "Rhode Island",
+          "displayOrder": 38,
+          "hidden": false
+        },
+        {
+          "label": "SC",
+          "value": "South Carolina",
+          "displayOrder": 39,
+          "hidden": false
+        },
+        {
+          "label": "SD",
+          "value": "South Dakota",
+          "displayOrder": 40,
+          "hidden": false
+        },
+        {
+          "label": "TN",
+          "value": "Tennessee",
+          "displayOrder": 41,
+          "hidden": false
+        },
+        {
+          "label": "TX",
+          "value": "Texas",
+          "displayOrder": 42,
+          "hidden": false
+        },
+        {
+          "label": "UT",
+          "value": "Utah",
+          "displayOrder": 43,
+          "hidden": false
+        },
+        {
+          "label": "VT",
+          "value": "Vermont",
+          "displayOrder": 44,
+          "hidden": false
+        },
+        {
+          "label": "VA",
+          "value": "Virginia",
+          "displayOrder": 45,
+          "hidden": false
+        },
+        {
+          "label": "WA",
+          "value": "Washington",
+          "displayOrder": 46,
+          "hidden": false
+        },
+        {
+          "label": "WV",
+          "value": "West Virginia",
+          "displayOrder": 47,
+          "hidden": false
+        },
+        {
+          "label": "WI",
+          "value": "Wisconsin",
+          "displayOrder": 48,
+          "hidden": false
+        },
+        {
+          "label": "WY",
+          "value": "Wyoming",
+          "displayOrder": 49,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "objectType": "2-55656302",
+      "objectTypeId": "2-55656302",
+      "groupName": "bcbas_information",
+      "name": "apartment__home",
+      "label": "Apartment # (Home)",
+      "type": "string",
+      "fieldType": "text",
+      "description": "Guide section 5 home apartment mirror of the BCBA Contact.Copied from production portal 50317927 on 2026-10-27. Production marks this calculated and read-only, and the properties API returned no calculation formula, so the sandbox property is writable."
+    }
+  ],
+  "pending": []
+}

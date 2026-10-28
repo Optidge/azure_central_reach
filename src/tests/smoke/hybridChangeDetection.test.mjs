@@ -147,7 +147,13 @@ function clientDeps(overrides = {}) {
     acquireLease: async () => true,
     releaseLease: async () => {},
     getState: async () => overrides.prior || null,
-    getDealById: async () => overrides.deal,
+    getDealById: async () => ({
+      ...overrides.deal,
+      properties: {
+        enter_in_central_reach: "Yes",
+        ...(overrides.deal?.properties || {})
+      }
+    }),
     buildClientPayload: () => overrides.payload || { FirstName: "Ada" },
     validateClientPayload: () => ({ isValid: true, errors: [] }),
     buildClientMetadata: () => overrides.metadata || { labelIds: [1], metadataValues: { 126214: null } },
@@ -243,7 +249,8 @@ test("employee timestamp shortcut no longer skips a mapped change", async () => 
           hs_lastmodifieddate: "2026-01-01T00:00:00.000Z",
           integration_last_write: "2026-10-01T00:00:00.000Z",
           employee_id: "100",
-          last_sync_hash: "old"
+          last_sync_hash: "old",
+          entered_in_centralreach: "Yes"
         }
       }),
       buildEmployeePayload: () => ({
