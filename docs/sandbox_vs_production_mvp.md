@@ -34,6 +34,8 @@ Azure today follows the sandbox column. `local.settings.json` sets `HUBSPOT_PORT
 
 Do not build the MVP on legacy private-app **webhook subscriptions**. Those are CRM event subscriptions (signature v1, standard objects such as contacts and deals). The MVP signal is the workflow action, which both portals can already send.
 
+**Sensitive properties (confirmed Oct 27, 2026).** Portal `50850427` is a developer test account and cannot store HubSpot sensitive-data properties. `non_sensitive` on that portal is expected. Production portal `50317927` follows Integration V2 API rule #2. The production private app needs `crm.objects.deals.sensitive.read` so the deal GET returns those Case values. The webhook does not carry them. The comments on `REQUIRED_DEAL_PROPERTIES` name the fields. Employee properties, including the BCBA Medicaid IDs, are not in that tier. Tracker: [`Sandbox props & labels_summary.md`](Sandbox%20props%20%26%20labels_summary.md).
+
 **Important:**
 - **Sandbox** pipeline, object type, and stage IDs below match the active constants in `combined_intake_pollers.js`, `client_intake_poller.js`, `bcba_step_2_workflow.js`, and `step_2_rt/rtbt.js`.
 - **Production** object types, pipelines, and stages below match the live HubSpot portal `50317927` configuration. Older Pipedream comments are outdated for several stage names/IDs; prefer the production inventory in this doc.

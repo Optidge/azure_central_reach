@@ -8,6 +8,8 @@ Documentation of field mappings, transforms, and **change detection** implemente
 
 **Source of truth in code:** mapping modules under `src/mappings/`, constants in `src/constants/centralReach.mjs`, orchestration in `src/workflows/`.
 
+**How metadata/label IDs were discovered (sandbox CLI + JSON exports):** [`centralreach-metadata-and-labels-discovery.md`](centralreach-metadata-and-labels-discovery.md).
+
 ---
 
 ## What we established
@@ -48,6 +50,8 @@ Documentation of field mappings, transforms, and **change detection** implemente
 - **Client sync:** `src/workflows/clientSyncWorkflow.mjs` — HubSpot property fetch list: `REQUIRED_DEAL_PROPERTIES`.
 - **Employee sync:** `src/workflows/employeeSyncWorkflow.mjs` — fetch lists: `BT_RBT_PROPERTIES`, `BCBA_PROPERTIES`.
 - HubSpot object-type constants live in `src/constants/hubspot.mjs`; **property names for sync are not centralized there** — they live in the workflows and mapping files above.
+
+**Production sensitive-data tier (portal `50317927`, Integration V2 API rule #2).** The webhook body is the record id only. `REQUIRED_DEAL_PROPERTIES` is the GET that reads the values. Production needs `crm.objects.deals.sensitive.read` or HubSpot omits them. Writes need `crm.objects.deals.sensitive.write`. Portal `50850427` is a developer test account and cannot mark properties sensitive. Fetched Case fields that are sensitive in production: `phi_first_name__cloned_`, `phi_last_name`, `phi_gender`, `phi_date_of_birth`, `insurance_id_1`, `insurance_id_2`, `phi__policy_holder_dob`, `phi_diagnosis` (HIPAA). Sensitive and not fetched: `insurance_id_3`, `insurance_id_4`. BT/RBT and BCBA properties, including `medicaid_id__ny`, `medicaid_id__nj`, and `medicaid_id__co`, are not in that tier. Tracker: [`Sandbox props & labels_summary.md`](Sandbox%20props%20%26%20labels_summary.md).
 
 ### Environment configuration
 
@@ -267,10 +271,10 @@ Constant keys in `src/constants/centralReach.mjs` (e.g. `ALLERGIES`) match the f
 | `email` | `PrimaryEmail` | Trim, lowercase; invalid email format → `null` | HubSpot → CentralReach |
 | `phone` | `PhoneCell` | Digits only; 11 digits starting with `1` → drop leading `1`; must be 10 digits or `null` | HubSpot → CentralReach |
 | `phone_number__second_` | `PhoneHome` | Same phone normalization as `PhoneCell` | HubSpot → CentralReach |
-| `if_services_will_be_in_more_than_one_location__list_the_other_addres` **or** `street_address` | `AddressLine1` | First non-empty: multi-location field, else `street_address` | HubSpot → CentralReach |
+| `full_home_address`, `service_address__other`, `if_services_will_be_in_more_than_one_location__list_the_other_address`, or `street_address` | `AddressLine1` | First non-empty, in that order. The truncated `addres` name is not a property on portal `50317927` or `50850427`. | HubSpot → CentralReach |
 | `home_apt` | `AddressLine2` | Passthrough | HubSpot → CentralReach |
 | `location_city` | `City` | Passthrough | HubSpot → CentralReach |
-| `location_central_reach` **or** `location` | `StateProvince` | US state name or 2-letter code → 2-letter uppercase code | HubSpot → CentralReach |
+| `stateregion`, `location_central_reach`, or `location` | `StateProvince` | First non-empty. US state name or 2-letter code → 2-letter uppercase code | HubSpot → CentralReach |
 | `postal_code` | `ZipPostalCode` | Passthrough | HubSpot → CentralReach |
 | `guardian_first_name` | `GuardianFirstName` | Passthrough | HubSpot → CentralReach |
 | `guardian_last_name` | `GuardianLastName` | Passthrough | HubSpot → CentralReach |
@@ -309,6 +313,8 @@ Constant keys in `src/constants/centralReach.mjs` (e.g. `ALLERGIES`) match the f
 | `phi__policy_holder_dob` | Policy holder DOB (`137667`) | HubSpot date (epoch or parseable) → `MM/DD/YYYY` | HubSpot → CentralReach |
 | `insurance_primary`, `insurance_1__other__summary` | Current insurance (`126210`) | If primary is `Other` (case-insensitive), use other summary or literal `"Other"`; else primary, else other summary | HubSpot → CentralReach |
 | `insurance_id_1` | Insurance ID (`131316`) | Trim | HubSpot → CentralReach |
+| `insurance_2`, `insurance_2__other__summary` | Secondary insurance (`144600`) | Same Other-summary rule as current insurance | HubSpot → CentralReach |
+| `insurance_id_2` | Secondary insurance ID (`144601`) | Trim | HubSpot → CentralReach |
 | `hs_object_id` | HubSpot link to case record (`138702`) | Built URL: `https://app.hubspot.com/contacts/{portalId}/record/{dealObjectTypeId}/{dealId}` — portal from `HUBSPOT_PORTAL_ID_TEST` (default `50850427`), object type from `HUBSPOT_DEAL_OBJECT_TYPE_ID` (default `0-3`) | HubSpot → CentralReach |
 
 ### HubSpot properties used for branching only (not written to CR)
@@ -316,13 +322,13 @@ Constant keys in `src/constants/centralReach.mjs` (e.g. `ALLERGIES`) match the f
 | HubSpot property | Role |
 | --- | --- |
 | `n1_what_type_of_insurance` | Selects physician credentials and primary ASD diagnosis date source |
-| `n2_what_type_of_insurance` | Selects secondary ASD diagnosis date source |
+| `n2_what_type_of_insurance` | With `n1_what_type_of_insurance`, selects whether the Medicaid FFS NY diagnosis date (metadata `138701`) is written |
 
 ### Fetched on deal but not mapped to CentralReach
 
 | HubSpot property | Notes |
 | --- | --- |
-| `insurance_id_2`, `insurance_id_3`, `insurance_id_4` | Listed in `REQUIRED_DEAL_PROPERTIES`; not used in metadata mapping |
+| `insurance_id_3`, `insurance_id_4` | Sensitive on production portal `50317927`. Not fetched and not synced. The field map does not use them. |
 | `hs_lastmodifieddate` | Used by intake poller / sync eligibility only |
 | `integration_last_write`, `updated_by_integration`, `last_sync_*` | Sync control and writeback; see section 4 |
 
@@ -338,7 +344,11 @@ Constant keys in `src/constants/centralReach.mjs` (e.g. `ALLERGIES`) match the f
 | --- | --- | --- | --- |
 | *(always)* | `1052619` (label) | Always applied | HubSpot → CentralReach |
 | `location_central_reach` or `location` → NY | `1082499` (label) | State normalized: `ny` or `new york` → NY | HubSpot → CentralReach |
-| `location_central_reach` or `location` → CO | `1082500` (label) | State normalized: `co` or `colorado` → CO | HubSpot → CentralReach |
+| `location_central_reach` or `location` → CO | `1132648` (label) | State normalized: `co` or `colorado` → CO | HubSpot → CentralReach |
+| `insurance_primary` = Aetna and location NY | `1082497` | No label for Aetna in NJ or CO | HubSpot → CentralReach |
+| `insurance_primary` = Cigna and location NY / CO | `1082498` / `1124249` | No label for Cigna in NJ | HubSpot → CentralReach |
+| `insurance_primary` = Medicaid FFS and location NY / NJ / CO | `1052532` / `1124247` / `1124248` | State comes from location, not the insurance value | HubSpot → CentralReach |
+| `insurance_primary` contains Carelon | `1107648` | The nine “-Carelon” options are on sandbox `insurance_primary` (Oct 27, 2026). Anthem BCBS and UHC stay uncoded, waiting on United Care | HubSpot → CentralReach |
 
 ---
 
@@ -430,7 +440,7 @@ BCBA employee contact body does **not** map HubSpot zip or gender fields to Cent
 | Condition (HubSpot-driven) | CR field / source (label IDs) |
 | --- | --- |
 | Always | `1052618` |
-| `location_home` → NY | `1052630`, `1052643`, `1107685` |
+| `location_home` → NY | `1052630`, `1052643`, `1132655` |
 | NY + `bt_rbt_type` = `RBT` | Also `1052631` |
 | `location_home` → CO | `1052643`, `1107687` |
 | CO + `bt_rbt_type` = `BT` or `RBT` | Also `1107692` |
@@ -441,9 +451,12 @@ State code comes from `location_home` via the same US state normalization used o
 
 | Condition (HubSpot-driven) | CR field / source (label IDs) |
 | --- | --- |
-| Always | `1052618`, `1052629`, `1052643` |
-| `home_state` → NY | `1107685` |
+| Always | `1052618`, `1130668`, `1052643` |
+| `home_state` → NY | `1132655` |
 | `home_state` → CO | `1107687` |
+| `ny_insurance_labels` contains MCD FFS-NY / Aetna-NY / Cigna-NY / Carelon-NY | `1107647` / `1107649` / `1107650` / `1132654`. `nj_insurance_labels`, Aetna-CO, Cigna-CO, and Carelon-CO stay uncoded |
+| `co_insurance_labels` contains MCD-CO | `1107651` |
+| `cr_billing_hold_label` = Yes | `1103437`. Added when Yes. The CentralReach client only POSTs labels, so No does not remove a label already on the contact |
 
 ---
 

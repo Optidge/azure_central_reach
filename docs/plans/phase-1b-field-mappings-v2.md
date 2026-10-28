@@ -41,7 +41,7 @@ Constants: `src/constants/hubspot.mjs`, `src/constants/centralReach.mjs`.
 
 - [ ] **Row scope:** Which sections to implement first (§3 client CR fields, §4 associations, employee objects)?
 - [ ] **Amber/red rows:** Explicit list of deferred properties vs build now.
-- [ ] **Sensitive tier:** Private app already has `crm.objects.deals.sensitive.read` — confirm before reading `phi_*`.
+- [x] **Sensitive tier (Oct 27, 2026):** Production portal `50317927` only. Portal `50850427` is a developer test account and cannot store sensitive properties. Fetched: `phi_first_name__cloned_`, `phi_last_name`, `phi_gender`, `phi_date_of_birth`, `insurance_id_1`, `insurance_id_2`, `phi__policy_holder_dob`, `phi_diagnosis` (HIPAA). Sensitive and not synced: `insurance_id_3`, `insurance_id_4`. Production read scope: `crm.objects.deals.sensitive.read`. Employee properties, including the three Medicaid IDs, are not in that tier. Comments live on the fetch lists.
 - [ ] **Writable-only:** Skip calculated/synced fields per guide §2.4.
 - [ ] **Associations:** Use v4 associations API — which labels/IDs (76, 82, 86, 143, 145, etc.)?
 - [ ] **Supervising BCBA / grad permit:** Sara rules in guide §3 — string match vs association logic.

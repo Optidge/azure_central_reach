@@ -70,7 +70,7 @@ A latch property, a discovery job, a reconciliation job, and contact fan-out wou
 - **One-way latch:** After first successful enrollment, keep syncing even if the gate is cleared or the record becomes Paused/Discharged/Inactive. **Do not** stop sync because `case_status` is Cold or stage moved.
 - **Ongoing sync:** Every mapped change must reach CentralReach, including **clears**, inactivation, and relationship changes.
 - **Dependencies:** Contact (guardian, BCBA personal email), association role labels, derived labels — not only direct edits on the parent object.
-- **PHI:** Never in webhook body, queue body, or info logs; Azure always **GET**s allowlisted properties with correct scopes.
+- **PHI:** Never in webhook body, queue body, or info logs. Azure GETs the allowlisted properties. On production portal `50317927`, the Case fields in Integration V2 API rule #2 need `crm.objects.deals.sensitive.read` or HubSpot omits them. The list is commented on `REQUIRED_DEAL_PROPERTIES`. Portal `50850427` cannot store sensitive properties.
 
 ---
 

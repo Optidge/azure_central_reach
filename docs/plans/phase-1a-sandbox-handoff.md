@@ -93,7 +93,7 @@ The diagram should show:
 - Cases to `client-sync-queue`. BCBA and BT/RBT to `employee-sync-queue`.
 - Queue workers GET HubSpot, map, upsert CentralReach, write back the contact id, link, and `last_sync_*` fields.
 - The existing poller as a second initiator into the same queues. Label it disabled in sandbox until the update test passes.
-- No "sensitive properties in the webhook?" branch.
+- No "sensitive properties in the webhook?" branch. The body stays the record id. Production sensitive Case values are read on the deal GET (`crm.objects.deals.sensitive.read` on portal `50317927`). Portal `50850427` cannot store sensitive properties.
 - No latch, discovery, or reconciliation boxes on the main path. A short note that those are a later add-on is enough.
 
 ## Docs that are stale
