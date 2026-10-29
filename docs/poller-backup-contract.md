@@ -160,6 +160,8 @@ HubSpot workflows (fast path)
 
 ### Still open
 
+The accept-or-reject record is [poller-state-decision.md](poller-state-decision.md). It closes the three bullets below with the 2026-10-29 counts. The numbered build target above stays as written until that record is accepted. Linked production Cases measured that day are 450, not the 429 in the cost section. 450 divided by 50 is still 9 ticks, 4.5 hours at 30 minutes.
+
 - Recheck page size, and the full-pass time you accept. The cost section still uses 50 records per search. At that size, 429 production Cases take 4.5 hours at 30 minutes.
 - Before any production tick, count records that are ticked, have no CentralReach id, and have no `last_sync_at`. Hand-entered clients in that set would be created on the first production tick.
 - Whether CentralReach client `5324526` is a safe live sandbox record. The dry-run list has to say so before anyone turns dry run off.
