@@ -9,6 +9,11 @@ export function isRetriableStatus(status) {
   return status === 429 || (status >= 500 && status <= 599);
 }
 
+/** Call after withRetry has thrown. An exhausted 429 ends the poller tick. */
+export function endTickOnRateLimit(error) {
+  return { endTick: error?.response?.status === 429 };
+}
+
 export function retryDelayMs(error, fallbackMs, maxDelayMs) {
   const headers = error?.response?.headers;
   const raw =
