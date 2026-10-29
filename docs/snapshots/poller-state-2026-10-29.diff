@@ -1,0 +1,3599 @@
+diff --git a/README.md b/README.md
+index 9db81f8..0de0099 100644
+--- a/README.md
++++ b/README.md
+@@ -45,9 +45,8 @@ Behavior notes:
+ ## C. Deployment Gate
+ 
+ Do not deploy until manual intake poller test confirms:
+-- HubSpot eligible deals can be fetched.
+-- `shouldSync` logic runs.
+-- Cosmos lease/dedupe state works.
++- The never-processed sweep finds ticked records with no CentralReach id and no `last_sync_at` (`CREATE_SWEEP_ENABLED`, default false; `CREATE_SWEEP_GRACE_MINUTES`, default 10).
++- Cosmos lease state works.
+ - Service Bus client-sync messages are enqueued.
+ - No PHI appears in logs, state, or Service Bus messages.
+ 
+diff --git a/docs/poller-backup-contract.md b/docs/poller-backup-contract.md
+index 4b649c2..e775312 100644
+--- a/docs/poller-backup-contract.md
++++ b/docs/poller-backup-contract.md
+@@ -160,6 +160,8 @@ HubSpot workflows (fast path)
+ 
+ ### Still open
+ 
++The accept-or-reject record is [poller-state-decision.md](poller-state-decision.md). It closes the three bullets below with the 2026-10-29 counts. The numbered build target above stays as written until that record is accepted. Linked production Cases measured that day are 450, not the 429 in the cost section. 450 divided by 50 is still 9 ticks, 4.5 hours at 30 minutes.
++
+ - Recheck page size, and the full-pass time you accept. The cost section still uses 50 records per search. At that size, 429 production Cases take 4.5 hours at 30 minutes.
+ - Before any production tick, count records that are ticked, have no CentralReach id, and have no `last_sync_at`. Hand-entered clients in that set would be created on the first production tick.
+ - Whether CentralReach client `5324526` is a safe live sandbox record. The dry-run list has to say so before anyone turns dry run off.
+diff --git a/docs/poller-state-decision.md b/docs/poller-state-decision.md
+new file mode 100644
+index 0000000..c09b246
+--- /dev/null
++++ b/docs/poller-state-decision.md
+@@ -0,0 +1,98 @@
++# Poller state decision
++
++**As of:** 2026-10-29 pickup. Judge base accepted. Grafts and candidate-2 fixes applied. Sketches were not redrawn.
++**Status:** Accepted base for implementation. No production portal write. No CentralReach write. Timer stays off until Zeke asks.
++
++Cross-judge agent `34d4334d-0ecd-49a3-88aa-8798f5e83af2` scored both candidates 25 of 30 and recommended candidate 2. This record is that base plus the two grafts and the four candidate-2 fixes. Empty versus missing on HubSpot was already closed by the sandbox GET in the pickup pack. Scores were not redone.
++
++## Verdict
++
++Confirm build target items 1, 2, 3, 4, 5, 7, 8, 9, and 10 as settled on 10/29. Replace item 6.
++
++Item 6 replacement. `withRetry` still makes 3 attempts on HTTP 429 and 5xx. If the error is still a 429, `endTickOnRateLimit` ends the poller tick. The tick does not read `policyName`, does not sleep and continue, and does not schedule a resume. Worker 429s still rethrow until the final Service Bus delivery. That delivery writes `last_sync_status` as `error` and sets `last_sync_at`. A 429 does not write `last_sync_at`, so a ticked first-time create stays `tickedNeverProcessed` and the next allowed tick can queue it.
++
++HubSpot stays the durable record state. Service Bus owns `deliveryCount`, dead letter, and `scheduledEnqueueTimeUtc`. Cosmos owns the lease, the dedupe row, field hashes, and `source` on the success row. Three modules hold the rules. `writebackAllowlist.mjs` and the existing HubSpot read functions stay.
++
++### Grafts from candidate 1
++
++1. On a hash match while status is `error`, PATCH `last_sync_status`, `last_sync_at`, and `last_sync_error`. Do not PATCH `integration_last_write` or `last_sync_hash`. Words in use for that clear include `noop`.
++2. Until a CentralReach PUT omit is measured, a record with an absent requested property gets `error`, field names only in `last_sync_error`, and no CentralReach call. Keep the blank-versus-absent type. Do not serialize an absent value as null.
++
++### Fixes inside candidate 2
++
++- `blocked` and `errorUnlinked` also require `last_sync_at` to be set.
++- Check dry run before the final-error step in `planAttempt`.
++- Sweep filter is exact token Yes, empty CentralReach id, empty `last_sync_at`, and `hs_lastmodifieddate` older than 10 minutes. Page size stays 50, one page per object per tick. First production tick with sweep and timer both on would queue 40 Cases, 100 BCBAs, and 275 BT/RBT. The other 1 BCBA and 136 BT/RBT sit inside the 10-minute grace.
++- Drop the `timerEnabled` argument from `sweepDecision`. Azure `AzureWebJobs.intakePoller.Disabled` stays the live timer gate. `CREATE_SWEEP_ENABLED` defaults false.
++
++## Data shape
++
++One record state machine, two bindings. Case uses `enter_in_central_reach` and `client_id_number`. Employee uses `entered_in_centralreach` and `employee_id`. `deriveRecordState` walks the match table top to bottom and returns the first row. `FieldRead` is `present`, `blank`, or `absent`. Public modules are `fieldRead.mjs`, `recordLifecycle.mjs`, and `attemptPlan.mjs`.
++
++Match order after the fixes.
++
++| Order | Kind | Match |
++| --- | --- | --- |
++| 1 | `errorLinked` | id non-empty and `last_sync_status` is `error` |
++| 2 | `linkedQuiet` | id non-empty |
++| 3 | `blocked` | employee only, id empty, status `blocked`, `last_sync_at` set |
++| 4 | `errorUnlinked` | id empty, status `error`, `last_sync_at` set |
++| 5 | `tickedNeverProcessed` | box exact Yes, id empty, `last_sync_at` empty |
++| 6 | `closedWithoutId` | box Yes, id empty, `last_sync_at` set, status not `error` (employee also not `blocked`) |
++| 7 | `untickedUnlinked` | anything left |
++
++The checkbox test stays the exact token Yes after a split on `;`. `Yes - Generic`, `Yes - Active`, and `No- Made Inactive` do not pass. A multi-checkbox value that includes the part Yes does pass.
++
++`workerGate` syncs when the id is set or the box is Yes. That is the only skip. A linked record with the box unticked still syncs.
++
++`sweepDecision` enqueues only `tickedNeverProcessed` when `createSweepEnabled` is true, `modifiedAtMs` is a number, and age is at least `graceMinutes`. It does not take `timerEnabled`.
++
++`planAttempt` order after the dry-run fix.
++
++1. dryRun true. Return `dry-run-stop`. No CentralReach upsert. No HubSpot writeback.
++2. error set and deliveryCount below max. Retry, no patch.
++3. error set and deliveryCount at max. `final-error` patch, optional linked replay, then rethrow.
++4. hashMatched with id. If status was `error`, apply graft 1 clear. Otherwise `hash-match-stop` with no PATCH.
++5. employee, no id, `allowEmployeeCreate` false. `blocked` patch.
++6. write.
++
++## Fields
++
++Accepted. All already exist. None is new.
++
++`enter_in_central_reach`, `entered_in_centralreach`, `client_id_number`, `employee_id`, `last_sync_status`, `last_sync_at`, `last_sync_error`, `last_sync_hash`, `integration_last_write`, `updated_by_integration`, the three CentralReach link properties, `hs_lastmodifieddate`. Cosmos `source` and queue source `neverProcessedSweep` are not HubSpot properties.
++
++Rejected with the Drive rule named.
++
++| Proposed | Rule | What does the job |
++| --- | --- | --- |
++| `next_retry_at` | 11 | `ScheduledEnqueueTimeUtc` |
++| `retry_count` | 11 | `deliveryCount` |
++| `sync_source` | 11 | Cosmos and queue `source` |
++| New property or blank into a sensitive Case field to mark an omitted read | 11 / 2 | Absent `FieldRead`, fail closed, no CentralReach call |
++| PATCH of calculated staffing or location names | 4 | Leave read-only. Staffing is associations, rule 5 |
++| Write metadata `132304` including `POLL1` | 2 | Leave alone |
++
++## Azure
++
++Measured 2026-10-29 on `centralreachserverless` in `centralreachintegration`. Portal is sandbox `50850427`. `intakePoller` is disabled. Both queue workers and `hubspotWebhook` are enabled. Both queues have `maxDeliveryCount` 10 and dead-letter depth 2. Do not add a host.json retry on top of that. `ScheduledEnqueueTimeUtc` carries the 30-minute and 2-hour linked replays and replaces a next-retry CRM field.
++
++## Counts
++
++Closed from the grounding measurements. Recheck page size stays 50. Never-processed production totals older than 10 minutes are 40 Cases, 100 BCBAs, 275 BT/RBT. Sandbox never-processed is 0, 0, 0. Linked production Cases are 450, which is 9 pages and 4.5 hours at a 30-minute interval. The timer is still off.
++
++## Absent is not blank
++
++Measured on sandbox deal `66712883229`. `last_sync_error` was a present key with null. A made-up property name was omitted. Empty is present null or present empty string. Missing is absent. Graft 2 fails the record before any CentralReach call when a requested key is absent.
++
++### Request list must match the portal
++
++Graft 2 fails a record on any absent requested key. That makes a requested name with no property definition a permanent failure. The BT/RBT request list asked for `postal_code`. Sandbox `2-55656309` has no such property, so all 20 sandbox BT/RBT records failed graft 2, and clearing `last_sync_at` returned each one to the same error. Production `2-48354559` also returned 404 for `postal_code` (read-only property GET, 2026-10-29). Decision: remove `postal_code` from the BT/RBT request list and from the `postal_code_home || postal_code` fallback in `buildEmployeePayload.mjs`. `postal_code_home` exists on both portals. It is calculated on production, which only matters for writes (rule 4), and the integration never writes it.
++
++## What this does not do
++
++Does not enable `intakePoller`. Does not write production portal `50317927`. Does not write CentralReach from the dry-run path. Does not write metadata `132304`. Does not add a HubSpot or CentralReach property.
++
++## Next implementation step
++
++Add `src/lib/fieldRead.mjs`, `src/lib/recordLifecycle.mjs`, and `src/lib/attemptPlan.mjs` from the candidate-2 sketch, with the grafts and fixes above applied in code. Wire `SYNC_DRY_RUN` and the never-processed sweep behind defaults that keep the timer off and writes off. Prove a sandbox dry run can queue a ticked first-time create with no CentralReach id.
+diff --git a/src/constants/queues.mjs b/src/constants/queues.mjs
+index e23463a..2c060e1 100644
+--- a/src/constants/queues.mjs
++++ b/src/constants/queues.mjs
+@@ -3,3 +3,8 @@ export const QUEUE_WORKFLOWS = {
+   CLIENT_SYNC: "clientSync",
+   EMPLOYEE_SYNC: "employeeSync"
+ };
++
++// Measured maxDeliveryCount on client-sync-queue and employee-sync-queue.
++export const MAX_DELIVERY_COUNT = 10;
++
++export const LINKED_REPLAY_SOURCE = "linkedReplay";
+diff --git a/src/functions/processClientQueue.mjs b/src/functions/processClientQueue.mjs
+index 51e2ee7..b01ebab 100644
+--- a/src/functions/processClientQueue.mjs
++++ b/src/functions/processClientQueue.mjs
+@@ -1,15 +1,18 @@
+ import { app } from "@azure/functions";
+ import { safeLog } from "../lib/safeLog.mjs";
+ import { buildErrorLog } from "../lib/errors.mjs";
+-import { QUEUE_WORKFLOWS } from "../constants/queues.mjs";
++import { LINKED_REPLAY_SOURCE, QUEUE_WORKFLOWS } from "../constants/queues.mjs";
+ import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
++import { NEVER_PROCESSED_SOURCE } from "../lib/recordLifecycle.mjs";
+ 
+ const ALLOWED_SOURCES = new Set([
+   "intakePoller",
+   "clientSyncHttpTest",
+   "manualClientSyncTest",
+   "hubspotWorkflow",
+-  "linkedRecheck"
++  "linkedRecheck",
++  NEVER_PROCESSED_SOURCE,
++  LINKED_REPLAY_SOURCE
+ ]);
+ 
+ function asNonEmptyString(value) {
+@@ -97,7 +100,9 @@ export async function processClientQueue(message, context, dependencies = {}) {
+       dealId: validated.dealId,
+       hsLastModifiedDate: validated.hsLastModifiedDate,
+       source: validated.source,
+-      context
++      context,
++      deliveryCount: queueMeta.deliveryCount,
++      replayCount: Number(payload?.replayCount) || 0
+     });
+ 
+     safeLog("info", "Client queue message processed.", queueMeta);
+diff --git a/src/functions/processEmployeeQueue.mjs b/src/functions/processEmployeeQueue.mjs
+index 116cefe..5a73149 100644
+--- a/src/functions/processEmployeeQueue.mjs
++++ b/src/functions/processEmployeeQueue.mjs
+@@ -82,7 +82,9 @@ export async function processEmployeeQueue(message, context, dependencies = {})
+       employeeType: validated.employeeType,
+       hsLastModifiedDate: validated.hsLastModifiedDate,
+       source: asNonEmptyString(payload?.source) || undefined,
+-      context
++      context,
++      deliveryCount: message?.deliveryCount ?? context?.triggerMetadata?.deliveryCount,
++      replayCount: Number(payload?.replayCount) || 0
+     });
+ 
+     safeLog("info", "Employee queue message processed.", {
+diff --git a/src/lib/attemptPlan.mjs b/src/lib/attemptPlan.mjs
+new file mode 100644
+index 0000000..4df11cb
+--- /dev/null
++++ b/src/lib/attemptPlan.mjs
+@@ -0,0 +1,154 @@
++const REPLAY_DELAYS_MS = Object.freeze([30 * 60 * 1000, 2 * 60 * 60 * 1000]);
++const SYNC_ERROR_MAX_LENGTH = 500;
++
++/**
++ * @typedef {{ replayCount: number, scheduledEnqueueTimeUtc: string, messageId: string }} Replay
++ * @typedef {(
++ *   | { action: "dry-run-stop", error: unknown }
++ *   | { action: "hash-match-stop" }
++ *   | { action: "hash-match-clear", hubspotPatch: Record<string, string> }
++ *   | { action: "blocked", hubspotPatch: Record<string, string> }
++ *   | { action: "write", hubspotPatch: Record<string, string | boolean> }
++ *   | { action: "retry", error: unknown }
++ *   | { action: "final-error", hubspotPatch: Record<string, string>, replay: Replay | null, error: unknown }
++ * )} AttemptPlan
++ */
++
++export function syncErrorMessage(error) {
++  const message = Array.isArray(error?.failedFieldIds) && error.failedFieldIds.length
++    ? `MetadataWriteFailed fields: ${error.failedFieldIds.join(",")}`
++    : String(error?.message || "Sync failed");
++  return message.slice(0, SYNC_ERROR_MAX_LENGTH);
++}
++
++function nextReplay({ object, recordId, replayCount, nowMs }) {
++  if (replayCount >= REPLAY_DELAYS_MS.length) {
++    return null;
++  }
++  const next = replayCount + 1;
++  return {
++    replayCount: next,
++    scheduledEnqueueTimeUtc: new Date(nowMs + REPLAY_DELAYS_MS[replayCount]).toISOString(),
++    messageId: `replay:${object}:${recordId}:${next}`
++  };
++}
++
++/**
++ * Pure. centralReachId is the id known to this attempt: the HubSpot id, a
++ * pending link from an earlier create, or the id this attempt received.
++ * Dry run is checked first so no error path can write HubSpot.
++ * @returns {AttemptPlan}
++ */
++export function planAttempt({
++  binding,
++  recordId,
++  lastSyncStatus,
++  centralReachId,
++  deliveryCount,
++  maxDeliveryCount,
++  replayCount = 0,
++  hashMatched,
++  dryRun,
++  allowEmployeeCreate,
++  payloadHash,
++  error,
++  nowMs
++}) {
++  const now = new Date(nowMs).toISOString();
++
++  if (dryRun) {
++    return { action: "dry-run-stop", error: error ?? null };
++  }
++
++  if (error) {
++    if (deliveryCount < maxDeliveryCount) {
++      return { action: "retry", error };
++    }
++    return {
++      action: "final-error",
++      hubspotPatch: {
++        last_sync_status: "error",
++        last_sync_at: now,
++        last_sync_error: syncErrorMessage(error),
++        ...(centralReachId ? { [binding.centralReachIdProperty]: centralReachId } : {})
++      },
++      replay: centralReachId
++        ? nextReplay({ object: binding.object, recordId, replayCount, nowMs })
++        : null,
++      error
++    };
++  }
++
++  if (hashMatched && centralReachId) {
++    if (lastSyncStatus === "error") {
++      return {
++        action: "hash-match-clear",
++        hubspotPatch: { last_sync_status: "noop", last_sync_at: now, last_sync_error: "" }
++      };
++    }
++    return { action: "hash-match-stop" };
++  }
++
++  if (binding.allowsBlocked && !centralReachId && !allowEmployeeCreate) {
++    return {
++      action: "blocked",
++      hubspotPatch: {
++        last_sync_status: "blocked",
++        last_sync_at: now,
++        last_sync_error: "Employee create is disabled. Provide an existing employee_id."
++      }
++    };
++  }
++
++  return {
++    action: "write",
++    hubspotPatch: {
++      updated_by_integration: true,
++      integration_last_write: now,
++      last_sync_at: now,
++      last_sync_status: "success",
++      last_sync_error: "",
++      last_sync_hash: payloadHash
++    }
++  };
++}
++
++async function claimReplaySafely(ports, messageId) {
++  try {
++    return await ports.claimReplay(messageId);
++  } catch {
++    return false;
++  }
++}
++
++/**
++ * The only ordered side effects. upsert returns the link fields it learned,
++ * which are merged over the plan's patch.
++ * @returns {Promise<string>} the action that ran
++ */
++export async function runPlan(plan, ports) {
++  switch (plan.action) {
++    case "dry-run-stop":
++    case "hash-match-stop":
++      return plan.action;
++    case "hash-match-clear":
++    case "blocked":
++      await ports.patch(plan.hubspotPatch);
++      return plan.action;
++    case "write": {
++      const learned = await ports.upsert();
++      await ports.patch({ ...plan.hubspotPatch, ...(learned || {}) });
++      return plan.action;
++    }
++    case "retry":
++      throw plan.error;
++    case "final-error":
++      await ports.patch(plan.hubspotPatch);
++      if (plan.replay && (await claimReplaySafely(ports, plan.replay.messageId))) {
++        await ports.schedule(plan.replay);
++      }
++      throw plan.error;
++    default:
++      throw new Error(`Unknown attempt action: ${plan.action}`);
++  }
++}
+diff --git a/src/lib/config.mjs b/src/lib/config.mjs
+index 97e4a54..4a66458 100644
+--- a/src/lib/config.mjs
++++ b/src/lib/config.mjs
+@@ -45,8 +45,6 @@ const REQUIRED_ENV_NAMES = [
+ const REQUIRED_INTAKE_ENV_NAMES = [
+   "HUBSPOT_PRIVATE_APP_TOKEN",
+   "HUBSPOT_BASE_URL",
+-  "HS_DEAL_PIPELINE_ID",
+-  "HS_STAGE_ALLOWLIST_JSON",
+   "MAX_BT_RBT_PER_RUN",
+   "MAX_BCBA_PER_RUN",
+   "MAX_DEALS_PER_RUN",
+@@ -60,11 +58,7 @@ const REQUIRED_INTAKE_ENV_NAMES = [
+   "CLIENT_SYNC_QUEUE_NAME",
+   "EMPLOYEE_SYNC_QUEUE_NAME",
+   "HS_BT_RBT_OBJECT_TYPE_ID",
+-  "HS_BT_RBT_PIPELINE_ID",
+-  "HS_BT_RBT_STAGE_ALLOWLIST_JSON",
+-  "HS_BCBA_OBJECT_TYPE_ID",
+-  "HS_BCBA_PIPELINE_ID",
+-  "HS_BCBA_STAGE_ALLOWLIST_JSON"
++  "HS_BCBA_OBJECT_TYPE_ID"
+ ];
+ 
+ export function getRequiredEnv(name) {
+@@ -83,6 +77,14 @@ export function getOptionalEnv(name, defaultValue = "") {
+   return value.trim();
+ }
+ 
++export function getBooleanEnv(name, defaultValue) {
++  const value = getOptionalEnv(name, "").toLowerCase();
++  if (value === "") {
++    return defaultValue;
++  }
++  return value === "true";
++}
++
+ function isPlaceholderValue(value) {
+   if (!value) {
+     return false;
+@@ -187,21 +189,17 @@ export function getIntakePollerConfig() {
+     hubspot: {
+       privateAppToken: getRequiredEnv("HUBSPOT_PRIVATE_APP_TOKEN"),
+       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
+-      dealPipelineId: getRequiredEnv("HS_DEAL_PIPELINE_ID"),
+-      stageAllowlist: parseRequiredJsonArray("HS_STAGE_ALLOWLIST_JSON"),
+       btRbtObjectTypeId: getRequiredEnv("HS_BT_RBT_OBJECT_TYPE_ID"),
+-      btRbtPipelineId: getRequiredEnv("HS_BT_RBT_PIPELINE_ID"),
+-      btRbtStageAllowlist: parseRequiredJsonArray("HS_BT_RBT_STAGE_ALLOWLIST_JSON"),
+-      bcbaObjectTypeId: getRequiredEnv("HS_BCBA_OBJECT_TYPE_ID"),
+-      bcbaPipelineId: getRequiredEnv("HS_BCBA_PIPELINE_ID"),
+-      bcbaStageAllowlist: parseRequiredJsonArray("HS_BCBA_STAGE_ALLOWLIST_JSON")
++      bcbaObjectTypeId: getRequiredEnv("HS_BCBA_OBJECT_TYPE_ID")
++    },
++    sweep: {
++      createSweepEnabled: getBooleanEnv("CREATE_SWEEP_ENABLED", false),
++      graceMinutes: Number(getOptionalEnv("CREATE_SWEEP_GRACE_MINUTES", "10"))
+     },
+     limits: {
+       maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
+       maxBtRbtPerRun: Number(getRequiredEnv("MAX_BT_RBT_PER_RUN")),
+       maxBcbaPerRun: Number(getRequiredEnv("MAX_BCBA_PER_RUN")),
+-      maxSearchRequestsPerRun: Number(getOptionalEnv("MAX_SEARCH_REQUESTS_PER_SECTION", "1")),
+-      lookbackMinutes: Number(getOptionalEnv("LOOKBACK_MINUTES", "15")),
+       linkedRecheckEnabled:
+         String(getOptionalEnv("LINKED_RECHECK_ENABLED", "true")).toLowerCase() !== "false",
+       crContactIdProperty: getOptionalEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY", "client_id_number"),
+@@ -290,7 +288,8 @@ export function getConfig() {
+     features: {
+       allowEmployeeCreate:
+         String(getOptionalEnv("ALLOW_EMPLOYEE_CREATE", "false")).toLowerCase() === "true",
+-      putOnlyMode: String(getOptionalEnv("PUT_ONLY_MODE", "true")).toLowerCase() !== "false"
++      putOnlyMode: String(getOptionalEnv("PUT_ONLY_MODE", "true")).toLowerCase() !== "false",
++      syncDryRun: getBooleanEnv("SYNC_DRY_RUN", false)
+     }
+   };
+ }
+diff --git a/src/lib/fieldRead.mjs b/src/lib/fieldRead.mjs
+new file mode 100644
+index 0000000..207d108
+--- /dev/null
++++ b/src/lib/fieldRead.mjs
+@@ -0,0 +1,59 @@
++/**
++ * @typedef {{ kind: "absent", name: string }} AbsentField
++ * @typedef {{ kind: "blank", name: string }} BlankField
++ * @typedef {{ kind: "present", name: string, value: string }} PresentField
++ * @typedef {AbsentField | BlankField | PresentField} FieldRead
++ * @typedef {Readonly<Record<string, FieldRead>>} FieldMap
++ */
++
++/**
++ * A key missing from a 200 property bag is absent. HubSpot omits a requested
++ * name it has no definition for, or one the token cannot read. Absent is not
++ * blank and never becomes null.
++ * @returns {FieldRead}
++ */
++export function readProperty(properties, name) {
++  if (!properties || !Object.hasOwn(properties, name)) {
++    return { kind: "absent", name };
++  }
++  const raw = properties[name];
++  if (raw === null || raw === undefined || String(raw).trim() === "") {
++    return { kind: "blank", name };
++  }
++  return { kind: "present", name, value: String(raw) };
++}
++
++/** @returns {FieldMap} */
++export function readRequestedProperties(properties, requestedNames) {
++  const map = {};
++  for (const name of requestedNames) {
++    map[name] = readProperty(properties, name);
++  }
++  return Object.freeze(map);
++}
++
++/** @returns {string[]} */
++export function absentNames(fieldMap) {
++  return Object.values(fieldMap)
++    .filter((field) => field.kind === "absent")
++    .map((field) => field.name);
++}
++
++export class RequestedPropertyAbsentError extends Error {
++  constructor(names) {
++    super(`RequestedPropertyAbsent: ${names.join(",")}`);
++    this.code = "REQUESTED_PROPERTY_ABSENT";
++    this.absentNames = names;
++  }
++}
++
++/**
++ * Fails closed before any CentralReach call when a requested key is absent.
++ * The error message carries field names only, never values.
++ */
++export function assertNoAbsentProperties(properties, requestedNames) {
++  const missing = absentNames(readRequestedProperties(properties, requestedNames));
++  if (missing.length > 0) {
++    throw new RequestedPropertyAbsentError(missing);
++  }
++}
+diff --git a/src/lib/hubspotClient.mjs b/src/lib/hubspotClient.mjs
+index b6e73e5..5164ed3 100644
+--- a/src/lib/hubspotClient.mjs
++++ b/src/lib/hubspotClient.mjs
+@@ -4,17 +4,6 @@ import { HubSpotReadError } from "./mappedState.mjs";
+ 
+ let hubSpotHttpClient = null;
+ const SEARCH_LIMIT = 50;
+-const EMPLOYEE_SEARCH_PROPERTIES = [
+-  "hs_object_id",
+-  "employee_id",
+-  "hs_lastmodifieddate",
+-  "updated_by_integration",
+-  "integration_last_write",
+-  "last_sync_hash",
+-  "last_sync_at",
+-  "last_sync_status",
+-  "last_sync_error"
+-];
+ 
+ function extractHubspotErrorBlob(error) {
+   const data = error?.response?.data || {};
+@@ -50,68 +39,6 @@ function extractHubspotErrorBlob(error) {
+   return messageParts.join(" ").toLowerCase();
+ }
+ 
+-function isLookbackFilterError(error) {
+-  const status = error?.response?.status;
+-  if (status !== 400 && status !== 422) {
+-    return false;
+-  }
+-  const blob = extractHubspotErrorBlob(error);
+-  return (
+-    blob.includes("hs_lastmodifieddate") &&
+-    (blob.includes("invalid") ||
+-      blob.includes("unknown") ||
+-      blob.includes("filter") ||
+-      blob.includes("property") ||
+-      blob.includes("validation"))
+-  );
+-}
+-
+-function buildObjectSearchPayload({
+-  pipelineProperty,
+-  stageProperty,
+-  pipelineId,
+-  stageAllowlist,
+-  properties,
+-  limit,
+-  after,
+-  sinceIso,
+-  includeLookback
+-}) {
+-  const filters = [
+-    {
+-      propertyName: pipelineProperty,
+-      operator: "EQ",
+-      value: pipelineId
+-    },
+-    {
+-      propertyName: stageProperty,
+-      operator: "IN",
+-      values: stageAllowlist
+-    }
+-  ];
+-
+-  if (includeLookback && sinceIso) {
+-    filters.push({
+-      propertyName: "hs_lastmodifieddate",
+-      operator: "GTE",
+-      value: sinceIso
+-    });
+-  }
+-
+-  return {
+-    filterGroups: [{ filters }],
+-    properties,
+-    sorts: [
+-      {
+-        propertyName: "hs_lastmodifieddate",
+-        direction: "DESCENDING"
+-      }
+-    ],
+-    limit,
+-    ...(after ? { after } : {})
+-  };
+-}
+-
+ async function runSearch(objectPath, payload) {
+   if (!hubSpotHttpClient) {
+     throw new Error("HubSpot client is not initialized");
+@@ -142,113 +69,6 @@ export function createHubSpotClient(config) {
+   return hubSpotHttpClient;
+ }
+ 
+-export async function searchIntakeCompleteDeals({
+-  limit,
+-  maxSearchRequestsPerRun,
+-  lookbackMinutes,
+-  pipelineId,
+-  stageAllowlist
+-}) {
+-  return searchCustomObjectRecords({
+-    objectTypeId: "deals",
+-    pipelineProperty: "pipeline",
+-    stageProperty: "dealstage",
+-    pipelineId,
+-    stageAllowlist,
+-    limit,
+-    maxSearchRequestsPerRun,
+-    lookbackMinutes,
+-    properties: ["hs_object_id", "hs_lastmodifieddate", "integration_last_write"]
+-  });
+-}
+-
+-export async function searchCustomObjectRecords({
+-  objectTypeId,
+-  pipelineProperty = "hs_pipeline",
+-  stageProperty = "hs_pipeline_stage",
+-  pipelineId,
+-  stageAllowlist,
+-  limit,
+-  maxSearchRequestsPerRun,
+-  lookbackMinutes,
+-  properties = EMPLOYEE_SEARCH_PROPERTIES
+-}) {
+-  const normalizedObjectTypeId = String(objectTypeId || "").trim();
+-  if (!normalizedObjectTypeId) {
+-    throw new Error("HubSpot objectTypeId is required for search");
+-  }
+-
+-  const cappedLimit = Math.max(Number(limit) || 0, 0);
+-  if (cappedLimit === 0) {
+-    return [];
+-  }
+-  if (!pipelineId || !Array.isArray(stageAllowlist) || stageAllowlist.length === 0) {
+-    throw new Error("Missing required HubSpot intake search filters");
+-  }
+-
+-  const perRequestLimit = Math.min(SEARCH_LIMIT, cappedLimit);
+-  const maxSearchRequests = Math.max(Number(maxSearchRequestsPerRun) || 1, 1);
+-  const sinceIso = new Date(
+-    Date.now() - Math.max(Number(lookbackMinutes) || 0, 0) * 60 * 1000
+-  ).toISOString();
+-
+-  let after = null;
+-  let includeLookback = true;
+-  let requests = 0;
+-  const deals = [];
+-
+-  while (deals.length < cappedLimit && requests < maxSearchRequests) {
+-    const payload = buildObjectSearchPayload({
+-      pipelineProperty,
+-      stageProperty,
+-      pipelineId,
+-      stageAllowlist,
+-      properties,
+-      limit: perRequestLimit,
+-      after,
+-      sinceIso,
+-      includeLookback
+-    });
+-
+-    let searchResult;
+-    try {
+-      searchResult = await runSearch(`/crm/v3/objects/${normalizedObjectTypeId}/search`, payload);
+-    } catch (error) {
+-      if (includeLookback && isLookbackFilterError(error)) {
+-        includeLookback = false;
+-        const fallbackPayload = buildObjectSearchPayload({
+-          pipelineProperty,
+-          stageProperty,
+-          pipelineId,
+-          stageAllowlist,
+-          properties,
+-          limit: perRequestLimit,
+-          after,
+-          sinceIso,
+-          includeLookback
+-        });
+-        searchResult = await runSearch(
+-          `/crm/v3/objects/${normalizedObjectTypeId}/search`,
+-          fallbackPayload
+-        );
+-      } else {
+-        throw error;
+-      }
+-    }
+-
+-    requests += 1;
+-    const pageResults = Array.isArray(searchResult?.results) ? searchResult.results : [];
+-    deals.push(...pageResults);
+-
+-    after = searchResult?.paging?.next?.after || null;
+-    if (!after) {
+-      break;
+-    }
+-  }
+-
+-  return deals.slice(0, cappedLimit);
+-}
+-
+ export async function getDealById(dealId, properties = []) {
+   if (!hubSpotHttpClient) {
+     throw new Error("HubSpot client is not initialized");
+@@ -435,48 +255,6 @@ export async function updateObjectProperties(objectTypeId, objectId, properties)
+   return response?.data || null;
+ }
+ 
+-export async function searchEligibleBtRbtRecords({
+-  objectTypeId,
+-  pipelineId,
+-  stageAllowlist,
+-  limit,
+-  maxSearchRequestsPerRun,
+-  lookbackMinutes
+-}) {
+-  return searchCustomObjectRecords({
+-    objectTypeId,
+-    pipelineProperty: "hs_pipeline",
+-    stageProperty: "hs_pipeline_stage",
+-    pipelineId,
+-    stageAllowlist,
+-    limit,
+-    maxSearchRequestsPerRun,
+-    lookbackMinutes,
+-    properties: EMPLOYEE_SEARCH_PROPERTIES
+-  });
+-}
+-
+-export async function searchEligibleBcbaRecords({
+-  objectTypeId,
+-  pipelineId,
+-  stageAllowlist,
+-  limit,
+-  maxSearchRequestsPerRun,
+-  lookbackMinutes
+-}) {
+-  return searchCustomObjectRecords({
+-    objectTypeId,
+-    pipelineProperty: "hs_pipeline",
+-    stageProperty: "hs_pipeline_stage",
+-    pipelineId,
+-    stageAllowlist,
+-    limit,
+-    maxSearchRequestsPerRun,
+-    lookbackMinutes,
+-    properties: EMPLOYEE_SEARCH_PROPERTIES
+-  });
+-}
+-
+ export async function getBtRbtRecordById(recordId, objectTypeId, properties = []) {
+   return getObjectById(objectTypeId, recordId, properties);
+ }
+@@ -491,6 +269,45 @@ function assertHubSpotReady() {
+   }
+ }
+ 
++/**
++ * One page of records Azure never processed: checkbox Yes, no CentralReach id,
++ * no last_sync_at, and last modified before the grace cutoff. The caller still
++ * runs each result through the record state machine for the exact Yes token.
++ */
++export async function searchNeverProcessedRecords({
++  objectTypeId,
++  checkboxProperty,
++  idProperty,
++  modifiedBeforeIso
++}) {
++  assertHubSpotReady();
++  const payload = {
++    filterGroups: [
++      {
++        filters: [
++          { propertyName: checkboxProperty, operator: "IN", values: ["Yes"] },
++          { propertyName: idProperty, operator: "NOT_HAS_PROPERTY" },
++          { propertyName: "last_sync_at", operator: "NOT_HAS_PROPERTY" },
++          { propertyName: "hs_lastmodifieddate", operator: "LT", value: modifiedBeforeIso }
++        ]
++      }
++    ],
++    properties: [
++      "hs_object_id",
++      checkboxProperty,
++      idProperty,
++      "last_sync_at",
++      "last_sync_status",
++      "hs_lastmodifieddate"
++    ],
++    sorts: [{ propertyName: "hs_lastmodifieddate", direction: "ASCENDING" }],
++    limit: SEARCH_LIMIT
++  };
++
++  const searchResult = await runSearch(`/crm/v3/objects/${objectTypeId}/search`, payload);
++  return Array.isArray(searchResult?.results) ? searchResult.results : [];
++}
++
+ export async function searchRecordsByKnownProperty({
+   objectTypeId,
+   propertyName,
+diff --git a/src/lib/recordLifecycle.mjs b/src/lib/recordLifecycle.mjs
+new file mode 100644
+index 0000000..c04999f
+--- /dev/null
++++ b/src/lib/recordLifecycle.mjs
+@@ -0,0 +1,154 @@
++import { readProperty } from "./fieldRead.mjs";
++
++export const RECORD_KINDS = Object.freeze([
++  "untickedUnlinked",
++  "tickedNeverProcessed",
++  "linkedQuiet",
++  "errorUnlinked",
++  "errorLinked",
++  "closedWithoutId",
++  "blocked"
++]);
++
++export const NEVER_PROCESSED_SOURCE = "neverProcessedSweep";
++
++const CHECKBOX_YES_TOKEN = "Yes";
++
++/**
++ * @typedef {{
++ *   object: "case" | "employee",
++ *   checkboxProperty: "enter_in_central_reach" | "entered_in_centralreach",
++ *   centralReachIdProperty: string,
++ *   allowsBlocked: boolean
++ * }} Binding
++ */
++
++/** @returns {Binding} */
++export function caseBinding(centralReachIdProperty = "client_id_number") {
++  return {
++    object: "case",
++    checkboxProperty: "enter_in_central_reach",
++    centralReachIdProperty,
++    allowsBlocked: false
++  };
++}
++
++/** @returns {Binding} */
++export function employeeBinding(centralReachIdProperty = "employee_id") {
++  return {
++    object: "employee",
++    checkboxProperty: "entered_in_centralreach",
++    centralReachIdProperty,
++    allowsBlocked: true
++  };
++}
++
++/** "Yes - Generic" is not Yes. A multi-checkbox value with the part Yes is Yes. */
++export function checkboxIsYes(value) {
++  return String(value ?? "")
++    .split(";")
++    .map((part) => part.trim())
++    .includes(CHECKBOX_YES_TOKEN);
++}
++
++function presentValue(properties, name) {
++  const field = readProperty(properties, name);
++  return field.kind === "present" ? field.value.trim() : null;
++}
++
++function parseEpochMs(value) {
++  if (value === null) {
++    return null;
++  }
++  const asNumber = /^\d+$/.test(value) ? Number(value) : new Date(value).getTime();
++  return Number.isFinite(asNumber) ? asNumber : null;
++}
++
++/**
++ * @typedef {{
++ *   object: "case" | "employee",
++ *   recordId: string,
++ *   checkboxYes: boolean,
++ *   centralReachId: string | null,
++ *   lastSyncAt: string | null,
++ *   lastSyncStatus: string | null,
++ *   modifiedAtMs: number | null,
++ *   allowsBlocked: boolean
++ * }} Snapshot
++ */
++
++/** @returns {Snapshot} */
++export function parseSnapshot(properties, binding, recordId) {
++  return {
++    object: binding.object,
++    recordId: String(recordId),
++    checkboxYes: checkboxIsYes(presentValue(properties, binding.checkboxProperty)),
++    centralReachId: presentValue(properties, binding.centralReachIdProperty),
++    lastSyncAt: presentValue(properties, "last_sync_at"),
++    lastSyncStatus: presentValue(properties, "last_sync_status"),
++    modifiedAtMs: parseEpochMs(presentValue(properties, "hs_lastmodifieddate")),
++    allowsBlocked: binding.allowsBlocked
++  };
++}
++
++const STATE_TABLE = [
++  {
++    kind: "errorLinked",
++    matches: (s) => Boolean(s.centralReachId) && s.lastSyncStatus === "error"
++  },
++  { kind: "linkedQuiet", matches: (s) => Boolean(s.centralReachId) },
++  {
++    kind: "blocked",
++    matches: (s) => s.allowsBlocked && s.lastSyncStatus === "blocked" && Boolean(s.lastSyncAt)
++  },
++  {
++    kind: "errorUnlinked",
++    matches: (s) => s.lastSyncStatus === "error" && Boolean(s.lastSyncAt)
++  },
++  { kind: "tickedNeverProcessed", matches: (s) => s.checkboxYes && !s.lastSyncAt },
++  { kind: "closedWithoutId", matches: (s) => s.checkboxYes && Boolean(s.lastSyncAt) },
++  { kind: "untickedUnlinked", matches: () => true }
++];
++
++/**
++ * First matching row wins. Rows after linkedQuiet only see an empty id.
++ * closedWithoutId needs no status check because the error and blocked rows
++ * with last_sync_at set already matched above it.
++ */
++export function deriveRecordState(snapshot) {
++  const row = STATE_TABLE.find((candidate) => candidate.matches(snapshot));
++  return {
++    kind: row.kind,
++    object: snapshot.object,
++    checkboxYes: snapshot.checkboxYes,
++    centralReachId: snapshot.centralReachId,
++    lastSyncAt: snapshot.lastSyncAt,
++    lastSyncStatus: snapshot.lastSyncStatus,
++    modifiedAtMs: snapshot.modifiedAtMs
++  };
++}
++
++/** The only skip. A linked record with the box unticked still syncs. */
++export function workerGate(state) {
++  if (state.centralReachId || state.checkboxYes) {
++    return { action: "sync" };
++  }
++  return { action: "skip", reason: "no-id-and-box-not-yes" };
++}
++
++/** Live timer gate is AzureWebJobs.intakePoller.Disabled, not an argument here. */
++export function sweepDecision(state, { now, createSweepEnabled, graceMinutes }) {
++  if (!createSweepEnabled) {
++    return { enqueue: false, reason: "create-sweep-disabled" };
++  }
++  if (state.kind !== "tickedNeverProcessed") {
++    return { enqueue: false, reason: `kind-${state.kind}` };
++  }
++  if (typeof state.modifiedAtMs !== "number") {
++    return { enqueue: false, reason: "modified-date-unknown" };
++  }
++  if (now - state.modifiedAtMs < graceMinutes * 60 * 1000) {
++    return { enqueue: false, reason: "inside-grace" };
++  }
++  return { enqueue: true, reason: "ticked-never-processed" };
++}
+diff --git a/src/lib/retry.mjs b/src/lib/retry.mjs
+index 5c8c472..3de7ea6 100644
+--- a/src/lib/retry.mjs
++++ b/src/lib/retry.mjs
+@@ -9,6 +9,11 @@ export function isRetriableStatus(status) {
+   return status === 429 || (status >= 500 && status <= 599);
+ }
+ 
++/** Call after withRetry has thrown. An exhausted 429 ends the poller tick. */
++export function endTickOnRateLimit(error) {
++  return { endTick: error?.response?.status === 429 };
++}
++
+ export function retryDelayMs(error, fallbackMs, maxDelayMs) {
+   const headers = error?.response?.headers;
+   const raw =
+diff --git a/src/lib/serviceBusClient.mjs b/src/lib/serviceBusClient.mjs
+index be42ab5..b60f41b 100644
+--- a/src/lib/serviceBusClient.mjs
++++ b/src/lib/serviceBusClient.mjs
+@@ -1,5 +1,6 @@
+ import { ServiceBusClient } from "@azure/service-bus";
+ import { sha256 } from "./hash.mjs";
++import { LINKED_REPLAY_SOURCE } from "../constants/queues.mjs";
+ 
+ let serviceBusClient = null;
+ let clientSyncSender = null;
+@@ -59,6 +60,28 @@ export async function sendClientSyncMessage(message) {
+   await clientSyncSender.sendMessages(outboundMessage);
+ }
+ 
++async function scheduleReplay(sender, { body }, { replayCount, scheduledEnqueueTimeUtc, messageId }) {
++  if (!sender) {
++    throw new Error("Service Bus client is not initialized");
++  }
++  await sender.scheduleMessages(
++    { body: { ...body, source: LINKED_REPLAY_SOURCE, replayCount }, messageId },
++    new Date(scheduledEnqueueTimeUtc)
++  );
++}
++
++export async function scheduleClientSyncReplay(dealId, replay) {
++  await scheduleReplay(clientSyncSender, buildClientSyncMessage({ dealId }), replay);
++}
++
++export async function scheduleEmployeeSyncReplay(recordId, employeeType, replay) {
++  await scheduleReplay(
++    employeeSyncSender,
++    buildEmployeeSyncMessage({ recordId, employeeType }),
++    replay
++  );
++}
++
+ export async function sendEmployeeSyncMessage(message) {
+   if (!employeeSyncSender) {
+     throw new Error("Service Bus client is not initialized");
+diff --git a/src/mappings/employees/buildEmployeePayload.mjs b/src/mappings/employees/buildEmployeePayload.mjs
+index 05e46f2..ca9fe3d 100644
+--- a/src/mappings/employees/buildEmployeePayload.mjs
++++ b/src/mappings/employees/buildEmployeePayload.mjs
+@@ -317,7 +317,7 @@ function buildBtRbtPayload({ record, config }) {
+     addressLine2: trimOrNull(properties.home_apt),
+     city: trimOrNull(properties.location_city),
+     stateProvince: stateCode,
+-    zipPostalCode: trimOrNull(properties.postal_code_home) || trimOrNull(properties.postal_code),
++    zipPostalCode: trimOrNull(properties.postal_code_home),
+     // Section 6: Contact phone, read from the BT/RBT mirror `employee_phone`.
+     phoneCell: normalizePhone(properties.employee_phone)
+   };
+diff --git a/src/tests/smoke/attemptPlan.test.mjs b/src/tests/smoke/attemptPlan.test.mjs
+new file mode 100644
+index 0000000..f54a66b
+--- /dev/null
++++ b/src/tests/smoke/attemptPlan.test.mjs
+@@ -0,0 +1,161 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { planAttempt, runPlan } from "../../lib/attemptPlan.mjs";
++import { caseBinding, employeeBinding } from "../../lib/recordLifecycle.mjs";
++import {
++  assertNoAbsentProperties,
++  readProperty,
++  readRequestedProperties
++} from "../../lib/fieldRead.mjs";
++
++const NOW_MS = Date.parse("2026-10-29T12:00:00.000Z");
++const BASE = {
++  binding: caseBinding(),
++  recordId: "66712883229",
++  lastSyncStatus: null,
++  centralReachId: null,
++  deliveryCount: 1,
++  maxDeliveryCount: 10,
++  replayCount: 0,
++  hashMatched: false,
++  dryRun: false,
++  allowEmployeeCreate: false,
++  payloadHash: "hash-1",
++  error: null,
++  nowMs: NOW_MS
++};
++
++function recordingPorts() {
++  const calls = [];
++  return {
++    calls,
++    upsert: async () => {
++      calls.push(["upsert"]);
++      return { client_id_number: "900" };
++    },
++    patch: async (properties) => calls.push(["patch", properties]),
++    claimReplay: async (messageId) => {
++      calls.push(["claimReplay", messageId]);
++      return true;
++    },
++    schedule: async (replay) => calls.push(["schedule", replay])
++  };
++}
++
++test("absent, blank, and present are three different reads", () => {
++  const properties = { blank_null: null, blank_space: "  ", filled: "x" };
++  assert.deepEqual(readProperty(properties, "missing"), { kind: "absent", name: "missing" });
++  assert.equal(readProperty(properties, "blank_null").kind, "blank");
++  assert.equal(readProperty(properties, "blank_space").kind, "blank");
++  assert.deepEqual(readProperty(properties, "filled"), { kind: "present", name: "filled", value: "x" });
++  assert.equal(Object.keys(readRequestedProperties(properties, ["filled", "missing"])).length, 2);
++});
++
++test("an absent requested key fails closed with field names only and no upsert call", async () => {
++  const properties = { phi_last_name: "Secret", email: null };
++  let thrown;
++  try {
++    assertNoAbsentProperties(properties, ["phi_last_name", "email", "postal_code"]);
++  } catch (error) {
++    thrown = error;
++  }
++  assert.equal(thrown.code, "REQUESTED_PROPERTY_ABSENT");
++  assert.equal(thrown.message, "RequestedPropertyAbsent: postal_code");
++  assert.ok(!thrown.message.includes("Secret"));
++
++  const ports = recordingPorts();
++  const plan = planAttempt({ ...BASE, deliveryCount: 10, error: thrown });
++  await assert.rejects(runPlan(plan, ports), thrown);
++  assert.deepEqual(ports.calls, [
++    [
++      "patch",
++      {
++        last_sync_status: "error",
++        last_sync_at: "2026-10-29T12:00:00.000Z",
++        last_sync_error: "RequestedPropertyAbsent: postal_code"
++      }
++    ]
++  ]);
++});
++
++test("dry run is checked before final-error and calls no port", async () => {
++  const ports = recordingPorts();
++  const error = new Error("boom");
++  const plan = planAttempt({ ...BASE, dryRun: true, deliveryCount: 10, error });
++  assert.equal(plan.action, "dry-run-stop");
++  assert.equal(await runPlan(plan, ports), "dry-run-stop");
++  assert.deepEqual(ports.calls, []);
++
++  const writePlan = planAttempt({ ...BASE, dryRun: true });
++  assert.equal(await runPlan(writePlan, ports), "dry-run-stop");
++  assert.deepEqual(ports.calls, []);
++});
++
++test("hash match while status is error patches only the three status fields", async () => {
++  const ports = recordingPorts();
++  const plan = planAttempt({
++    ...BASE,
++    hashMatched: true,
++    centralReachId: "5324526",
++    lastSyncStatus: "error"
++  });
++  assert.equal(await runPlan(plan, ports), "hash-match-clear");
++  assert.equal(ports.calls.length, 1);
++  assert.deepEqual(Object.keys(ports.calls[0][1]).sort(), [
++    "last_sync_at",
++    "last_sync_error",
++    "last_sync_status"
++  ]);
++});
++
++test("hash match without an error status writes nothing", async () => {
++  const ports = recordingPorts();
++  const plan = planAttempt({ ...BASE, hashMatched: true, centralReachId: "5324526" });
++  assert.equal(await runPlan(plan, ports), "hash-match-stop");
++  assert.deepEqual(ports.calls, []);
++});
++
++test("an early delivery retries with no patch", async () => {
++  const ports = recordingPorts();
++  const error = Object.assign(new Error("SyncInProgress"), { code: "SYNC_IN_PROGRESS" });
++  await assert.rejects(runPlan(planAttempt({ ...BASE, deliveryCount: 9, error }), ports), error);
++  assert.deepEqual(ports.calls, []);
++});
++
++test("final error on a linked record schedules one replay with a stable message id", async () => {
++  const ports = recordingPorts();
++  const error = new Error("CentralReach 500");
++  const plan = planAttempt({ ...BASE, centralReachId: "5324526", deliveryCount: 10, error });
++  await assert.rejects(runPlan(plan, ports), error);
++  assert.equal(ports.calls[0][1].client_id_number, "5324526");
++  assert.deepEqual(ports.calls.slice(1), [
++    ["claimReplay", "replay:case:66712883229:1"],
++    [
++      "schedule",
++      {
++        replayCount: 1,
++        scheduledEnqueueTimeUtc: "2026-10-29T12:30:00.000Z",
++        messageId: "replay:case:66712883229:1"
++      }
++    ]
++  ]);
++  const last = planAttempt({ ...BASE, centralReachId: "1", deliveryCount: 10, replayCount: 2, error });
++  assert.equal(last.replay, null);
++});
++
++test("employee with no id and create disabled is blocked without an upsert", async () => {
++  const ports = recordingPorts();
++  const plan = planAttempt({ ...BASE, binding: employeeBinding() });
++  assert.equal(await runPlan(plan, ports), "blocked");
++  assert.equal(ports.calls.length, 1);
++  assert.equal(ports.calls[0][1].last_sync_status, "blocked");
++  assert.equal(ports.calls[0][1].integration_last_write, undefined);
++});
++
++test("write upserts, then patches with the learned link fields", async () => {
++  const ports = recordingPorts();
++  assert.equal(await runPlan(planAttempt(BASE), ports), "write");
++  assert.deepEqual(ports.calls[0], ["upsert"]);
++  assert.equal(ports.calls[1][1].client_id_number, "900");
++  assert.equal(ports.calls[1][1].last_sync_hash, "hash-1");
++});
+diff --git a/src/tests/smoke/clientSyncWorkflow.test.mjs b/src/tests/smoke/clientSyncWorkflow.test.mjs
+index 0fd0d0c..552acce 100644
+--- a/src/tests/smoke/clientSyncWorkflow.test.mjs
++++ b/src/tests/smoke/clientSyncWorkflow.test.mjs
+@@ -1,9 +1,13 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
+-import {
+-  enterInCentralReachContainsYes,
+-  runClientSyncWorkflow
+-} from "../../workflows/clientSyncWorkflow.mjs";
++import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
++
++function dealWith(values) {
++  return async (dealId, requested = []) => ({
++    id: "deal-1",
++    properties: { ...Object.fromEntries(requested.map((name) => [name, null])), ...values }
++  });
++}
+ 
+ function buildDeps(overrides = {}) {
+   const calls = {
+@@ -20,14 +24,11 @@ function buildDeps(overrides = {}) {
+     createHubSpotClient: () => {},
+     createCentralReachClient: () => {},
+     createStateClient: () => {},
+-    getDealById: async () => ({
+-      id: "deal-1",
+-      properties: {
+-        hs_object_id: "deal-1",
+-        last_sync_hash: "old-hash",
+-        client_id_number: "2001",
+-        enter_in_central_reach: "Yes"
+-      }
++    getDealById: dealWith({
++      hs_object_id: "deal-1",
++      last_sync_hash: "old-hash",
++      client_id_number: "2001",
++      enter_in_central_reach: "Yes"
+     }),
+     buildClientPayload: () => ({ FirstName: "Alex", LastName: "Rivera" }),
+     validateClientPayload: () => ({ isValid: true, errors: [] }),
+@@ -63,17 +64,14 @@ test("runClientSyncWorkflow writes success state and safe summary", async () =>
+   assert.equal(calls.stateWrites[0].type, "success");
+ });
+ 
+-test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
++test("runClientSyncWorkflow writes nothing when the hash is unchanged", async () => {
+   const { deps, calls } = buildDeps({
+     hashPayload: () => "same-hash",
+-    getDealById: async () => ({
+-      id: "deal-1",
+-      properties: {
+-        hs_object_id: "deal-1",
+-        last_sync_hash: "same-hash",
+-        client_id_number: "333",
+-        enter_in_central_reach: "Insurance Card(s);Yes"
+-      }
++    getDealById: dealWith({
++      hs_object_id: "deal-1",
++      last_sync_hash: "same-hash",
++      client_id_number: "333",
++      enter_in_central_reach: "Insurance Card(s);Yes"
+     }),
+     createOrUpdateClient: async () => {
+       throw new Error("should not be called");
+@@ -82,8 +80,8 @@ test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
+ 
+   const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
+   assert.equal(result.status, "noop");
+-  assert.equal(calls.writebacks.length, 1);
+-  assert.equal(calls.stateWrites[0].data.operation, "noop");
++  assert.equal(calls.writebacks.length, 0);
++  assert.equal(calls.stateWrites.length, 0);
+ });
+ 
+ test("runClientSyncWorkflow writes fail state and rethrows on errors", async () => {
+@@ -101,20 +99,9 @@ test("runClientSyncWorkflow writes fail state and rethrows on errors", async ()
+   assert.equal(calls.stateWrites[0].type, "fail");
+ });
+ 
+-test("enter_in_central_reach matches the Yes token, not a longer value", () => {
+-  assert.equal(enterInCentralReachContainsYes("Yes"), true);
+-  assert.equal(enterInCentralReachContainsYes("IEP's & Evals;Yes"), true);
+-  assert.equal(enterInCentralReachContainsYes("Yes - Generic"), false);
+-  assert.equal(enterInCentralReachContainsYes(""), false);
+-  assert.equal(enterInCentralReachContainsYes(null), false);
+-});
+-
+-test("runClientSyncWorkflow skips when the gate does not contain Yes", async () => {
++test("runClientSyncWorkflow skips an unlinked deal without the Yes token", async () => {
+   const { deps, calls } = buildDeps({
+-    getDealById: async () => ({
+-      id: "deal-1",
+-      properties: { hs_object_id: "deal-1", enter_in_central_reach: "Insurance Card(s)" }
+-    }),
++    getDealById: dealWith({ hs_object_id: "deal-1", enter_in_central_reach: "Insurance Card(s)" }),
+     createOrUpdateClient: async () => {
+       throw new Error("should not be called");
+     }
+@@ -126,3 +113,54 @@ test("runClientSyncWorkflow skips when the gate does not contain Yes", async ()
+   assert.equal(calls.writebacks.length, 0);
+   assert.equal(calls.stateWrites.length, 0);
+ });
++
++const NEVER_PROCESSED_DEAL = {
++  hs_object_id: "deal-1",
++  enter_in_central_reach: "Yes",
++  client_id_number: null,
++  last_sync_at: null
++};
++
++test("dry run stops after the hash compare with no upsert and no writeback", async () => {
++  const { deps, calls } = buildDeps({
++    getConfig: () => ({
++      hubspot: { crContactIdProperty: "client_id_number" },
++      ttl: { successTtlSeconds: 100, failTtlSeconds: 50 },
++      features: { syncDryRun: true }
++    }),
++    getDealById: dealWith(NEVER_PROCESSED_DEAL),
++    createOrUpdateClient: async () => {
++      throw new Error("should not be called");
++    }
++  });
++
++  const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
++  assert.equal(result.status, "dry-run");
++  assert.equal(calls.writebacks.length, 0);
++});
++
++test("an absent requested deal property fails closed with no upsert", async () => {
++  let upserts = 0;
++  const { deps, calls } = buildDeps({
++    getDealById: async (dealId, requested) => ({
++      id: "deal-1",
++      properties: {
++        ...Object.fromEntries(
++          requested.filter((name) => name !== "phi_gender").map((name) => [name, null])
++        ),
++        enter_in_central_reach: "Yes"
++      }
++    }),
++    createOrUpdateClient: async () => {
++      upserts += 1;
++      return { operation: "create", crContactId: "1" };
++    }
++  });
++
++  await assert.rejects(
++    runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps),
++    /RequestedPropertyAbsent: phi_gender/
++  );
++  assert.equal(upserts, 0);
++  assert.equal(calls.writebacks[0].properties.last_sync_error, "RequestedPropertyAbsent: phi_gender");
++});
+diff --git a/src/tests/smoke/employeeSyncWorkflow.test.mjs b/src/tests/smoke/employeeSyncWorkflow.test.mjs
+index d637a80..dd09803 100644
+--- a/src/tests/smoke/employeeSyncWorkflow.test.mjs
++++ b/src/tests/smoke/employeeSyncWorkflow.test.mjs
+@@ -1,9 +1,22 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
+-import {
+-  enteredInCentralReachContainsYes,
+-  runEmployeeSyncWorkflow
+-} from "../../workflows/employeeSyncWorkflow.mjs";
++import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
++
++function withRequestedKeys(fetchRecord) {
++  return async (recordId, objectTypeId, requested = []) => {
++    const record = await fetchRecord(recordId, objectTypeId, requested);
++    if (!record) {
++      return record;
++    }
++    return {
++      ...record,
++      properties: {
++        ...Object.fromEntries(requested.map((name) => [name, null])),
++        ...record.properties
++      }
++    };
++  };
++}
+ 
+ function buildDeps(overrides = {}) {
+   const calls = {
+@@ -73,7 +86,10 @@ function buildDeps(overrides = {}) {
+     buildErrorLog: () => ({})
+   };
+ 
+-  return { deps: { ...deps, ...overrides }, calls };
++  const merged = { ...deps, ...overrides };
++  merged.getBtRbtRecordById = withRequestedKeys(merged.getBtRbtRecordById);
++  merged.getBcbaRecordById = withRequestedKeys(merged.getBcbaRecordById);
++  return { deps: merged, calls };
+ }
+ 
+ test("workflow writes success state on successful update", async () => {
+@@ -112,12 +128,18 @@ test("workflow returns noop when hash is unchanged", async () => {
+ 
+   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+   assert.equal(result.status, "noop");
+-  assert.equal(calls.stateWrites[0].data.operation, "noop");
++  assert.equal(calls.writebacks.length, 0);
++  assert.equal(calls.stateWrites.length, 0);
+ });
+ 
+ test("hash match does not noop when employee_id is missing", async () => {
+   let upsertCalled = false;
+   const { deps } = buildDeps({
++    getConfig: () => ({
++      hubspot: { btRbtObjectTypeId: "2-btrbt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
++      features: { allowEmployeeCreate: true, putOnlyMode: false },
++      ttl: { successTtlSeconds: 120, failTtlSeconds: 60 }
++    }),
+     getBtRbtRecordById: async () => ({
+       id: "1",
+       properties: {
+@@ -142,8 +164,8 @@ test("hash match does not noop when employee_id is missing", async () => {
+   assert.equal(result.crContactId, "101");
+ });
+ 
+-test("workflow returns blocked when creation is disabled", async () => {
+-  const { deps } = buildDeps({
++test("workflow blocks an unlinked employee before any upsert when creation is disabled", async () => {
++  const { deps, calls } = buildDeps({
+     getBtRbtRecordById: async () => ({
+       id: "1",
+       properties: {
+@@ -153,15 +175,23 @@ test("workflow returns blocked when creation is disabled", async () => {
+         entered_in_centralreach: "Yes"
+       }
+     }),
+-    createOrUpdateEmployee: async () => ({ operation: "blocked", reason: "disabled" })
++    createOrUpdateEmployee: async () => {
++      throw new Error("should not be called");
++    }
+   });
+ 
+   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+   assert.equal(result.status, "blocked");
++  assert.equal(calls.writebacks[0].properties.last_sync_status, "blocked");
+ });
+ 
+ test("workflow writes BCBA CentralReach link property", async () => {
+   const { deps, calls } = buildDeps({
++    getConfig: () => ({
++      hubspot: { btRbtObjectTypeId: "2-btrbt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
++      features: { allowEmployeeCreate: true, putOnlyMode: false },
++      ttl: { successTtlSeconds: 120, failTtlSeconds: 60 }
++    }),
+     createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "200" }),
+     buildEmployeePayload: () => ({
+       employeePayload: { externalSystemId: "2", firstName: "Pat", lastName: "Morgan" },
+@@ -295,14 +325,6 @@ test("workflow logs warning when metadata write reports failed fields", async ()
+   assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
+ });
+ 
+-test("entered_in_centralreach matches the Yes token, not a longer value", () => {
+-  assert.equal(enteredInCentralReachContainsYes("Yes"), true);
+-  assert.equal(enteredInCentralReachContainsYes("Yes - Active"), false);
+-  assert.equal(enteredInCentralReachContainsYes("Yes - Generic"), false);
+-  assert.equal(enteredInCentralReachContainsYes(""), false);
+-  assert.equal(enteredInCentralReachContainsYes(null), false);
+-});
+-
+ test("workflow skips when entered_in_centralreach does not contain Yes", async () => {
+   const { deps, calls } = buildDeps({
+     getBtRbtRecordById: async () => ({
+@@ -321,7 +343,7 @@ test("workflow skips when entered_in_centralreach does not contain Yes", async (
+   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+   assert.equal(result.status, "skipped");
+   assert.equal(result.operation, "noop");
+-  assert.equal(result.reason, "entered_in_centralreach does not contain Yes");
++  assert.equal(result.reason, "no-id-and-box-not-yes");
+   assert.equal(calls.writebacks.length, 0);
+   assert.equal(calls.stateWrites.length, 0);
+ });
+@@ -337,3 +359,20 @@ test("workflow writes fail state and rethrows errors", async () => {
+   );
+   assert.equal(calls.stateWrites[0].type, "fail");
+ });
++
++test("dry run stops after the hash compare with no upsert and no writeback", async () => {
++  const { deps, calls } = buildDeps({
++    getConfig: () => ({
++      hubspot: { btRbtObjectTypeId: "2-btrbt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
++      features: { allowEmployeeCreate: true, putOnlyMode: false, syncDryRun: true },
++      ttl: { successTtlSeconds: 120, failTtlSeconds: 60 }
++    }),
++    createOrUpdateEmployee: async () => {
++      throw new Error("should not be called");
++    }
++  });
++
++  const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
++  assert.equal(result.status, "dry-run");
++  assert.equal(calls.writebacks.length, 0);
++});
+diff --git a/src/tests/smoke/hybridChangeDetection.test.mjs b/src/tests/smoke/hybridChangeDetection.test.mjs
+index a5d12e3..66fe3c5 100644
+--- a/src/tests/smoke/hybridChangeDetection.test.mjs
++++ b/src/tests/smoke/hybridChangeDetection.test.mjs
+@@ -147,9 +147,10 @@ function clientDeps(overrides = {}) {
+     acquireLease: async () => true,
+     releaseLease: async () => {},
+     getState: async () => overrides.prior || null,
+-    getDealById: async () => ({
++    getDealById: async (dealId, requested = []) => ({
+       ...overrides.deal,
+       properties: {
++        ...Object.fromEntries(requested.map((name) => [name, null])),
+         enter_in_central_reach: "Yes",
+         ...(overrides.deal?.properties || {})
+       }
+@@ -242,9 +243,10 @@ test("employee timestamp shortcut no longer skips a mapped change", async () =>
+       acquireLease: async () => true,
+       releaseLease: async () => {},
+       getState: async () => null,
+-      getBtRbtRecordById: async () => ({
++      getBtRbtRecordById: async (recordId, objectTypeId, requested = []) => ({
+         id: "1",
+         properties: {
++          ...Object.fromEntries(requested.map((name) => [name, null])),
+           hs_object_id: "1",
+           hs_lastmodifieddate: "2026-01-01T00:00:00.000Z",
+           integration_last_write: "2026-10-01T00:00:00.000Z",
+@@ -282,7 +284,10 @@ test("overlapping lock does not let the second worker write", async () => {
+     deal: { id: "deal-1", properties: { client_id_number: "1" } }
+   });
+   deps.acquireLease = async () => false;
+-  await assert.rejects(runClientSyncWorkflow({ dealId: "deal-1" }, deps), /SyncInProgress/);
++  await assert.rejects(
++    runClientSyncWorkflow({ dealId: "deal-1", deliveryCount: 1 }, deps),
++    /SyncInProgress/
++  );
+   assert.equal(calls.upserts.length, 0);
+   assert.equal(calls.writebacks.length, 0);
+ });
+diff --git a/src/tests/smoke/intakePollerEmployeeRules.test.mjs b/src/tests/smoke/intakePollerEmployeeRules.test.mjs
+deleted file mode 100644
+index 8a4e71b..0000000
+--- a/src/tests/smoke/intakePollerEmployeeRules.test.mjs
++++ /dev/null
+@@ -1,24 +0,0 @@
+-import test from "node:test";
+-import assert from "node:assert/strict";
+-import { shouldSyncBtRbt, shouldSyncBcba } from "../../workflows/intakePollerWorkflow.mjs";
+-
+-test("shouldSyncBtRbt follows integration_last_write gate", () => {
+-  const shouldSync = shouldSyncBtRbt({
+-    properties: {
+-      hs_lastmodifieddate: "2026-05-06T11:00:00.000Z",
+-      integration_last_write: "2026-05-06T10:00:00.000Z"
+-    }
+-  });
+-  assert.equal(shouldSync, true);
+-});
+-
+-test("shouldSyncBcba prevents stale records", () => {
+-  const shouldSync = shouldSyncBcba({
+-    properties: {
+-      hs_lastmodifieddate: "2026-05-06T09:00:00.000Z",
+-      integration_last_write: "2026-05-06T10:00:00.000Z",
+-      updated_by_integration: true
+-    }
+-  });
+-  assert.equal(shouldSync, false);
+-});
+diff --git a/src/tests/smoke/intakePollerWorkflow.test.mjs b/src/tests/smoke/intakePollerWorkflow.test.mjs
+index a9f11e1..ecc5cc7 100644
+--- a/src/tests/smoke/intakePollerWorkflow.test.mjs
++++ b/src/tests/smoke/intakePollerWorkflow.test.mjs
+@@ -1,29 +1,94 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
+-import { buildIntakeDedupeId, shouldSyncDeal } from "../../workflows/intakePollerWorkflow.mjs";
++import { runIntakePollerWorkflow } from "../../workflows/intakePollerWorkflow.mjs";
+ 
+-test("buildIntakeDedupeId uses deal and last modified date", () => {
+-  const dedupeId = buildIntakeDedupeId("123", "1700000000000");
+-  assert.equal(dedupeId, "123:1700000000000");
+-});
++const NOW = Date.parse("2026-10-29T12:00:00.000Z");
++const OLD = "2026-10-29T10:00:00.000Z";
+ 
+-test("shouldSyncDeal true when integration_last_write missing", () => {
+-  const candidate = {
+-    properties: {
+-      hs_lastmodifieddate: "2025-05-01T12:00:00.000Z"
+-    }
++function pollerConfig(overrides = {}) {
++  return {
++    hubspot: { btRbtObjectTypeId: "2-1", bcbaObjectTypeId: "2-2" },
++    sweep: { createSweepEnabled: true, graceMinutes: 10 },
++    limits: {
++      maxDealsPerRun: 50,
++      maxBtRbtPerRun: 50,
++      maxBcbaPerRun: 50,
++      linkedRecheckEnabled: false,
++      crContactIdProperty: "client_id_number",
++      employeeIdProperty: "employee_id"
++    },
++    ttl: { leaseTtlSeconds: 60, dedupeTtlSeconds: 60 },
++    ...overrides
+   };
++}
+ 
+-  assert.equal(shouldSyncDeal(candidate), true);
+-});
++function harness({ config = pollerConfig(), results = {}, searchError = null } = {}) {
++  const sent = [];
++  const searches = [];
++  const deps = {
++    getIntakePollerConfig: () => config,
++    createHubSpotClient: () => {},
++    createStateClient: () => {},
++    createServiceBusClient: () => {},
++    acquireLease: async () => true,
++    releaseLease: async () => true,
++    now: () => NOW,
++    searchNeverProcessedRecords: async (input) => {
++      searches.push(input);
++      if (searchError) {
++        throw searchError;
++      }
++      return results[input.objectTypeId] || [];
++    },
++    sendClientSyncMessage: async (message) => sent.push(message),
++    sendEmployeeSyncMessage: async (message) => sent.push(message)
++  };
++  return { deps, sent, searches };
++}
+ 
+-test("shouldSyncDeal false when hs_lastmodifieddate is not newer", () => {
+-  const candidate = {
+-    properties: {
+-      hs_lastmodifieddate: "2025-05-01T12:00:00.000Z",
+-      integration_last_write: "2025-05-01T12:00:00.000Z"
++test("sweep queues a ticked never-processed deal with source neverProcessedSweep", async () => {
++  const { deps, sent, searches } = harness({
++    results: {
++      deals: [
++        {
++          id: "101",
++          properties: { enter_in_central_reach: "Yes", last_sync_at: null, hs_lastmodifieddate: OLD }
++        },
++        {
++          id: "102",
++          properties: { enter_in_central_reach: "Yes - Generic", hs_lastmodifieddate: OLD }
++        }
++      ]
+     }
+-  };
++  });
++  const summary = await runIntakePollerWorkflow({}, deps);
++  assert.deepEqual(sent, [
++    { dealId: "101", hsLastModifiedDate: OLD, source: "neverProcessedSweep", workflow: "clientSync" }
++  ]);
++  assert.deepEqual(summary.sweep.client, { fetched: 2, enqueued: 1, skipped: 1 });
++  assert.equal(searches.length, 3);
++  assert.deepEqual(searches[0], {
++    objectTypeId: "deals",
++    checkboxProperty: "enter_in_central_reach",
++    idProperty: "client_id_number",
++    modifiedBeforeIso: "2026-10-29T11:50:00.000Z"
++  });
++  assert.equal(searches[1].checkboxProperty, "entered_in_centralreach");
++});
++
++test("sweep does not search when CREATE_SWEEP_ENABLED is off", async () => {
++  const config = pollerConfig({ sweep: { createSweepEnabled: false, graceMinutes: 10 } });
++  const { deps, sent, searches } = harness({ config });
++  const summary = await runIntakePollerWorkflow({}, deps);
++  assert.equal(searches.length, 0);
++  assert.equal(sent.length, 0);
++  assert.equal(summary.createSweepEnabled, false);
++});
+ 
+-  assert.equal(shouldSyncDeal(candidate), false);
++test("an exhausted 429 ends the tick", async () => {
++  const rateLimited = Object.assign(new Error("429"), { response: { status: 429 } });
++  const { deps, searches } = harness({ searchError: rateLimited });
++  const summary = await runIntakePollerWorkflow({}, deps);
++  assert.equal(summary.endedOnRateLimit, true);
++  assert.equal(searches.length, 1);
+ });
+diff --git a/src/tests/smoke/processClientQueue.test.mjs b/src/tests/smoke/processClientQueue.test.mjs
+index 0989e88..4fd324e 100644
+--- a/src/tests/smoke/processClientQueue.test.mjs
++++ b/src/tests/smoke/processClientQueue.test.mjs
+@@ -34,7 +34,9 @@ test("valid message calls workflow with dealId and hsLastModifiedDate", async ()
+     dealId: "123",
+     hsLastModifiedDate: "1700000000000",
+     source: "intakePoller",
+-    context: baseContext
++    context: baseContext,
++    deliveryCount: 1,
++    replayCount: 0
+   });
+ });
+ 
+diff --git a/src/tests/smoke/processEmployeeQueue.test.mjs b/src/tests/smoke/processEmployeeQueue.test.mjs
+index 71d802a..69920f5 100644
+--- a/src/tests/smoke/processEmployeeQueue.test.mjs
++++ b/src/tests/smoke/processEmployeeQueue.test.mjs
+@@ -36,7 +36,9 @@ test("valid employee message invokes employee workflow", async () => {
+     employeeType: "bt_rbt",
+     hsLastModifiedDate: "1700000000000",
+     source: "employeePoller",
+-    context: baseContext
++    context: baseContext,
++    deliveryCount: baseContext.triggerMetadata.deliveryCount,
++    replayCount: 0
+   });
+ });
+ 
+diff --git a/src/tests/smoke/recordLifecycle.test.mjs b/src/tests/smoke/recordLifecycle.test.mjs
+new file mode 100644
+index 0000000..329e2a9
+--- /dev/null
++++ b/src/tests/smoke/recordLifecycle.test.mjs
+@@ -0,0 +1,131 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import {
++  RECORD_KINDS,
++  caseBinding,
++  checkboxIsYes,
++  deriveRecordState,
++  employeeBinding,
++  parseSnapshot,
++  sweepDecision,
++  workerGate
++} from "../../lib/recordLifecycle.mjs";
++import { endTickOnRateLimit } from "../../lib/retry.mjs";
++
++const OLD_MODIFIED = "2026-10-29T10:00:00.000Z";
++const NOW = Date.parse("2026-10-29T12:00:00.000Z");
++const SWEEP_ON = { now: NOW, createSweepEnabled: true, graceMinutes: 10 };
++
++const FIXTURES = {
++  untickedUnlinked: {
++    binding: caseBinding(),
++    properties: { enter_in_central_reach: "Yes - Generic", client_id_number: null, last_sync_at: null }
++  },
++  tickedNeverProcessed: {
++    binding: caseBinding(),
++    properties: {
++      enter_in_central_reach: "Yes",
++      client_id_number: "",
++      last_sync_at: null,
++      hs_lastmodifieddate: OLD_MODIFIED
++    }
++  },
++  linkedQuiet: {
++    binding: caseBinding(),
++    properties: { enter_in_central_reach: null, client_id_number: "5324526", last_sync_status: "success" }
++  },
++  errorUnlinked: {
++    binding: caseBinding(),
++    properties: {
++      enter_in_central_reach: "Yes",
++      client_id_number: null,
++      last_sync_status: "error",
++      last_sync_at: OLD_MODIFIED
++    }
++  },
++  errorLinked: {
++    binding: employeeBinding(),
++    properties: { entered_in_centralreach: "Yes", employee_id: "77", last_sync_status: "error" }
++  },
++  closedWithoutId: {
++    binding: caseBinding(),
++    properties: {
++      enter_in_central_reach: "Yes",
++      client_id_number: null,
++      last_sync_status: "success",
++      last_sync_at: OLD_MODIFIED
++    }
++  },
++  blocked: {
++    binding: employeeBinding(),
++    properties: {
++      entered_in_centralreach: "Yes",
++      employee_id: null,
++      last_sync_status: "blocked",
++      last_sync_at: OLD_MODIFIED
++    }
++  }
++};
++
++function stateOf(kind) {
++  const { binding, properties } = FIXTURES[kind];
++  return deriveRecordState(parseSnapshot(properties, binding, "1"));
++}
++
++test("every RECORD_KIND has a fixture that derives to it", () => {
++  assert.deepEqual(Object.keys(FIXTURES).sort(), [...RECORD_KINDS].sort());
++  for (const kind of RECORD_KINDS) {
++    assert.equal(stateOf(kind).kind, kind, `fixture for ${kind}`);
++  }
++});
++
++test("only tickedNeverProcessed can be sweep-enqueued", () => {
++  for (const kind of RECORD_KINDS) {
++    const state = { ...stateOf(kind), modifiedAtMs: Date.parse(OLD_MODIFIED) };
++    assert.equal(sweepDecision(state, SWEEP_ON).enqueue, kind === "tickedNeverProcessed", kind);
++  }
++});
++
++test("sweep holds inside the grace, with no modified date, and when disabled", () => {
++  const state = stateOf("tickedNeverProcessed");
++  assert.equal(sweepDecision({ ...state, modifiedAtMs: NOW - 9 * 60 * 1000 }, SWEEP_ON).enqueue, false);
++  assert.equal(sweepDecision({ ...state, modifiedAtMs: null }, SWEEP_ON).enqueue, false);
++  assert.equal(sweepDecision(state, { ...SWEEP_ON, createSweepEnabled: false }).enqueue, false);
++});
++
++test("blocked and errorUnlinked require last_sync_at", () => {
++  const blockedNoStamp = { ...FIXTURES.blocked.properties, last_sync_at: null };
++  assert.equal(
++    deriveRecordState(parseSnapshot(blockedNoStamp, employeeBinding(), "1")).kind,
++    "tickedNeverProcessed"
++  );
++  const errorNoStamp = { ...FIXTURES.errorUnlinked.properties, last_sync_at: "" };
++  assert.equal(
++    deriveRecordState(parseSnapshot(errorNoStamp, caseBinding(), "1")).kind,
++    "tickedNeverProcessed"
++  );
++});
++
++test("a case never derives blocked", () => {
++  const props = { ...FIXTURES.blocked.properties, enter_in_central_reach: "Yes" };
++  assert.equal(deriveRecordState(parseSnapshot(props, caseBinding(), "1")).kind, "closedWithoutId");
++});
++
++test("checkbox Yes is the exact token after a split on semicolon", () => {
++  assert.equal(checkboxIsYes("Yes"), true);
++  assert.equal(checkboxIsYes("No- Made Inactive;Yes"), true);
++  assert.equal(checkboxIsYes("Yes - Active"), false);
++  assert.equal(checkboxIsYes(null), false);
++});
++
++test("worker gate syncs a linked record with the box unticked and skips unticked unlinked", () => {
++  assert.deepEqual(workerGate(stateOf("linkedQuiet")), { action: "sync" });
++  assert.deepEqual(workerGate(stateOf("tickedNeverProcessed")), { action: "sync" });
++  assert.equal(workerGate(stateOf("untickedUnlinked")).action, "skip");
++});
++
++test("an exhausted 429 ends the tick and other errors do not", () => {
++  assert.equal(endTickOnRateLimit({ response: { status: 429 } }).endTick, true);
++  assert.equal(endTickOnRateLimit({ response: { status: 500 } }).endTick, false);
++  assert.equal(endTickOnRateLimit(new Error("boom")).endTick, false);
++});
+diff --git a/src/workflows/clientSyncWorkflow.mjs b/src/workflows/clientSyncWorkflow.mjs
+index d07e507..3270075 100644
+--- a/src/workflows/clientSyncWorkflow.mjs
++++ b/src/workflows/clientSyncWorkflow.mjs
+@@ -25,6 +25,16 @@ import {
+   metadataClearFieldIds
+ } from "../lib/mappedState.mjs";
+ import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
++import { assertNoAbsentProperties } from "../lib/fieldRead.mjs";
++import {
++  caseBinding,
++  deriveRecordState,
++  parseSnapshot,
++  workerGate
++} from "../lib/recordLifecycle.mjs";
++import { planAttempt, runPlan, syncErrorMessage } from "../lib/attemptPlan.mjs";
++import { scheduleClientSyncReplay } from "../lib/serviceBusClient.mjs";
++import { MAX_DELIVERY_COUNT } from "../constants/queues.mjs";
+ import { associationsForComparison } from "../constants/staffingAssociations.mjs";
+ import {
+   PARENT_GUARDIAN_ASSOCIATION_TYPE_ID,
+@@ -171,15 +181,6 @@ const REQUIRED_DEAL_PROPERTIES = [
+   "central_reach_link_to_client"
+ ];
+ 
+-// Waiting on Sara: some records already in CentralReach were never ticked.
+-// Do not treat a CentralReach client id as passing this gate until she decides.
+-export function enterInCentralReachContainsYes(value) {
+-  return String(value ?? "")
+-    .split(";")
+-    .map((part) => part.trim())
+-    .includes("Yes");
+-}
+-
+ function hashPayload(payload) {
+   return hashMappedState(payload);
+ }
+@@ -293,7 +294,7 @@ async function loadTypeThreeContacts({ loadAssociations, fetchContact, dealId })
+ }
+ 
+ export async function runClientSyncWorkflow(
+-  { dealId, hsLastModifiedDate, source, context },
++  { dealId, hsLastModifiedDate, source, context, deliveryCount, replayCount = 0 },
+   dependencies = {}
+ ) {
+   const getRuntimeConfig = dependencies.getConfig || getConfig;
+@@ -316,16 +317,36 @@ export async function runClientSyncWorkflow(
+   const digestPayload = dependencies.hashPayload || hashPayload;
+   const logger = dependencies.safeLog || safeLog;
+   const buildError = dependencies.buildErrorLog || buildErrorLog;
++  const scheduleReplay = dependencies.scheduleClientSyncReplay || scheduleClientSyncReplay;
+ 
+   const normalizedDealId = ensureDealId(dealId);
+   const config = getRuntimeConfig();
+   const crContactIdProperty =
+     config.hubspot.crContactIdProperty || FALLBACK_CR_CONTACT_ID_PROPERTY;
++  const binding = caseBinding(crContactIdProperty);
++  const dryRun = Boolean(config.features?.syncDryRun);
+ 
+   initHubSpot(config);
+   initCentralReach(config);
+   initState(config);
+ 
++  const patchDeal = (properties) =>
++    pushWriteback(
++      normalizedDealId,
++      filterWritebackProperties(properties, { kind: "client", idProperty: crContactIdProperty })
++    );
++  const attempt = {
++    binding,
++    recordId: normalizedDealId,
++    deliveryCount: deliveryCount ?? MAX_DELIVERY_COUNT,
++    maxDeliveryCount: MAX_DELIVERY_COUNT,
++    replayCount,
++    dryRun,
++    allowEmployeeCreate: false
++  };
++  let lastSyncStatus = null;
++  let knownContactId = null;
++
+   let lockHeld = false;
+   try {
+     const locked = await claimRecordLock(claimLock, {
+@@ -356,12 +377,19 @@ export async function runClientSyncWorkflow(
+       throw error;
+     }
+ 
+-    if (!enterInCentralReachContainsYes(deal?.properties?.enter_in_central_reach)) {
+-      logger("info", "Client sync skipped; enter_in_central_reach does not contain Yes.", {
++    const recordState = deriveRecordState(
++      parseSnapshot(deal?.properties || {}, binding, normalizedDealId)
++    );
++    lastSyncStatus = recordState.lastSyncStatus;
++    knownContactId = recordState.centralReachId;
++    const gate = workerGate(recordState);
++    if (gate.action === "skip") {
++      logger("info", "Client sync skipped by the worker gate.", {
+         workflow: "clientSync",
+         recordId: normalizedDealId,
+         source: source || null,
+         outcome: "skipped",
++        reason: gate.reason,
+         invocationId: context?.invocationId || null
+       });
+       return {
+@@ -369,13 +397,14 @@ export async function runClientSyncWorkflow(
+         dealId: normalizedDealId,
+         status: "skipped",
+         operation: "noop",
+-        reason: "enter_in_central_reach does not contain Yes",
++        reason: gate.reason,
+         crContactId: null,
+         changedFieldNames: [],
+         metadataUpdatedCount: 0,
+         metadataFailedCount: 0
+       };
+     }
++    assertNoAbsentProperties(deal?.properties, propertyList);
+ 
+     const guardianContacts = await loadTypeThreeContacts({
+       loadAssociations,
+@@ -438,228 +467,228 @@ export async function runClientSyncWorkflow(
+     const hubspotContactId = String(deal?.properties?.[crContactIdProperty] || "").trim();
+     const existingContactId =
+       hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
++    knownContactId = existingContactId;
+     const existingHash = deal?.properties?.last_sync_hash || null;
+ 
+-    let syncResult;
+-    if (existingHash && existingHash === payloadHash && existingContactId) {
+-      syncResult = {
+-        operation: "noop",
+-        crContactId: String(existingContactId)
+-      };
+-    } else {
+-      syncResult = await upsertClient({
+-        payload,
+-        existingContactId
+-      });
+-      if (
+-        (syncResult?.operation === "create" || !hubspotContactId) &&
+-        syncResult?.crContactId
+-      ) {
+-        await saveState({
+-          pk: CLIENT_STATE_PK,
+-          id: normalizedDealId,
+-          type: "pending_link",
+-          ttlSeconds: config.ttl.successTtlSeconds,
+-          data: {
+-            workflow: "clientSync",
+-            crContactId: String(syncResult.crContactId),
+-            fieldHashes: previousFieldHashes,
+-            updatedAt: new Date().toISOString()
++    let syncResult = { operation: "noop", crContactId: existingContactId };
++    let metadataSyncSummary = null;
++    const plan = planAttempt({
++      ...attempt,
++      lastSyncStatus,
++      centralReachId: existingContactId,
++      hashMatched: Boolean(existingHash && existingHash === payloadHash),
++      payloadHash,
++      error: null,
++      nowMs: Date.now()
++    });
++
++    const action = await runPlan(plan, {
++      patch: patchDeal,
++      upsert: async () => {
++        syncResult = await upsertClient({ payload, existingContactId });
++        if (syncResult?.crContactId) {
++          knownContactId = String(syncResult.crContactId);
++        }
++        if ((syncResult?.operation === "create" || !hubspotContactId) && syncResult?.crContactId) {
++          await saveState({
++            pk: CLIENT_STATE_PK,
++            id: normalizedDealId,
++            type: "pending_link",
++            ttlSeconds: config.ttl.successTtlSeconds,
++            data: {
++              workflow: "clientSync",
++              crContactId: String(syncResult.crContactId),
++              fieldHashes: previousFieldHashes,
++              updatedAt: new Date().toISOString()
++            }
++          });
++        }
++
++        if (syncResult.crContactId) {
++          const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadata.metadataValues);
++          metadataSyncSummary = await pushMetadata(syncResult.crContactId, metadata.metadataValues, {
++            labelIds: metadata.labelIds,
++            clearFieldIds
++          });
++          if ((metadataSyncSummary?.failedCount || 0) > 0) {
++            const failed = new Error("MetadataWriteFailed");
++            failed.code = "METADATA_WRITE_FAILED";
++            failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
++            throw failed;
+           }
+-        });
+-      }
+-    }
++        }
+ 
+-    let metadataSyncSummary = null;
+-    if (syncResult.operation !== "noop" && syncResult.crContactId) {
+-      const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadata.metadataValues);
+-      metadataSyncSummary = await pushMetadata(
+-        syncResult.crContactId,
+-        metadata.metadataValues,
+-        { labelIds: metadata.labelIds, clearFieldIds }
+-      );
+-      if ((metadataSyncSummary?.failedCount || 0) > 0) {
+-        const failed = new Error("MetadataWriteFailed");
+-        failed.code = "METADATA_WRITE_FAILED";
+-        failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
+-        throw failed;
+-      }
+-    }
++        let confirmedDeal = deal;
++        try {
++          confirmedDeal = (await fetchDeal(normalizedDealId, propertyList)) || deal;
++        } catch (error) {
++          const readError = asReadFailure(error, "deal-confirm");
++          if (readError) {
++            throw readError;
++          }
++          throw error;
++        }
++        const confirmedPayload = mapPayload({
++          deal: confirmedDeal,
++          config,
++          contacts: guardianContacts
++        });
++        const confirmedMetadata = mapMetadata({ deal: confirmedDeal });
++        const confirmedHash = digestPayload(
++          buildComparableState({
++            core: confirmedPayload,
++            metadata: confirmedMetadata.metadataValues,
++            labels: confirmedMetadata.labelIds,
++            relationships,
++            includeRelationships
++          })
++        );
++        if (confirmedHash !== payloadHash) {
++          const stale = new Error("SyncStale");
++          stale.code = "SYNC_STALE";
++          throw stale;
++        }
+ 
+-    let confirmedDeal = deal;
+-    try {
+-      confirmedDeal = (await fetchDeal(normalizedDealId, propertyList)) || deal;
+-    } catch (error) {
+-      const readError = asReadFailure(error, "deal-confirm");
+-      if (readError) {
+-        throw readError;
++        return syncResult.crContactId
++          ? {
++              [crContactIdProperty]: String(syncResult.crContactId),
++              central_reach_link_to_client: buildCentralReachContactUrl(syncResult.crContactId)
++            }
++          : {};
+       }
+-      throw error;
+-    }
+-    const confirmedPayload = mapPayload({
+-      deal: confirmedDeal,
+-      config,
+-      contacts: guardianContacts
+     });
+-    const confirmedMetadata = mapMetadata({ deal: confirmedDeal });
+-    const confirmedHash = digestPayload(
+-      buildComparableState({
+-        core: confirmedPayload,
+-        metadata: confirmedMetadata.metadataValues,
+-        labels: confirmedMetadata.labelIds,
+-        relationships,
+-        includeRelationships
+-      })
+-    );
+-    if (confirmedHash !== payloadHash) {
+-      const stale = new Error("SyncStale");
+-      stale.code = "SYNC_STALE";
+-      throw stale;
+-    }
+ 
+-    const status = syncResult.operation === "noop" ? "noop" : "success";
++    const status = action === "write" ? "success" : action === "dry-run-stop" ? "dry-run" : "noop";
+     logger("info", "Client sync compared mapped state.", {
+       workflow: "clientSync",
+       recordId: normalizedDealId,
+       source: source || null,
+       mappingVersion: MAPPING_VERSION,
+       outcome: status,
++      action,
++      linked: Boolean(existingContactId),
+       changedFieldNames: changedFields,
+       invocationId: context?.invocationId || null
+     });
+ 
+-    await pushWriteback(
+-      normalizedDealId,
+-      filterWritebackProperties(
+-        {
+-          updated_by_integration: true,
+-          integration_last_write: new Date().toISOString(),
+-          last_sync_at: new Date().toISOString(),
+-          last_sync_status: status,
+-          last_sync_error: "",
+-          last_sync_hash: payloadHash,
+-          ...(syncResult.crContactId
+-            ? {
+-                [crContactIdProperty]: String(syncResult.crContactId),
+-                central_reach_link_to_client: buildCentralReachContactUrl(syncResult.crContactId)
+-              }
+-            : {})
+-        },
+-        { kind: "client", idProperty: crContactIdProperty }
+-      )
+-    );
+-
+-    await saveState({
+-      pk: CLIENT_STATE_PK,
+-      id: normalizedDealId,
+-      type: STATE_TYPES.SUCCESS,
+-      ttlSeconds: config.ttl.successTtlSeconds,
+-      data: {
+-        workflow: "clientSync",
+-        status,
+-        operation: syncResult.operation,
+-        crContactId: syncResult.crContactId || null,
+-        payloadHash,
+-        fieldHashes: nextFieldHashes,
+-        mappingVersion: MAPPING_VERSION,
+-        changedFieldNames: changedFields,
+-        hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+-        invocationId: context?.invocationId || null,
+-        metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
+-        metadataFailedCount: metadataSyncSummary?.failedCount ?? null,
+-        updatedAt: new Date().toISOString()
+-      }
+-    });
++    if (action === "write") {
++      await saveState({
++        pk: CLIENT_STATE_PK,
++        id: normalizedDealId,
++        type: STATE_TYPES.SUCCESS,
++        ttlSeconds: config.ttl.successTtlSeconds,
++        data: {
++          workflow: "clientSync",
++          source: source || null,
++          status,
++          operation: syncResult.operation,
++          crContactId: syncResult.crContactId || null,
++          payloadHash,
++          fieldHashes: nextFieldHashes,
++          mappingVersion: MAPPING_VERSION,
++          changedFieldNames: changedFields,
++          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
++          invocationId: context?.invocationId || null,
++          metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
++          metadataFailedCount: metadataSyncSummary?.failedCount ?? null,
++          updatedAt: new Date().toISOString()
++        }
++      });
++    }
+ 
+     return {
+       ok: true,
+       dealId: normalizedDealId,
+       status,
+-      operation: syncResult.operation,
++      operation: action === "write" ? syncResult.operation : "noop",
+       crContactId: syncResult.crContactId || null,
+       changedFieldNames: changedFields,
+       metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? 0,
+       metadataFailedCount: metadataSyncSummary?.failedCount ?? 0
+     };
+   } catch (error) {
+-    if (error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE") {
+-      throw error;
+-    }
+-    logger(
+-      "error",
+-      "Client sync workflow failed.",
+-      buildError({
+-        workflow: "clientSync",
+-        stage: "runClientSyncWorkflow",
+-        error,
+-        recordId: normalizedDealId,
+-        extra: {
+-          invocationId: context?.invocationId || null,
+-          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
+-        }
+-      })
+-    );
+-
+-    try {
+-      await pushWriteback(
+-        normalizedDealId,
+-        filterWritebackProperties(
+-          {
+-            last_sync_at: new Date().toISOString(),
+-            last_sync_status: "error",
+-            last_sync_error: String(error?.message || "Client sync failed").slice(0, 500),
+-            ...(Array.isArray(error?.failedFieldIds) && error.failedFieldIds.length
+-              ? { last_sync_error: `MetadataWriteFailed fields: ${error.failedFieldIds.join(",")}`.slice(0, 500) }
+-              : {})
+-          },
+-          { kind: "client", idProperty: crContactIdProperty }
+-        )
+-      );
+-    } catch (writebackError) {
++    const transient = error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE";
++    if (!transient) {
+       logger(
+         "error",
+-        "Client sync error writeback failed.",
++        "Client sync workflow failed.",
+         buildError({
+           workflow: "clientSync",
+-          stage: "writeErrorWriteback",
+-          error: writebackError,
+-          recordId: normalizedDealId
++          stage: "runClientSyncWorkflow",
++          error,
++          recordId: normalizedDealId,
++          extra: {
++            invocationId: context?.invocationId || null,
++            hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
++          }
+         })
+       );
+-    }
+ 
+-    try {
+-      await saveState({
+-        pk: CLIENT_STATE_PK,
+-        id: normalizedDealId,
+-        type: STATE_TYPES.FAIL,
+-        ttlSeconds: config.ttl.failTtlSeconds,
+-        data: {
+-          workflow: "clientSync",
+-          status: "error",
+-          errorMessage: String(error?.message || "Client sync failed").slice(0, 500),
+-          failedFieldIds: error?.failedFieldIds || [],
+-          crContactId: (await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId))?.data
+-            ?.crContactId || null,
+-          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+-          invocationId: context?.invocationId || null,
+-          updatedAt: new Date().toISOString()
+-        }
+-      });
+-    } catch (stateError) {
+-      logger(
+-        "error",
+-        "Client sync fail-state write failed.",
+-        buildError({
+-          workflow: "clientSync",
+-          stage: "putFailState",
+-          error: stateError,
+-          recordId: normalizedDealId
+-        })
+-      );
++      try {
++        await saveState({
++          pk: CLIENT_STATE_PK,
++          id: normalizedDealId,
++          type: STATE_TYPES.FAIL,
++          ttlSeconds: config.ttl.failTtlSeconds,
++          data: {
++            workflow: "clientSync",
++            status: "error",
++            errorMessage: String(error?.message || "Client sync failed").slice(0, 500),
++            failedFieldIds: error?.failedFieldIds || [],
++            crContactId: (await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId))?.data
++              ?.crContactId || null,
++            hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
++            invocationId: context?.invocationId || null,
++            updatedAt: new Date().toISOString()
++          }
++        });
++      } catch (stateError) {
++        logger(
++          "error",
++          "Client sync fail-state write failed.",
++          buildError({
++            workflow: "clientSync",
++            stage: "putFailState",
++            error: stateError,
++            recordId: normalizedDealId
++          })
++        );
++      }
+     }
+ 
+-    throw error;
++    const plan = planAttempt({
++      ...attempt,
++      lastSyncStatus,
++      centralReachId: knownContactId,
++      hashMatched: false,
++      error,
++      nowMs: Date.now()
++    });
++    await runPlan(plan, {
++      patch: patchDeal,
++      claimReplay: (messageId) =>
++        claimLock({ pk: "replay:client", id: messageId, ttlSeconds: config.ttl.successTtlSeconds }),
++      schedule: (replay) => scheduleReplay(normalizedDealId, replay)
++    });
++    logger("info", "Client sync dry run stopped on an error.", {
++      workflow: "clientSync",
++      recordId: normalizedDealId,
++      source: source || null,
++      outcome: "dry-run",
++      reason: syncErrorMessage(error),
++      invocationId: context?.invocationId || null
++    });
++    return {
++      ok: true,
++      dealId: normalizedDealId,
++      status: "dry-run",
++      operation: "noop",
++      reason: syncErrorMessage(error),
++      crContactId: null,
++      changedFieldNames: [],
++      metadataUpdatedCount: 0,
++      metadataFailedCount: 0
++    };
+   } finally {
+     if (lockHeld) {
+       try {
+diff --git a/src/workflows/employeeSyncWorkflow.mjs b/src/workflows/employeeSyncWorkflow.mjs
+index 7e17ce1..98d0f97 100644
+--- a/src/workflows/employeeSyncWorkflow.mjs
++++ b/src/workflows/employeeSyncWorkflow.mjs
+@@ -28,14 +28,22 @@ import {
+   metadataClearFieldIds
+ } from "../lib/mappedState.mjs";
+ import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
++import { assertNoAbsentProperties } from "../lib/fieldRead.mjs";
++import {
++  deriveRecordState,
++  employeeBinding,
++  parseSnapshot,
++  workerGate
++} from "../lib/recordLifecycle.mjs";
++import { planAttempt, runPlan, syncErrorMessage } from "../lib/attemptPlan.mjs";
++import { scheduleEmployeeSyncReplay } from "../lib/serviceBusClient.mjs";
++import { MAX_DELIVERY_COUNT } from "../constants/queues.mjs";
+ import { buildEmployeePayload } from "../mappings/employees/buildEmployeePayload.mjs";
+ import { validateEmployeePayload } from "../mappings/employees/validateEmployeePayload.mjs";
+ import { STATE_TYPES } from "../constants/state.mjs";
+ import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+ 
+ const EMPLOYEE_STATE_PK = "sync:employee";
+-const BLOCKED_CREATE_MESSAGE =
+-  "PUT_ONLY_MODE enabled: create disabled until sandbox. Provide an existing employee_id or disable PUT_ONLY_MODE + enable ALLOW_EMPLOYEE_CREATE.";
+ 
+ // None of these properties are in the production sensitive-data tier
+ // (Integration V2 API rule #2, portal 50317927).
+@@ -61,7 +69,6 @@ const BT_RBT_PROPERTIES = [
+   "location_home",
+   "state_home",
+   "location",
+-  "postal_code",
+   "postal_code_home",
+   "entered_in_centralreach",
+   // Section 6 phone is the Contact mirror on the BT/RBT (`employee_phone`).
+@@ -135,15 +142,6 @@ function ensureRecordId(recordId) {
+   return normalized;
+ }
+ 
+-// Waiting on Sara: how to handle BT/RBT "Yes - Generic" and "No- Made Inactive".
+-// The label "Yes - Active" stores Yes and passes. Any other stored value does not.
+-export function enteredInCentralReachContainsYes(value) {
+-  return String(value ?? "")
+-    .split(";")
+-    .map((part) => part.trim())
+-    .includes("Yes");
+-}
+-
+ function ensureEmployeeType(employeeType) {
+   const normalized = String(employeeType || "").trim();
+   if (
+@@ -220,36 +218,18 @@ function buildCentralReachContactUrl(contactId) {
+   return `https://members.centralreach.com/#contacts/details/?id=${id}`;
+ }
+ 
+-function buildWritebackPropertyPatch({
+-  employeeType,
+-  employeeIdProperty,
+-  payloadHash,
+-  status,
+-  contactId,
+-  errorMessage
+-}) {
+-  const now = new Date().toISOString();
+-  const base = {
+-    last_sync_status: status,
+-    last_sync_at: now,
+-    last_sync_error: errorMessage || "",
+-    ...(status === "success" || status === "noop" || status === "blocked"
+-      ? { integration_last_write: now, updated_by_integration: true }
+-      : {})
+-  };
+-
+-  if (payloadHash && status !== "error") {
+-    base.last_sync_hash = payloadHash;
++function employeeLinkFields({ employeeType, employeeIdProperty, contactId }) {
++  if (!contactId) {
++    return {};
+   }
+-  if (contactId) {
+-    base[employeeIdProperty] = String(contactId);
+-    if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
+-      base.central_reach_link_to_rt_rbt = buildCentralReachContactUrl(contactId);
+-    } else {
+-      base.central_reach_record_link = buildCentralReachContactUrl(contactId);
+-    }
+-  }
+-  return base;
++  const linkProperty =
++    employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
++      ? "central_reach_link_to_rt_rbt"
++      : "central_reach_record_link";
++  return {
++    [employeeIdProperty]: String(contactId),
++    [linkProperty]: buildCentralReachContactUrl(contactId)
++  };
+ }
+ 
+ function getWorkflowStateId(employeeType, recordId) {
+@@ -257,7 +237,7 @@ function getWorkflowStateId(employeeType, recordId) {
+ }
+ 
+ export async function runEmployeeSyncWorkflow(
+-  { recordId, employeeType, hsLastModifiedDate, source, context },
++  { recordId, employeeType, hsLastModifiedDate, source, context, deliveryCount, replayCount = 0 },
+   dependencies = {}
+ ) {
+   const getRuntimeConfig = dependencies.getConfig || getConfig;
+@@ -308,6 +288,29 @@ export async function runEmployeeSyncWorkflow(
+   initCentralReach(config);
+   initState(config);
+ 
++  const binding = employeeBinding(employeeIdProperty);
++  const scheduleReplay = dependencies.scheduleEmployeeSyncReplay || scheduleEmployeeSyncReplay;
++  const patchRecord = (patch) =>
++    writeEmployeeWriteback({
++      objectTypeId,
++      recordId: normalizedRecordId,
++      employeeIdProperty,
++      properties: filterWritebackProperties(patch, {
++        kind: "employee",
++        idProperty: employeeIdProperty
++      })
++    });
++  const attempt = {
++    binding,
++    recordId: normalizedRecordId,
++    deliveryCount: deliveryCount ?? MAX_DELIVERY_COUNT,
++    maxDeliveryCount: MAX_DELIVERY_COUNT,
++    replayCount,
++    dryRun: Boolean(config.features?.syncDryRun),
++    allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate && !config.features?.putOnlyMode)
++  };
++  let lastSyncStatus = null;
++
+   const stateId = getWorkflowStateId(normalizedEmployeeType, normalizedRecordId);
+   let lockHeld = false;
+   let linkedContactId = null;
+@@ -342,13 +345,20 @@ export async function runEmployeeSyncWorkflow(
+     hubspotRecord = (await fetchRecord()) || hubspotRecord;
+     const hubspotProps = hubspotRecord?.properties || {};
+ 
+-    if (!enteredInCentralReachContainsYes(hubspotProps.entered_in_centralreach)) {
+-      logger("info", "Employee sync skipped; entered_in_centralreach does not contain Yes.", {
++    const recordState = deriveRecordState(
++      parseSnapshot(hubspotProps, binding, normalizedRecordId)
++    );
++    lastSyncStatus = recordState.lastSyncStatus;
++    linkedContactId = recordState.centralReachId;
++    const gate = workerGate(recordState);
++    if (gate.action === "skip") {
++      logger("info", "Employee sync skipped by the worker gate.", {
+         workflow: "employeeSync",
+         recordId: normalizedRecordId,
+         employeeType: normalizedEmployeeType,
+         source: source || null,
+         outcome: "skipped",
++        reason: gate.reason,
+         invocationId: context?.invocationId || null
+       });
+       return {
+@@ -357,10 +367,11 @@ export async function runEmployeeSyncWorkflow(
+         employeeType: normalizedEmployeeType,
+         status: "skipped",
+         operation: "noop",
+-        reason: "entered_in_centralreach does not contain Yes",
++        reason: gate.reason,
+         crContactId: null
+       };
+     }
++    assertNoAbsentProperties(hubspotProps, properties);
+ 
+     const mapped = mapPayload({
+       record: hubspotRecord,
+@@ -414,25 +425,125 @@ export async function runEmployeeSyncWorkflow(
+     const nextFieldHashes = fieldHashes(payloadHashInput);
+     const previousFieldHashes = prior?.data?.fieldHashes || null;
+     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
++    if (existingContactId) {
++      linkedContactId = existingContactId;
++    }
+     const previousHash = String(hubspotProps?.last_sync_hash || "");
+-    const canNoopByHash = Boolean(previousHash && previousHash === payloadHash && existingContactId);
+-    if (canNoopByHash) {
+-      const writebackResult = await writeEmployeeWriteback({
+-        objectTypeId,
+-        recordId: normalizedRecordId,
+-        employeeIdProperty,
+-        properties: filterWritebackProperties(
+-          buildWritebackPropertyPatch({
++    let syncResult = { operation: "noop", crContactId: existingContactId };
++    let metadataSyncSummary = null;
++    let writebackResult = null;
++    const plan = planAttempt({
++      ...attempt,
++      lastSyncStatus,
++      centralReachId: existingContactId,
++      hashMatched: Boolean(previousHash && previousHash === payloadHash),
++      payloadHash,
++      error: null,
++      nowMs: Date.now()
++    });
++
++    const action = await runPlan(plan, {
++      patch: async (patch) => {
++        writebackResult = await patchRecord(patch);
++      },
++      upsert: async () => {
++        syncResult = await upsertEmployee({
++          payload: outboundPayload,
++          employeeType: normalizedEmployeeType,
++          existingContactId,
++          allowEmployeeCreate: config.features.allowEmployeeCreate,
++          putOnlyMode: config.features.putOnlyMode
++        });
++        const contactId = syncResult.crContactId || existingContactId || null;
++        linkedContactId = contactId;
++
++        const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
++        if (contactId && (Object.keys(metadataForCompare).length > 0 || labelIds.length > 0)) {
++          const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadataForCompare);
++          metadataSyncSummary = await pushMetadata(contactId, metadataForCompare, {
++            labelIds,
++            clearFieldIds
++          });
++          if ((metadataSyncSummary?.failedCount || 0) > 0) {
++            logger("warn", "Employee metadata write had failures.", {
++              workflow: "employeeSync",
++              recordId: normalizedRecordId,
++              employeeType: normalizedEmployeeType,
++              crContactId: contactId,
++              failedCount: metadataSyncSummary.failedCount,
++              failedFieldIds: metadataSyncSummary.failedFieldIds || [],
++              invocationId: context?.invocationId || null
++            });
++            const failed = new Error("MetadataWriteFailed");
++            failed.code = "METADATA_WRITE_FAILED";
++            failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
++            throw failed;
++          }
++        }
++
++        const confirmedRecord = await fetchRecord();
++        const confirmedMapped = mapPayload({
++          record: confirmedRecord,
++          employeeType: normalizedEmployeeType,
++          config
++        });
++        const confirmedHash = digestPayload({
++          employee: confirmedMapped.employeePayload,
++          metadata: explicitMetadata(
++            confirmedMapped.metadataValues,
++            knownMetadataFieldIds(normalizedEmployeeType),
++            omitFieldIds
++          ),
++          labels: canonicalizeLabels(confirmedMapped.requiredLabelIds)
++        });
++        const sourceHash = digestPayload({
++          employee: mapped.employeePayload,
++          metadata: metadataForCompare,
++          labels: canonicalizeLabels(mapped.requiredLabelIds)
++        });
++        if (confirmedHash !== sourceHash) {
++          const stale = new Error("SyncStale");
++          stale.code = "SYNC_STALE";
++          throw stale;
++        }
++
++        return {
++          ...employeeLinkFields({
+             employeeType: normalizedEmployeeType,
+             employeeIdProperty,
+-            payloadHash,
+-            status: "noop",
+-            contactId: existingContactId
++            contactId
+           }),
+-          { kind: "employee", idProperty: employeeIdProperty }
+-        )
+-      });
++          ...(syncResult.operation === "blocked"
++            ? { last_sync_status: "blocked", last_sync_error: syncResult.reason || "" }
++            : {})
++        };
++      }
++    });
++
++    const status =
++      action === "write"
++        ? syncResult.operation === "blocked"
++          ? "blocked"
++          : "success"
++        : action === "dry-run-stop"
++          ? "dry-run"
++          : action === "blocked"
++            ? "blocked"
++            : "noop";
++    logger("info", "Employee sync compared mapped state.", {
++      workflow: "employeeSync",
++      recordId: normalizedRecordId,
++      employeeType: normalizedEmployeeType,
++      source: source || null,
++      mappingVersion: MAPPING_VERSION,
++      outcome: status,
++      action,
++      linked: Boolean(existingContactId),
++      changedFieldNames: changedFields,
++      invocationId: context?.invocationId || null
++    });
+ 
++    if (action === "write") {
+       await saveState({
+         pk: EMPLOYEE_STATE_PK,
+         id: getWorkflowStateId(normalizedEmployeeType, normalizedRecordId),
+@@ -440,14 +551,17 @@ export async function runEmployeeSyncWorkflow(
+         ttlSeconds: config.ttl.successTtlSeconds,
+         data: {
+           workflow: "employeeSync",
++          source: source || null,
+           employeeType: normalizedEmployeeType,
+-          status: "noop",
+-          operation: "noop",
+-          crContactId: existingContactId,
++          status,
++          operation: syncResult.operation,
++          crContactId: linkedContactId,
+           payloadHash,
+           fieldHashes: nextFieldHashes,
+           mappingVersion: MAPPING_VERSION,
+           changedFieldNames: changedFields,
++          metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
++          metadataFailedCount: metadataSyncSummary?.failedCount ?? null,
+           writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed),
+           mappingWarningCodes: mappingWarnings.map((item) => item?.code).filter(Boolean),
+           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+@@ -455,210 +569,102 @@ export async function runEmployeeSyncWorkflow(
+           updatedAt: new Date().toISOString()
+         }
+       });
+-
+-      return {
+-        ok: true,
+-        recordId: normalizedRecordId,
+-        employeeType: normalizedEmployeeType,
+-        status: "noop",
+-        operation: "noop",
+-        crContactId: existingContactId,
+-        writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
+-      };
+     }
+ 
+-    const syncResult = await upsertEmployee({
+-      payload: outboundPayload,
++    return {
++      ok: true,
++      recordId: normalizedRecordId,
+       employeeType: normalizedEmployeeType,
+-      existingContactId,
+-      allowEmployeeCreate: config.features.allowEmployeeCreate,
+-      putOnlyMode: config.features.putOnlyMode
+-    });
+-
+-    const status = syncResult.operation === "blocked" ? "blocked" : "success";
+-    const contactId = syncResult.crContactId || existingContactId || null;
+-    linkedContactId = contactId;
+-    let metadataSyncSummary = null;
+-
+-    const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
+-    if (contactId && (Object.keys(metadataForCompare).length > 0 || labelIds.length > 0)) {
+-      const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadataForCompare);
+-      metadataSyncSummary = await pushMetadata(contactId, metadataForCompare, {
+-        labelIds,
+-        clearFieldIds
+-      });
+-      if ((metadataSyncSummary?.failedCount || 0) > 0) {
+-        logger("warn", "Employee metadata write had failures.", {
++      status,
++      operation: action === "write" ? syncResult.operation : "noop",
++      crContactId: action === "write" ? linkedContactId : existingContactId,
++      metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? 0,
++      metadataFailedCount: metadataSyncSummary?.failedCount ?? 0,
++      writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
++    };
++  } catch (error) {
++    const transient = error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE";
++    if (!transient) {
++      logger(
++        "error",
++        "Employee sync workflow failed.",
++        buildError({
+           workflow: "employeeSync",
++          stage: "runEmployeeSyncWorkflow",
++          error,
+           recordId: normalizedRecordId,
+-          employeeType: normalizedEmployeeType,
+-          crContactId: contactId,
+-          failedCount: metadataSyncSummary.failedCount,
+-          failedFieldIds: metadataSyncSummary.failedFieldIds || [],
+-          invocationId: context?.invocationId || null
+-        });
+-        await writeEmployeeWriteback({
+-          objectTypeId,
+-          recordId: normalizedRecordId,
+-          employeeIdProperty,
+-          properties: filterWritebackProperties(
+-            {
+-              last_sync_status: "error",
+-              last_sync_at: new Date().toISOString(),
+-              last_sync_error: `MetadataWriteFailed fields: ${(metadataSyncSummary.failedFieldIds || []).join(",")}`.slice(0, 500)
+-            },
+-            { kind: "employee", idProperty: employeeIdProperty }
+-          )
++          extra: {
++            employeeType: normalizedEmployeeType,
++            invocationId: context?.invocationId || null,
++            hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
++          }
++        })
++      );
++
++      try {
++        await saveState({
++          pk: EMPLOYEE_STATE_PK,
++          id: getWorkflowStateId(normalizedEmployeeType, normalizedRecordId),
++          type: STATE_TYPES.FAIL,
++          ttlSeconds: config.ttl.failTtlSeconds,
++          data: {
++            workflow: "employeeSync",
++            employeeType: normalizedEmployeeType,
++            status: "error",
++            errorMessage: String(error?.message || "Employee sync failed").slice(0, 500),
++            failedFieldIds: error?.failedFieldIds || [],
++            crContactId: linkedContactId,
++            hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
++            invocationId: context?.invocationId || null,
++            updatedAt: new Date().toISOString()
++          }
+         });
+-        const failed = new Error("MetadataWriteFailed");
+-        failed.code = "METADATA_WRITE_FAILED";
+-        failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
+-        throw failed;
++      } catch (stateError) {
++        logger(
++          "error",
++          "Employee sync fail-state write failed.",
++          buildError({
++            workflow: "employeeSync",
++            stage: "putFailState",
++            error: stateError,
++            recordId: normalizedRecordId
++          })
++        );
+       }
+     }
+ 
+-    const confirmedRecord = await fetchRecord();
+-    const confirmedMapped = mapPayload({
+-      record: confirmedRecord,
+-      employeeType: normalizedEmployeeType,
+-      config
++    const plan = planAttempt({
++      ...attempt,
++      lastSyncStatus,
++      centralReachId: linkedContactId,
++      hashMatched: false,
++      error,
++      nowMs: Date.now()
+     });
+-    const confirmedHash = digestPayload({
+-      employee: confirmedMapped.employeePayload,
+-      metadata: explicitMetadata(
+-        confirmedMapped.metadataValues,
+-        knownMetadataFieldIds(normalizedEmployeeType),
+-        omitFieldIds
+-      ),
+-      labels: canonicalizeLabels(confirmedMapped.requiredLabelIds)
++    await runPlan(plan, {
++      patch: patchRecord,
++      claimReplay: (messageId) =>
++        claimLock({ pk: "replay:employee", id: messageId, ttlSeconds: config.ttl.successTtlSeconds }),
++      schedule: (replay) => scheduleReplay(normalizedRecordId, normalizedEmployeeType, replay)
+     });
+-    const sourceHash = digestPayload({
+-      employee: mapped.employeePayload,
+-      metadata: metadataForCompare,
+-      labels: canonicalizeLabels(mapped.requiredLabelIds)
+-    });
+-    if (confirmedHash !== sourceHash) {
+-      const stale = new Error("SyncStale");
+-      stale.code = "SYNC_STALE";
+-      throw stale;
+-    }
+-
+-    logger("info", "Employee sync compared mapped state.", {
++    logger("info", "Employee sync dry run stopped on an error.", {
+       workflow: "employeeSync",
+       recordId: normalizedRecordId,
+       employeeType: normalizedEmployeeType,
+       source: source || null,
+-      mappingVersion: MAPPING_VERSION,
+-      outcome: status,
+-      changedFieldNames: changedFields,
++      outcome: "dry-run",
++      reason: syncErrorMessage(error),
+       invocationId: context?.invocationId || null
+     });
+-
+-    const writebackResult = await writeEmployeeWriteback({
+-      objectTypeId,
+-      recordId: normalizedRecordId,
+-      employeeIdProperty,
+-      properties: filterWritebackProperties(
+-        buildWritebackPropertyPatch({
+-          employeeType: normalizedEmployeeType,
+-          employeeIdProperty,
+-          payloadHash,
+-          status,
+-          contactId,
+-          errorMessage: syncResult.reason || ""
+-        }),
+-        { kind: "employee", idProperty: employeeIdProperty }
+-      )
+-    });
+-
+-    await saveState({
+-      pk: EMPLOYEE_STATE_PK,
+-      id: getWorkflowStateId(normalizedEmployeeType, normalizedRecordId),
+-      type: STATE_TYPES.SUCCESS,
+-      ttlSeconds: config.ttl.successTtlSeconds,
+-      data: {
+-        workflow: "employeeSync",
+-        employeeType: normalizedEmployeeType,
+-        status,
+-        operation: syncResult.operation,
+-        crContactId: contactId,
+-        payloadHash,
+-        fieldHashes: nextFieldHashes,
+-        mappingVersion: MAPPING_VERSION,
+-        changedFieldNames: changedFields,
+-        metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
+-        metadataFailedCount: metadataSyncSummary?.failedCount ?? null,
+-        writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed),
+-        mappingWarningCodes: mappingWarnings.map((item) => item?.code).filter(Boolean),
+-        hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+-        invocationId: context?.invocationId || null,
+-        updatedAt: new Date().toISOString()
+-      }
+-    });
+-
+     return {
+       ok: true,
+       recordId: normalizedRecordId,
+       employeeType: normalizedEmployeeType,
+-      status,
+-      operation: syncResult.operation,
+-      crContactId: contactId,
+-      metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? 0,
+-      metadataFailedCount: metadataSyncSummary?.failedCount ?? 0,
+-      writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
++      status: "dry-run",
++      operation: "noop",
++      reason: syncErrorMessage(error),
++      crContactId: null
+     };
+-  } catch (error) {
+-    if (error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE") {
+-      throw error;
+-    }
+-    logger(
+-      "error",
+-      "Employee sync workflow failed.",
+-      buildError({
+-        workflow: "employeeSync",
+-        stage: "runEmployeeSyncWorkflow",
+-        error,
+-        recordId: normalizedRecordId,
+-        extra: {
+-          employeeType: normalizedEmployeeType,
+-          invocationId: context?.invocationId || null,
+-          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
+-        }
+-      })
+-    );
+-
+-    try {
+-      await saveState({
+-        pk: EMPLOYEE_STATE_PK,
+-        id: getWorkflowStateId(normalizedEmployeeType, normalizedRecordId),
+-        type: STATE_TYPES.FAIL,
+-        ttlSeconds: config.ttl.failTtlSeconds,
+-        data: {
+-          workflow: "employeeSync",
+-          employeeType: normalizedEmployeeType,
+-          status: "error",
+-          errorMessage: String(error?.message || "Employee sync failed").slice(0, 500),
+-          failedFieldIds: error?.failedFieldIds || [],
+-          crContactId: linkedContactId,
+-          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+-          invocationId: context?.invocationId || null,
+-          updatedAt: new Date().toISOString()
+-        }
+-      });
+-    } catch (stateError) {
+-      logger(
+-        "error",
+-        "Employee sync fail-state write failed.",
+-        buildError({
+-          workflow: "employeeSync",
+-          stage: "putFailState",
+-          error: stateError,
+-          recordId: normalizedRecordId
+-        })
+-      );
+-    }
+-
+-    throw error;
+   } finally {
+     if (lockHeld) {
+       try {
+diff --git a/src/workflows/intakePollerWorkflow.mjs b/src/workflows/intakePollerWorkflow.mjs
+index f4c7ff1..6ec0f84 100644
+--- a/src/workflows/intakePollerWorkflow.mjs
++++ b/src/workflows/intakePollerWorkflow.mjs
+@@ -1,18 +1,16 @@
+ import { getIntakePollerConfig } from "../lib/config.mjs";
+ import { safeLog } from "../lib/safeLog.mjs";
+ import { buildErrorLog } from "../lib/errors.mjs";
++import { endTickOnRateLimit } from "../lib/retry.mjs";
+ import {
+   createHubSpotClient,
+-  searchIntakeCompleteDeals,
+-  searchEligibleBtRbtRecords,
+-  searchEligibleBcbaRecords,
++  searchNeverProcessedRecords,
+   searchRecordsByKnownProperty
+ } from "../lib/hubspotClient.mjs";
+ import {
+   createStateClient,
+   acquireLease,
+   releaseLease,
+-  hasState,
+   putState,
+   getState
+ } from "../lib/cosmosState.mjs";
+@@ -21,114 +19,93 @@ import {
+   sendClientSyncMessage,
+   sendEmployeeSyncMessage
+ } from "../lib/serviceBusClient.mjs";
++import {
++  NEVER_PROCESSED_SOURCE,
++  caseBinding,
++  deriveRecordState,
++  employeeBinding,
++  parseSnapshot,
++  sweepDecision
++} from "../lib/recordLifecycle.mjs";
+ import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+ 
+ const POLLER_LEASE_PK = "workflow:intake-poller";
+ const POLLER_LEASE_ID = "active-lease";
+-const DEDUPE_PK = "dedupe:client-sync";
+-const EMPLOYEE_DEDUPE_PK = "dedupe:employee-sync";
+-
+-function parseTimestamp(value) {
+-  if (!value) {
+-    return null;
+-  }
+-
+-  const asEpoch = new Date(value).getTime();
+-  return Number.isFinite(asEpoch) ? asEpoch : null;
+-}
+-
+-export function shouldSyncDeal(candidate) {
+-  const properties = candidate?.properties || {};
+-  const hsLastModifiedDate = parseTimestamp(properties.hs_lastmodifieddate);
+-  const integrationLastWrite = parseTimestamp(properties.integration_last_write);
+-
+-  if (!integrationLastWrite) {
+-    return true;
+-  }
+-  if (!hsLastModifiedDate) {
+-    return false;
+-  }
+-
+-  return hsLastModifiedDate > integrationLastWrite;
+-}
+-
+-export function shouldSyncBtRbt(candidate) {
+-  return shouldSyncDeal(candidate);
+-}
+-
+-function parseBool(value) {
+-  if (typeof value === "boolean") {
+-    return value;
+-  }
+-  if (typeof value === "string") {
+-    const normalized = value.trim().toLowerCase();
+-    return normalized === "true" || normalized === "1" || normalized === "yes";
+-  }
+-  if (typeof value === "number") {
+-    return value === 1;
+-  }
+-  return false;
+-}
+-
+-export function shouldSyncBcba(candidate) {
+-  const properties = candidate?.properties || {};
+-  const hsLastModifiedDate = parseTimestamp(properties.hs_lastmodifieddate);
+-  const integrationLastWrite = parseTimestamp(properties.integration_last_write);
+-  const updatedByIntegration = parseBool(properties.updated_by_integration);
+-
+-  if (!integrationLastWrite) {
+-    return true;
+-  }
+-  if (!hsLastModifiedDate) {
+-    return false;
+-  }
+-  if (updatedByIntegration) {
+-    return hsLastModifiedDate > integrationLastWrite;
+-  }
+-  return hsLastModifiedDate > integrationLastWrite;
+-}
+ 
+ export function isLinkedForOngoingRefresh(candidate, idProperty) {
+   return Boolean(String(candidate?.properties?.[idProperty] || "").trim());
+ }
+ 
+-export function buildIntakeDedupeId(dealId, hsLastModifiedDate) {
+-  return `${String(dealId)}:${String(hsLastModifiedDate)}`;
++function sweepTargets(config, send) {
++  const employeeTarget = (entity, objectTypeId, employeeType) => ({
++    entity,
++    objectTypeId,
++    binding: employeeBinding(config.limits.employeeIdProperty),
++    send: (recordId, hsLastModifiedDate) =>
++      send.employee({
++        workflow: "employeeSync",
++        source: NEVER_PROCESSED_SOURCE,
++        employeeType,
++        recordId,
++        hsLastModifiedDate
++      })
++  });
++
++  return [
++    {
++      entity: "client",
++      objectTypeId: "deals",
++      binding: caseBinding(config.limits.crContactIdProperty),
++      send: (recordId, hsLastModifiedDate) =>
++        send.client({
++          dealId: recordId,
++          hsLastModifiedDate,
++          source: NEVER_PROCESSED_SOURCE,
++          workflow: "clientSync"
++        })
++    },
++    employeeTarget("bt_rbt", config.hubspot.btRbtObjectTypeId, HUBSPOT_EMPLOYEE_TYPES.BT_RBT),
++    employeeTarget("bcba", config.hubspot.bcbaObjectTypeId, HUBSPOT_EMPLOYEE_TYPES.BCBA)
++  ];
+ }
+ 
+-function buildEmployeeDedupeId(employeeType, recordId, hsLastModifiedDate) {
+-  return `${String(employeeType)}:${String(recordId)}:${String(hsLastModifiedDate)}`;
++function recordIdOf(candidate) {
++  return String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
+ }
+ 
+-export async function runIntakePollerWorkflow(context) {
++export async function runIntakePollerWorkflow(context, dependencies = {}) {
+   void context;
+-  const config = getIntakePollerConfig();
+-  createHubSpotClient(config);
+-  createStateClient(config);
+-  createServiceBusClient(config);
++  const config = (dependencies.getIntakePollerConfig || getIntakePollerConfig)();
++  const claimLease = dependencies.acquireLease || acquireLease;
++  const dropLease = dependencies.releaseLease || releaseLease;
++  const searchNeverProcessed =
++    dependencies.searchNeverProcessedRecords || searchNeverProcessedRecords;
++  const searchKnown = dependencies.searchRecordsByKnownProperty || searchRecordsByKnownProperty;
++  const readState = dependencies.getState || getState;
++  const saveState = dependencies.putState || putState;
++  const send = {
++    client: dependencies.sendClientSyncMessage || sendClientSyncMessage,
++    employee: dependencies.sendEmployeeSyncMessage || sendEmployeeSyncMessage
++  };
++  const nowMs = (dependencies.now || Date.now)();
++  (dependencies.createHubSpotClient || createHubSpotClient)(config);
++  (dependencies.createStateClient || createStateClient)(config);
++  (dependencies.createServiceBusClient || createServiceBusClient)(config);
+ 
+   const summary = {
+     leaseAcquired: false,
+-    candidatesFetched: 0,
+-    skippedAlreadyProcessed: 0,
+-    skippedShouldSyncFalse: 0,
++    createSweepEnabled: config.sweep.createSweepEnabled,
++    sweep: {},
+     messagesEnqueued: 0,
+-    btRbtCandidatesFetched: 0,
+-    btRbtMessagesEnqueued: 0,
+-    btRbtSkippedAlreadyProcessed: 0,
+-    btRbtSkippedShouldSyncFalse: 0,
+-    bcbaCandidatesFetched: 0,
+-    bcbaMessagesEnqueued: 0,
+-    bcbaSkippedAlreadyProcessed: 0,
+-    bcbaSkippedShouldSyncFalse: 0,
+     linkedRecheckEnabled: false,
+     linkedClientEnqueued: 0,
+     linkedBtRbtEnqueued: 0,
+     linkedBcbaEnqueued: 0,
++    endedOnRateLimit: false,
+     errorsCount: 0
+   };
+ 
+-  const leaseAcquired = await acquireLease({
++  const leaseAcquired = await claimLease({
+     pk: POLLER_LEASE_PK,
+     id: POLLER_LEASE_ID,
+     ttlSeconds: config.ttl.leaseTtlSeconds
+@@ -140,251 +117,70 @@ export async function runIntakePollerWorkflow(context) {
+     return summary;
+   }
+ 
+-  try {
+-    let candidates = [];
+-    try {
+-      candidates = await searchIntakeCompleteDeals({
+-        limit: config.limits.maxDealsPerRun,
+-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
+-        lookbackMinutes: config.limits.lookbackMinutes,
+-        pipelineId: config.hubspot.dealPipelineId,
+-        stageAllowlist: config.hubspot.stageAllowlist
+-      });
+-    } catch (error) {
+-      safeLog(
+-        "error",
+-        "HubSpot intake search failed.",
+-        buildErrorLog({ workflow: "intakePoller", stage: "searchDeals", error })
+-      );
+-      summary.errorsCount += 1;
+-      return summary;
++  const recordFailure = (stage, error, recordId) => {
++    summary.errorsCount += 1;
++    safeLog("error", "Intake poller step failed.", buildErrorLog({
++      workflow: "intakePoller",
++      stage,
++      error,
++      recordId
++    }));
++    if (endTickOnRateLimit(error).endTick) {
++      summary.endedOnRateLimit = true;
+     }
++  };
+ 
+-    summary.candidatesFetched = candidates.length;
+-
+-    for (const candidate of candidates) {
+-      const dealId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
+-      const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
+-      if (!dealId) {
+-        summary.skippedShouldSyncFalse += 1;
+-        continue;
+-      }
+-
+-      if (!hsLastModifiedDate || !shouldSyncDeal(candidate)) {
+-        summary.skippedShouldSyncFalse += 1;
+-        continue;
+-      }
+-
+-      const dedupeId = buildIntakeDedupeId(dealId, hsLastModifiedDate);
+-      const alreadyProcessed = await hasState({ pk: DEDUPE_PK, id: dedupeId });
+-
+-      if (alreadyProcessed) {
+-        summary.skippedAlreadyProcessed += 1;
+-        continue;
+-      }
+-
+-      try {
+-        await sendClientSyncMessage({
+-          dealId,
+-          hsLastModifiedDate,
+-          source: "intakePoller",
+-          workflow: "clientSync"
+-        });
+-        summary.messagesEnqueued += 1;
+-
+-        await putState({
+-          pk: DEDUPE_PK,
+-          id: dedupeId,
+-          type: "dedupe",
+-          ttlSeconds: config.ttl.dedupeTtlSeconds,
+-          data: {
+-            module: "client",
+-            source: "intakePoller"
+-          }
+-        });
+-      } catch (error) {
+-        summary.errorsCount += 1;
+-        safeLog(
+-          "error",
+-          "Failed processing intake candidate.",
+-          buildErrorLog({
+-            workflow: "intakePoller",
+-            stage: "processCandidate",
+-            error,
+-            recordId: dealId
+-          })
+-        );
+-      }
+-    }
+-
+-    try {
+-      const btRbtCandidates = await searchEligibleBtRbtRecords({
+-        objectTypeId: config.hubspot.btRbtObjectTypeId,
+-        pipelineId: config.hubspot.btRbtPipelineId,
+-        stageAllowlist: config.hubspot.btRbtStageAllowlist,
+-        limit: config.limits.maxBtRbtPerRun,
+-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
+-        lookbackMinutes: config.limits.lookbackMinutes
+-      });
+-      summary.btRbtCandidatesFetched = btRbtCandidates.length;
+-
+-      for (const candidate of btRbtCandidates) {
+-        const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
+-        const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
+-        if (!recordId) {
+-          summary.btRbtSkippedShouldSyncFalse += 1;
+-          continue;
+-        }
+-
+-        if (!hsLastModifiedDate || !shouldSyncBtRbt(candidate)) {
+-          summary.btRbtSkippedShouldSyncFalse += 1;
+-          continue;
+-        }
+-
+-        const dedupeId = buildEmployeeDedupeId(
+-          HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
+-          recordId,
+-          hsLastModifiedDate
+-        );
+-        const alreadyProcessed = await hasState({ pk: EMPLOYEE_DEDUPE_PK, id: dedupeId });
+-        if (alreadyProcessed) {
+-          summary.btRbtSkippedAlreadyProcessed += 1;
+-          continue;
+-        }
+-
++  try {
++    if (config.sweep.createSweepEnabled) {
++      const modifiedBeforeIso = new Date(
++        nowMs - config.sweep.graceMinutes * 60 * 1000
++      ).toISOString();
++
++      for (const target of sweepTargets(config, send)) {
++        const counts = { fetched: 0, enqueued: 0, skipped: 0 };
++        summary.sweep[target.entity] = counts;
++        let candidates;
+         try {
+-          await sendEmployeeSyncMessage({
+-            workflow: "employeeSync",
+-            source: "employeePoller",
+-            employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
+-            recordId,
+-            hsLastModifiedDate
+-          });
+-          summary.btRbtMessagesEnqueued += 1;
+-
+-          await putState({
+-            pk: EMPLOYEE_DEDUPE_PK,
+-            id: dedupeId,
+-            type: "dedupe",
+-            ttlSeconds: config.ttl.dedupeTtlSeconds,
+-            data: {
+-              module: "employee",
+-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
+-              source: "employeePoller"
+-            }
++          candidates = await searchNeverProcessed({
++            objectTypeId: target.objectTypeId,
++            checkboxProperty: target.binding.checkboxProperty,
++            idProperty: target.binding.centralReachIdProperty,
++            modifiedBeforeIso
+           });
+         } catch (error) {
+-          summary.errorsCount += 1;
+-          safeLog(
+-            "error",
+-            "Failed processing BT/RBT candidate.",
+-            buildErrorLog({
+-              workflow: "intakePoller",
+-              stage: "processBtRbtCandidate",
+-              error,
+-              recordId
+-            })
+-          );
+-        }
+-      }
+-    } catch (error) {
+-      summary.errorsCount += 1;
+-      safeLog(
+-        "error",
+-        "BT/RBT poller search failed.",
+-        buildErrorLog({
+-          workflow: "intakePoller",
+-          stage: "searchBtRbt",
+-          error
+-        })
+-      );
+-    }
+-
+-    try {
+-      const bcbaCandidates = await searchEligibleBcbaRecords({
+-        objectTypeId: config.hubspot.bcbaObjectTypeId,
+-        pipelineId: config.hubspot.bcbaPipelineId,
+-        stageAllowlist: config.hubspot.bcbaStageAllowlist,
+-        limit: config.limits.maxBcbaPerRun,
+-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
+-        lookbackMinutes: config.limits.lookbackMinutes
+-      });
+-      summary.bcbaCandidatesFetched = bcbaCandidates.length;
+-
+-      for (const candidate of bcbaCandidates) {
+-        const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
+-        const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
+-        if (!recordId) {
+-          summary.bcbaSkippedShouldSyncFalse += 1;
+-          continue;
+-        }
+-
+-        if (!hsLastModifiedDate || !shouldSyncBcba(candidate)) {
+-          summary.bcbaSkippedShouldSyncFalse += 1;
+-          continue;
+-        }
+-
+-        const dedupeId = buildEmployeeDedupeId(
+-          HUBSPOT_EMPLOYEE_TYPES.BCBA,
+-          recordId,
+-          hsLastModifiedDate
+-        );
+-        const alreadyProcessed = await hasState({ pk: EMPLOYEE_DEDUPE_PK, id: dedupeId });
+-        if (alreadyProcessed) {
+-          summary.bcbaSkippedAlreadyProcessed += 1;
++          recordFailure(`sweep:${target.entity}`, error);
++          if (summary.endedOnRateLimit) {
++            return summary;
++          }
+           continue;
+         }
++        counts.fetched = candidates.length;
+ 
+-        try {
+-          await sendEmployeeSyncMessage({
+-            workflow: "employeeSync",
+-            source: "employeePoller",
+-            employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
+-            recordId,
+-            hsLastModifiedDate
+-          });
+-          summary.bcbaMessagesEnqueued += 1;
+-
+-          await putState({
+-            pk: EMPLOYEE_DEDUPE_PK,
+-            id: dedupeId,
+-            type: "dedupe",
+-            ttlSeconds: config.ttl.dedupeTtlSeconds,
+-            data: {
+-              module: "employee",
+-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
+-              source: "employeePoller"
+-            }
+-          });
+-        } catch (error) {
+-          summary.errorsCount += 1;
+-          safeLog(
+-            "error",
+-            "Failed processing BCBA candidate.",
+-            buildErrorLog({
+-              workflow: "intakePoller",
+-              stage: "processBcbaCandidate",
+-              error,
+-              recordId
+-            })
++        for (const candidate of candidates) {
++          const recordId = recordIdOf(candidate);
++          const state = deriveRecordState(
++            parseSnapshot(candidate?.properties || {}, target.binding, recordId)
+           );
++          const decision = sweepDecision(state, {
++            now: nowMs,
++            createSweepEnabled: config.sweep.createSweepEnabled,
++            graceMinutes: config.sweep.graceMinutes
++          });
++          if (!recordId || !decision.enqueue) {
++            counts.skipped += 1;
++            continue;
++          }
++          try {
++            await target.send(recordId, String(candidate.properties.hs_lastmodifieddate));
++            counts.enqueued += 1;
++            summary.messagesEnqueued += 1;
++          } catch (error) {
++            recordFailure(`sweepSend:${target.entity}`, error, recordId);
++          }
+         }
+       }
+-    } catch (error) {
+-      summary.errorsCount += 1;
+-      safeLog(
+-        "error",
+-        "BCBA poller search failed.",
+-        buildErrorLog({
+-          workflow: "intakePoller",
+-          stage: "searchBcba",
+-          error
+-        })
+-      );
+     }
+ 
+-    summary.messagesEnqueued += summary.btRbtMessagesEnqueued + summary.bcbaMessagesEnqueued;
+-
+     if (config.limits.linkedRecheckEnabled) {
+       summary.linkedRecheckEnabled = true;
+       const rechecks = [
+@@ -395,7 +191,7 @@ export async function runIntakePollerWorkflow(context) {
+           limit: config.limits.maxDealsPerRun,
+           countKey: "linkedClientEnqueued",
+           send: async (recordId) =>
+-            sendClientSyncMessage({
++            send.client({
+               dealId: recordId,
+               source: "linkedRecheck",
+               workflow: "clientSync"
+@@ -408,7 +204,7 @@ export async function runIntakePollerWorkflow(context) {
+           limit: config.limits.maxBtRbtPerRun,
+           countKey: "linkedBtRbtEnqueued",
+           send: async (recordId) =>
+-            sendEmployeeSyncMessage({
++            send.employee({
+               workflow: "employeeSync",
+               source: "linkedRecheck",
+               employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
+@@ -422,7 +218,7 @@ export async function runIntakePollerWorkflow(context) {
+           limit: config.limits.maxBcbaPerRun,
+           countKey: "linkedBcbaEnqueued",
+           send: async (recordId) =>
+-            sendEmployeeSyncMessage({
++            send.employee({
+               workflow: "employeeSync",
+               source: "linkedRecheck",
+               employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
+@@ -433,8 +229,8 @@ export async function runIntakePollerWorkflow(context) {
+ 
+       for (const spec of rechecks) {
+         try {
+-          const cursor = await getState({ pk: `recheck:${spec.entity}`, id: "cursor" });
+-          const page = await searchRecordsByKnownProperty({
++          const cursor = await readState({ pk: `recheck:${spec.entity}`, id: "cursor" });
++          const page = await searchKnown({
+             objectTypeId: spec.objectTypeId,
+             propertyName: spec.propertyName,
+             properties: ["hs_object_id", spec.propertyName, "hs_lastmodifieddate"],
+@@ -442,14 +238,15 @@ export async function runIntakePollerWorkflow(context) {
+             after: cursor?.data?.after || null
+           });
+           for (const candidate of page.results) {
+-            const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
++            const recordId = recordIdOf(candidate);
+             if (!recordId || !isLinkedForOngoingRefresh(candidate, spec.propertyName)) {
+               continue;
+             }
+             await spec.send(recordId);
+             summary[spec.countKey] += 1;
++            summary.messagesEnqueued += 1;
+           }
+-          await putState({
++          await saveState({
+             pk: `recheck:${spec.entity}`,
+             id: "cursor",
+             type: "recheck-cursor",
+@@ -457,26 +254,18 @@ export async function runIntakePollerWorkflow(context) {
+             data: { after: page.nextAfter }
+           });
+         } catch (error) {
+-          summary.errorsCount += 1;
+-          safeLog(
+-            "error",
+-            "Linked-record recheck failed.",
+-            buildErrorLog({
+-              workflow: "intakePoller",
+-              stage: `linkedRecheck:${spec.entity}`,
+-              error
+-            })
+-          );
++          recordFailure(`linkedRecheck:${spec.entity}`, error);
++          if (summary.endedOnRateLimit) {
++            return summary;
++          }
+         }
+       }
+-      summary.messagesEnqueued +=
+-        summary.linkedClientEnqueued + summary.linkedBtRbtEnqueued + summary.linkedBcbaEnqueued;
+     }
+ 
+     return summary;
+   } finally {
+     try {
+-      await releaseLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID });
++      await dropLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID });
+     } catch (error) {
+       safeLog(
+         "error",

@@ -23,6 +23,16 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 
 ---
 
+## Resume point (10/29 4:42 PM): poller state design
+
+The accepted design is built on `align-sandbox-hubspot-field-sync` (commits `6571ad5` to `0b8e785`, not pushed or published). `npm test` passes 101 of 101. The design is in [poller-state-decision.md](poller-state-decision.md). `SYNC_DRY_RUN` and `CREATE_SWEEP_ENABLED` both default to false.
+
+Proven: the live `AzureWebJobs.intakePoller.Disabled` is `true`. The token resolves to sandbox `50850427`. Live queues were unchanged. A local dry-run sweep found 0, queued 0, and had 0 errors.
+
+Open: proof 1, a queued ticked first-time create, needs a sandbox deal that is ticked, has no CentralReach id, and has an empty `last_sync_at`. None exists. Ticking a box fires the Case workflow webhook to the live app, which runs code with no dry run. Wait for Zeke to pick the path.
+
+Rotate the production token and secret in `.env`. They were printed in agent tool output.
+
 ## Where we are
 
 | Item | State |
