@@ -116,6 +116,19 @@ function normalizeStateProvince(value) {
   return US_STATE_NAME_TO_CODE[normalizedName] || null;
 }
 
+// Not used by buildClientPayload. Danny's 10/28 note still wants these values
+// copied onto the Case by property sync. Use this only if that sync is not
+// the source. The contact fields are HubSpot's firstname, lastname, and email.
+export function guardianFromContact(contact) {
+  const props = contact?.properties || contact || {};
+  const email = cleanEmail(props.email);
+  return {
+    GuardianFirstName: props.firstname || null,
+    GuardianLastName: props.lastname || null,
+    PrimaryEmail: isValidEmail(email) ? email : null
+  };
+}
+
 export function buildClientPayload({ deal, config }) {
   void config;
 

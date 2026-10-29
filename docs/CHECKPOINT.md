@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-10-28 (America/Chicago)  
 **Audience:** Zeke, pstack reviewers, and implementing agents  
-**Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). Workstream order below is the current plan. Start at WS.1. Do not start the end-to-end run until that diff exists.  
+**Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). The WS.1 definition diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). Open questions from that pass are listed below. Do not start the sandbox poller until those questions are decided.  
 **Pointer for doc order and pstack prompts:** [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md)
 
 ---
@@ -275,12 +275,24 @@ What sandbox end-to-end can prove: the property is requested and a non-sensitive
 
 ---
 
+## Open after the 10/28 schema pass
+
+The definition diff and the property creates are recorded in [`ws1-schema-diff.md`](ws1-schema-diff.md) under **Actions taken 2026-10-28**. This list is what is still undecided. None of it is a sandbox sync proof. The poller stays off.
+
+1. Sandbox `supervising_bcba_name` and `ia_bcba_name` exist as writable text. Production copies are calculated and read-only, and the properties API returns no formula. Confirm that a sandbox test may set those values directly.
+2. Sandbox association label `IA BCBA` is type id 163 (Case to BCBA) and 164 (BCBA to Case). Production IA BCBA is 86. The create request cannot set 86. Label 98 is still `Initial Assessment`. Decide whether 98 stays.
+3. Production now has the sandbox writeback fields on Case `0-3`, BCBA `2-48354212`, and BT/RBT `2-48354559`. Deal schema edits needed the private app token in `.env` because the HubSpot CLI key lacks `deals-write`. Custom-object creates used CLI account `united-care-aba`.
+4. Sandbox option lists were not rewritten. Matching production would change stored values, including dropping `In Limbo` from sandbox `case_status`.
+5. The production hours formula `1 + 1` on `total_hours_bt1bt2_work_schedule` was not copied. Sandbox hours fields stay writable.
+6. `HUBSPOT_LINK_TO_BT_RBT_RECORD` and `HUBSPOT_LINK_TO_BCBA_RECORD` both use CentralReach field id 138703. Watch one sandbox write on each contact type before changing the constant.
+7. Drive section **10/28 - Diff Review Pending Leave For Now** still has guardian Case sync fields, BCBA personal email, the staff phone sync field, and `current_primary_bt` as pending. `guardianFromContact` can read `firstname`, `lastname`, and `email` from a contact. `buildClientPayload` still reads the Case fields.
+8. BT/RBT `postal_code` was not created. Case `postal_code` already matches, and staff postal fields are `postal_code_home` and `postal_code__work_`.
+9. Comorbid and maladaptive mappers were not changed.
+
 ## Next recommended session
 
-1. WS.1 read with the HubSpot CLI (`hs`): production property definitions + association labels, then sandbox diff. No record exports.
-2. Re-pull CentralReach metadata configuration and org labels. Diff against `src/constants/centralReach.mjs`.
-3. Update [`Sandbox props & labels_summary.md`](Sandbox%20props%20%26%20labels_summary.md) with the diff.
-4. Only then WS.2: close the sandbox gaps, run end-to-end with the sensitive limitation, queues processing, and one sandbox poller test on a linked record.
+1. Review the nine open items above. Do not create more properties until an item says to.
+2. WS.2 starts only after those decisions. It closes the sandbox gaps the diff still names, then runs end-to-end with the sensitive limitation, queues processing, and one sandbox poller test on a linked record. Production poller stays off.
 
 ---
 

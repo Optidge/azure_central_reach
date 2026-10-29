@@ -4,6 +4,8 @@ Portal `50850427`. Updated Oct 27, 2026 (sensitive-property pass from Integratio
 
 This is the tracker for sandbox HubSpot properties, the RE BCBA association label, and the CentralReach labels the sync applies. Update a row here when an open item closes.
 
+The WS.1 production-to-sandbox definition diff, with association label type ids and the CentralReach id check, is [`ws1-schema-diff.md`](ws1-schema-diff.md). Read it before changing a row here.
+
 Source of truth for the waiting list: [CentralReach to HubSpot Integration V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit). Property definitions live in `scripts/sandbox-hubspot-properties.json`. Label ids live in `src/constants/centralReach.mjs`.
 
 ## HubSpot sensitive-data properties (guide)

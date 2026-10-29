@@ -3,7 +3,7 @@
 **As of:** 2026-10-28, about 7:18 PM America/Chicago  
 **Repo:** `azure_central_reach` (Optidge / United Care ABA)  
 **Checkout:** `align-sandbox-hubspot-field-sync`. Handoff commit `69fe219`.  
-**Status:** Commit `69fe219` is pushed and is not on `main`. Later commits on this branch may sit after it. Start at WS.1. Do not start WS.2 until the WS.1 diff exists. The branch merges only after the WS.2 proof exists.
+**Status:** Commit `69fe219` is pushed and is not on `main`. The WS.1 definition diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). Open questions are in [`CHECKPOINT.md`](CHECKPOINT.md) under **Open after the 10/28 schema pass**. Do not start the sandbox poller until those questions are decided. The branch merges only after the WS.2 proof exists.
 
 This file is the entry point for a new chat. The checkpoint is the living status.
 
@@ -31,7 +31,7 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 | Deployed baseline | `main` at `f215d9d` (hybrid webhook + linked-recheck). PR #1 merged. |
 | Working branch | `align-sandbox-hubspot-field-sync`. Handoff commit `69fe219`. Broader fetch lists and sandbox property scripts. **Not merged. Not confirmed published.** |
 | Tonight’s doc edits | Handoff commit `69fe219` is pushed and is not on `main`. The sandbox done-bar wording is a later commit on this branch, also not on `main`. |
-| Next gate | **WS.1**, read-only. Production property definitions, options, formulas, association label names, then CentralReach metadata and org labels vs `src/constants/centralReach.mjs`. |
+| Next gate | Review the open questions in [`CHECKPOINT.md`](CHECKPOINT.md). The WS.1 diff exists. Do not start the sandbox poller. |
 
 Architecture:
 
@@ -65,9 +65,9 @@ The timer is **off on the app today**. That is the current setting. Sandbox is n
 
 ## Start here
 
-WS.1 only, until the diff is written:
+The WS.1 diff is written. Start with the open questions in [`CHECKPOINT.md`](CHECKPOINT.md).
 
-- Read-only. Production property definitions, association labels, then CentralReach metadata and org labels versus `src/constants/centralReach.mjs`.
+- The diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). It compares production property definitions, association labels, and CentralReach metadata and org labels with `src/constants/centralReach.mjs`.
 - The production definition read uses the HubSpot CLI (`hs`). Reads and changes on the live Function App use the Azure CLI (`az`). That covers app settings, the poller switch, and the queues. Publishing the app is `func azure functionapp publish centralreachserverless`, and only when explicitly approved. CentralReach metadata uses the discovery commands in [`centralreach-metadata-and-labels-discovery.md`](centralreach-metadata-and-labels-discovery.md).
 - Do not export record values. Do not print secrets.
 - Do not merge, publish, write sandbox or production records, or enable the poller during WS.1.
@@ -75,4 +75,4 @@ WS.1 only, until the diff is written:
 - Do not change the comorbid / maladaptive mapper.
 - Do not invent the Grad Permit BCBA internal name.
 
-WS.2 starts only after that diff exists. WS.2 is the new end-to-end, including the queues and one sandbox poller test. Production poller stays off.
+WS.2 starts only after the open questions are decided. WS.2 is the new end-to-end, including the queues and one sandbox poller test. Production poller stays off.

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs";
+import { buildClientPayload, guardianFromContact } from "../../mappings/client/buildClientPayload.mjs";
 import { validateClientPayload } from "../../mappings/client/validateClientPayload.mjs";
 
 test("buildClientPayload maps and normalizes AWS canonical fields", () => {
@@ -55,6 +55,35 @@ test("buildClientPayload prefers full home address and stateregion", () => {
 
   assert.equal(payload.AddressLine1, "9 Guide Ave");
   assert.equal(payload.StateProvince, "NJ");
+});
+
+test("guardianFromContact reads the contact and leaves the Case payload alone", () => {
+  const fromContact = guardianFromContact({
+    properties: {
+      firstname: "Jordan",
+      lastname: "Rivera",
+      email: "  Parent@Example.com "
+    }
+  });
+  assert.deepEqual(fromContact, {
+    GuardianFirstName: "Jordan",
+    GuardianLastName: "Rivera",
+    PrimaryEmail: "parent@example.com"
+  });
+
+  const payload = buildClientPayload({
+    deal: {
+      id: "deal-1",
+      properties: {
+        email: "case@example.com",
+        guardian_first_name: "Case",
+        guardian_last_name: "Sync"
+      }
+    }
+  });
+  assert.equal(payload.PrimaryEmail, "case@example.com");
+  assert.equal(payload.GuardianFirstName, "Case");
+  assert.equal(payload.GuardianLastName, "Sync");
 });
 
 test("validateClientPayload enforces required names", () => {
