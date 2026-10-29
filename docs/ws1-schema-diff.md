@@ -547,3 +547,25 @@ Production writeback properties were created from the sandbox definitions. Case 
 BT/RBT `postal_code` was not created. The guide maps Case `postal_code`, which already matches on both portals, and staff `postal_code_home` and `postal_code__work_`.
 
 `guardianFromContact` in `src/mappings/client/buildClientPayload.mjs` reads `firstname`, `lastname`, and `email` from a contact. `buildClientPayload` still reads the Case sync fields. The 10/28 diff-review section says the sync-property setup is pending, so the contact path is not the live mapping.
+
+## Sandbox parity creates
+
+Created on sandbox portal 50850427, account `UnitedCare_Test_Integration`, on 2026-10-28. A GET showed each name absent on the active list and on the archived list. The create copied the production label. Enumeration creates copied the production options. A second GET confirmed each name. The creates omitted `calculationFormula`. BT/RBT `postal_code` stays absent. The comparison tables above record the portal read from before these creates.
+
+| Internal name | Object | type | fieldType | Writable stand-in |
+| --- | --- | --- | --- | --- |
+| `hours_bt_work_schedule_1` | Case `0-3` | number | number | no |
+| `hours_bt_work_schedule_2` | Case `0-3` | number | number | no |
+| `total_hours_bt_12_work_schedule` | Case `0-3` | number | number | yes |
+| `total_hours_btrbt_12` | Case `0-3` | number | number | yes |
+| `full_name` | BCBA `2-55656302` | string | text | no |
+| `gender` | BCBA `2-55656302` | enumeration | select | yes |
+| `active_cases_count` | BT/RBT `2-55656309` | number | number | no |
+| `bt_to_rbt_path` | BT/RBT `2-55656309` | enumeration | select | no |
+| `state_home` | BT/RBT `2-55656309` | enumeration | select | yes |
+
+`total_hours_bt_12_work_schedule` and `total_hours_btrbt_12` are calculated in production. Production `fieldType` is `calculation_equation`, and `modificationMetadata.readOnlyValue` is true. Sandbox stores both as writable properties with type `number` and fieldType `number`.
+
+BCBA `gender` and BT/RBT `state_home` are calculated in production, and `modificationMetadata.readOnlyValue` is true on both. Sandbox stores them as writable enumeration selects with the production options. `gender` has 2 options and the label `Gender - ARCHIVED`. `state_home` has 50 options.
+
+The CLI account created the BCBA and BT/RBT properties. The same account returned 403 on Case schema writes because the key lacks `deals-write`. Case creates used the sandbox private app token in `.env`. A portal check on that token returned 50850427 before the writes.

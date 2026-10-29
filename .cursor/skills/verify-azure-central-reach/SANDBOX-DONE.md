@@ -83,6 +83,7 @@ Do not fold this into the sandbox run.
 | Comorbid and maladaptive | Re-read the production definitions of `comorbid_diagnosis__clinical`, `maladaptive_behaviors__clinical`, and `does_your_child_have_any_other_comorbid_diagnoses_` before any mapper change. United Care may delete the clinical properties before Thursday. |
 | BT/RBT `postal_code` fallback | Unresolved. Verify it. The BT/RBT payload falls back from `postal_code_home` to `postal_code`, and `postal_code` exists on neither portal's BT/RBT object, so the fallback returns nothing today. |
 | Guardian source | Confirm whether the Case sync properties `guardian_first_name`, `guardian_last_name`, and `email` remain the source. The code reads one Parent/Guardian Contact (association type 3, `contact_category` Parent/Guardian) when exactly one exists, and the Case fields otherwise. |
+| Calculated stand-ins | Sandbox `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`, BCBA `gender`, and BT/RBT `state_home` are writable. Production marks them calculated. No formula was copied. Confirm the production calculated values during the production pass. |
 | Out of both passes tonight | Staffing-signal implementation. Production poller. Real-client writes. |
 
 A later update should add `PRODUCTION-DONE.md` beside this file when that pass starts. Until then, this paragraph is the whole production verification contract.
