@@ -48,6 +48,26 @@ test("BT/RBT mapping builds expected safe payload", () => {
   assert.equal(validateEmployeePayload(mapped.employeePayload).isValid, true);
 });
 
+test("BT/RBT mailing state prefers state_home over location_home", () => {
+  const mapped = buildEmployeePayload({
+    employeeType: "bt_rbt",
+    config,
+    record: {
+      id: "r-state",
+      properties: {
+        hs_object_id: "r-state",
+        first_name: "Sam",
+        last_name: "Lee",
+        state_home: "New York",
+        location_home: "Colorado",
+        bt_rbt_type: "BT"
+      }
+    }
+  });
+
+  assert.equal(mapped.employeePayload.stateProvince, "NY");
+});
+
 test("BCBA mapping builds expected payload and metadata", () => {
   const mapped = buildEmployeePayload({
     employeeType: "bcba",

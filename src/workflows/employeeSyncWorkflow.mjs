@@ -59,6 +59,7 @@ const BT_RBT_PROPERTIES = [
   "home_apt",
   "location_city",
   "location_home",
+  "state_home",
   "location",
   "postal_code",
   "postal_code_home",

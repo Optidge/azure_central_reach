@@ -302,7 +302,7 @@ function legalName(properties, fullNameKey) {
 function buildBtRbtPayload({ record, config }) {
   const properties = record?.properties || {};
   const { firstName, lastName } = legalName(properties, "bt_name");
-  const stateCode = normalizeStateCode(properties.location_home);
+  const stateCode = normalizeStateCode(properties.state_home || properties.location_home);
   const stateCodes = workStateCodes(properties.location, properties.location_home);
   const btRbtType = String(properties.bt_rbt_type || "").trim().toUpperCase() || null;
 
