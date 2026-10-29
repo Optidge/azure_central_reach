@@ -1,5 +1,6 @@
 import { ServiceBusClient } from "@azure/service-bus";
 import { sha256 } from "./hash.mjs";
+import { LINKED_REPLAY_SOURCE } from "../constants/queues.mjs";
 
 let serviceBusClient = null;
 let clientSyncSender = null;
@@ -57,6 +58,28 @@ export async function sendClientSyncMessage(message) {
   });
 
   await clientSyncSender.sendMessages(outboundMessage);
+}
+
+async function scheduleReplay(sender, { body }, { replayCount, scheduledEnqueueTimeUtc, messageId }) {
+  if (!sender) {
+    throw new Error("Service Bus client is not initialized");
+  }
+  await sender.scheduleMessages(
+    { body: { ...body, source: LINKED_REPLAY_SOURCE, replayCount }, messageId },
+    new Date(scheduledEnqueueTimeUtc)
+  );
+}
+
+export async function scheduleClientSyncReplay(dealId, replay) {
+  await scheduleReplay(clientSyncSender, buildClientSyncMessage({ dealId }), replay);
+}
+
+export async function scheduleEmployeeSyncReplay(recordId, employeeType, replay) {
+  await scheduleReplay(
+    employeeSyncSender,
+    buildEmployeeSyncMessage({ recordId, employeeType }),
+    replay
+  );
 }
 
 export async function sendEmployeeSyncMessage(message) {

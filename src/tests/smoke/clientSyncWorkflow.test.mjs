@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  enterInCentralReachContainsYes,
-  runClientSyncWorkflow
-} from "../../workflows/clientSyncWorkflow.mjs";
+import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
+
+function dealWith(values) {
+  return async (dealId, requested = []) => ({
+    id: "deal-1",
+    properties: { ...Object.fromEntries(requested.map((name) => [name, null])), ...values }
+  });
+}
 
 function buildDeps(overrides = {}) {
   const calls = {
@@ -20,14 +24,11 @@ function buildDeps(overrides = {}) {
     createHubSpotClient: () => {},
     createCentralReachClient: () => {},
     createStateClient: () => {},
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: {
-        hs_object_id: "deal-1",
-        last_sync_hash: "old-hash",
-        client_id_number: "2001",
-        enter_in_central_reach: "Yes"
-      }
+    getDealById: dealWith({
+      hs_object_id: "deal-1",
+      last_sync_hash: "old-hash",
+      client_id_number: "2001",
+      enter_in_central_reach: "Yes"
     }),
     buildClientPayload: () => ({ FirstName: "Alex", LastName: "Rivera" }),
     validateClientPayload: () => ({ isValid: true, errors: [] }),
@@ -63,17 +64,14 @@ test("runClientSyncWorkflow writes success state and safe summary", async () => 
   assert.equal(calls.stateWrites[0].type, "success");
 });
 
-test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
+test("runClientSyncWorkflow writes nothing when the hash is unchanged", async () => {
   const { deps, calls } = buildDeps({
     hashPayload: () => "same-hash",
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: {
-        hs_object_id: "deal-1",
-        last_sync_hash: "same-hash",
-        client_id_number: "333",
-        enter_in_central_reach: "Insurance Card(s);Yes"
-      }
+    getDealById: dealWith({
+      hs_object_id: "deal-1",
+      last_sync_hash: "same-hash",
+      client_id_number: "333",
+      enter_in_central_reach: "Insurance Card(s);Yes"
     }),
     createOrUpdateClient: async () => {
       throw new Error("should not be called");
@@ -82,8 +80,8 @@ test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
 
   const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
   assert.equal(result.status, "noop");
-  assert.equal(calls.writebacks.length, 1);
-  assert.equal(calls.stateWrites[0].data.operation, "noop");
+  assert.equal(calls.writebacks.length, 0);
+  assert.equal(calls.stateWrites.length, 0);
 });
 
 test("runClientSyncWorkflow writes fail state and rethrows on errors", async () => {
@@ -101,20 +99,9 @@ test("runClientSyncWorkflow writes fail state and rethrows on errors", async () 
   assert.equal(calls.stateWrites[0].type, "fail");
 });
 
-test("enter_in_central_reach matches the Yes token, not a longer value", () => {
-  assert.equal(enterInCentralReachContainsYes("Yes"), true);
-  assert.equal(enterInCentralReachContainsYes("IEP's & Evals;Yes"), true);
-  assert.equal(enterInCentralReachContainsYes("Yes - Generic"), false);
-  assert.equal(enterInCentralReachContainsYes(""), false);
-  assert.equal(enterInCentralReachContainsYes(null), false);
-});
-
-test("runClientSyncWorkflow skips when the gate does not contain Yes", async () => {
+test("runClientSyncWorkflow skips an unlinked deal without the Yes token", async () => {
   const { deps, calls } = buildDeps({
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: { hs_object_id: "deal-1", enter_in_central_reach: "Insurance Card(s)" }
-    }),
+    getDealById: dealWith({ hs_object_id: "deal-1", enter_in_central_reach: "Insurance Card(s)" }),
     createOrUpdateClient: async () => {
       throw new Error("should not be called");
     }
@@ -125,4 +112,55 @@ test("runClientSyncWorkflow skips when the gate does not contain Yes", async () 
   assert.equal(result.operation, "noop");
   assert.equal(calls.writebacks.length, 0);
   assert.equal(calls.stateWrites.length, 0);
+});
+
+const NEVER_PROCESSED_DEAL = {
+  hs_object_id: "deal-1",
+  enter_in_central_reach: "Yes",
+  client_id_number: null,
+  last_sync_at: null
+};
+
+test("dry run stops after the hash compare with no upsert and no writeback", async () => {
+  const { deps, calls } = buildDeps({
+    getConfig: () => ({
+      hubspot: { crContactIdProperty: "client_id_number" },
+      ttl: { successTtlSeconds: 100, failTtlSeconds: 50 },
+      features: { syncDryRun: true }
+    }),
+    getDealById: dealWith(NEVER_PROCESSED_DEAL),
+    createOrUpdateClient: async () => {
+      throw new Error("should not be called");
+    }
+  });
+
+  const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
+  assert.equal(result.status, "dry-run");
+  assert.equal(calls.writebacks.length, 0);
+});
+
+test("an absent requested deal property fails closed with no upsert", async () => {
+  let upserts = 0;
+  const { deps, calls } = buildDeps({
+    getDealById: async (dealId, requested) => ({
+      id: "deal-1",
+      properties: {
+        ...Object.fromEntries(
+          requested.filter((name) => name !== "phi_gender").map((name) => [name, null])
+        ),
+        enter_in_central_reach: "Yes"
+      }
+    }),
+    createOrUpdateClient: async () => {
+      upserts += 1;
+      return { operation: "create", crContactId: "1" };
+    }
+  });
+
+  await assert.rejects(
+    runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps),
+    /RequestedPropertyAbsent: phi_gender/
+  );
+  assert.equal(upserts, 0);
+  assert.equal(calls.writebacks[0].properties.last_sync_error, "RequestedPropertyAbsent: phi_gender");
 });

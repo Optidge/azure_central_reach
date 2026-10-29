@@ -147,9 +147,10 @@ function clientDeps(overrides = {}) {
     acquireLease: async () => true,
     releaseLease: async () => {},
     getState: async () => overrides.prior || null,
-    getDealById: async () => ({
+    getDealById: async (dealId, requested = []) => ({
       ...overrides.deal,
       properties: {
+        ...Object.fromEntries(requested.map((name) => [name, null])),
         enter_in_central_reach: "Yes",
         ...(overrides.deal?.properties || {})
       }
@@ -242,9 +243,10 @@ test("employee timestamp shortcut no longer skips a mapped change", async () => 
       acquireLease: async () => true,
       releaseLease: async () => {},
       getState: async () => null,
-      getBtRbtRecordById: async () => ({
+      getBtRbtRecordById: async (recordId, objectTypeId, requested = []) => ({
         id: "1",
         properties: {
+          ...Object.fromEntries(requested.map((name) => [name, null])),
           hs_object_id: "1",
           hs_lastmodifieddate: "2026-01-01T00:00:00.000Z",
           integration_last_write: "2026-10-01T00:00:00.000Z",
@@ -282,7 +284,10 @@ test("overlapping lock does not let the second worker write", async () => {
     deal: { id: "deal-1", properties: { client_id_number: "1" } }
   });
   deps.acquireLease = async () => false;
-  await assert.rejects(runClientSyncWorkflow({ dealId: "deal-1" }, deps), /SyncInProgress/);
+  await assert.rejects(
+    runClientSyncWorkflow({ dealId: "deal-1", deliveryCount: 1 }, deps),
+    /SyncInProgress/
+  );
   assert.equal(calls.upserts.length, 0);
   assert.equal(calls.writebacks.length, 0);
 });

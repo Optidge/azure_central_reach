@@ -1,7 +1,7 @@
 import { app } from "@azure/functions";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
-import { QUEUE_WORKFLOWS } from "../constants/queues.mjs";
+import { LINKED_REPLAY_SOURCE, QUEUE_WORKFLOWS } from "../constants/queues.mjs";
 import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
 import { NEVER_PROCESSED_SOURCE } from "../lib/recordLifecycle.mjs";
 
@@ -11,7 +11,8 @@ const ALLOWED_SOURCES = new Set([
   "manualClientSyncTest",
   "hubspotWorkflow",
   "linkedRecheck",
-  NEVER_PROCESSED_SOURCE
+  NEVER_PROCESSED_SOURCE,
+  LINKED_REPLAY_SOURCE
 ]);
 
 function asNonEmptyString(value) {
@@ -99,7 +100,9 @@ export async function processClientQueue(message, context, dependencies = {}) {
       dealId: validated.dealId,
       hsLastModifiedDate: validated.hsLastModifiedDate,
       source: validated.source,
-      context
+      context,
+      deliveryCount: queueMeta.deliveryCount,
+      replayCount: Number(payload?.replayCount) || 0
     });
 
     safeLog("info", "Client queue message processed.", queueMeta);
