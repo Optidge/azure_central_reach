@@ -569,3 +569,37 @@ Created on sandbox portal 50850427, account `UnitedCare_Test_Integration`, on 20
 BCBA `gender` and BT/RBT `state_home` are calculated in production, and `modificationMetadata.readOnlyValue` is true on both. Sandbox stores them as writable enumeration selects with the production options. `gender` has 2 options and the label `Gender - ARCHIVED`. `state_home` has 50 options.
 
 The CLI account created the BCBA and BT/RBT properties. The same account returned 403 on Case schema writes because the key lacks `deals-write`. Case creates used the sandbox private app token in `.env`. A portal check on that token returned 50850427 before the writes.
+
+## Sandbox option adds
+
+On 2026-10-29, sandbox portal 50850427 gained the stored values below. The account is `UnitedCare_Test_Integration`. Production portal 50317927 was read only. A portal check before each write returned 50850427. Case `0-3` writes used the sandbox private app token. The BT/RBT write used the CLI account. Each update sent the full option list already on the property, with the new values appended. The body had no other fields. Field types stayed the same. No option was removed. No stored value that already matched was relabeled. No calculation formula was copied. `case_status` was not in this update. A later read still has `Warm`, `In Limbo`, and `Cold`. A later read of production Case `allergies` still has two options, `Confirmed` and `Denial`.
+
+A second GET after each successful update showed the new stored values and the previous ones.
+
+**Case `allergies`.** Created `Confirmed` with label `Yes`, and `Denial` with label `No`. Neither stored value was already present. `Yes (Confirmed)` and `No (Denial)` remain. Type is still `enumeration` and field type is still `radio`.
+
+**Case `insurance_2`.** Created nine stored values. The label matches the stored value on each. None of the nine were already present. `Medicaid FFS`, `Aetna`, `Cigna`, and `Other` remain.
+
+- `Beacon-Carelon`
+- `NY State Empire-Carelon`
+- `Emblem non HMO-Carelon`
+- `Emblem HMO-Carelon`
+- `Unicare Commercial-Carelon`
+- `Providence-Carelon`
+- `Anthem NY Commercial-Carelon`
+- `Child Health Plan-Carelon`
+- `Independence Health Association-Carelon`
+
+**Case `n1_what_type_of_insurance`.** Created `Medicaid FFS - NJ`, `Medicaid FFS - CO` with label `Medicaid - CO`, and `Unsure`. None of those stored values were already present. `Medicaid FFS`, `Commercial Enrolled`, and `Commercial OON` remain. The label on `Medicaid FFS` stayed `Medicaid FFS`.
+
+**Case `n2_what_type_of_insurance`.** Created `Medicaid FFS - NJ`, `Medicaid FFS - CO`, and `Unsure`. The label matches the stored value on each. None were already present. `Medicaid FFS`, `Commercial Enrolled`, and `Commercial OON` remain. The label on `Medicaid FFS` stayed `Medicaid FFS`.
+
+**Case `severity_level_clinical`.** Created `Level 1`, `Level 2`, and `Level 3`. None were already present. `5`, `4`, `3`, `2`, and `1` remain. Type is still `enumeration` and field type is still `radio`.
+
+**BT/RBT `bt_rbt_type`.** Created `BT to RBT`. The option is hidden, as it is in production. `RBT` and `BT` were already present and remain.
+
+**BT/RBT `gender`.** Hand edit. Nothing was created. The sandbox field is text, so `male` and `female` were not written.
+
+**BT/RBT `location_home`.** Hand edit. Nothing was created. The sandbox field is text, so `New York`, `New Jersey`, and `Colorado` were not written.
+
+**Contact `contact_category`.** The CLI account cannot edit the Contact schema on portal 50850427. The error names the missing scope `contacts-write`. A follow-up PATCH with the sandbox private app, after a portal check returned 50850427, added the five missing values. A GET now shows eight: `Parent/Guardian`, `BT/RBT`, `BCBA`, `Not a Lead`, `Grad Permit`, `Applicant`, `Team Member`, and `Billing Partner`. Production has no other value.
