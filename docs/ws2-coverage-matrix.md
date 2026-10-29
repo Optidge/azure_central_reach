@@ -241,6 +241,7 @@ The three object gates are rows 3.1, 5.1, and 6.1.
 
 - G1. Both workers return `skipped` when the gate does not contain `Yes`, even on a linked record. Read from `clientSyncWorkflow.mjs` and `employeeSyncWorkflow.mjs`. Expect this row to fail until the latch is coded.
 - G9. The code fetches `supervising_bcba` and `initial_assessment_bcba`. Danny's trigger names `supervising_bcba_name` and `ia_bcba_name` now exist in sandbox and are not read.
+- G7 and G9 (10/29). Linked recheck re-reads every linked Case, and the client hash includes metadata, so it catches a rollup change on its next full pass. The workflow trigger is for speed. Interval and cost are in [`poller-backup-contract.md`](poller-backup-contract.md).
 - G10 needs a re-read of the saved workflow definitions, not a sync run.
 
 ## Integration-owned fields outside the guide

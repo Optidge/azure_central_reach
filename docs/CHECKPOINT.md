@@ -50,7 +50,7 @@ HubSpot (50850427 sandbox)
   CentralReach Partners API
 ```
 
-**Authority:** [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md), [`hubspot-centralreach-field-mappings-current-state.md`](hubspot-centralreach-field-mappings-current-state.md), [`plans/phase-1a-client-intake-trigger.md`](plans/phase-1a-client-intake-trigger.md).
+**Authority:** [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md), [`hubspot-centralreach-field-mappings-current-state.md`](hubspot-centralreach-field-mappings-current-state.md), [`poller-backup-contract.md`](poller-backup-contract.md).
 
 **Environment split:** [`sandbox_vs_production_mvp.md`](sandbox_vs_production_mvp.md).
 
@@ -327,7 +327,17 @@ The overnight attempt failed. The app returned HTTP 202, then skipped the deal b
 
 One more sync has to clear CentralReach metadata `132304` so it matches the restored HubSpot `work_schedule_details`. Do not turn the timer on until Zeke asks. Do not merge. The other matrix rows stay open.
 
-The poller backup contract is written in [`poller-backup-contract.md`](poller-backup-contract.md). Case Status and Staffing Status are poller. The BCBA and BT name rollups are workflow. IA BCBA, RE BCBA, and BT associations are poller via linked recheck. The timer stays off.
+The poller backup contract is written in [`poller-backup-contract.md`](poller-backup-contract.md). Case Status and Staffing Status are poller. The BCBA and BT name rollups are workflow for speed, and linked recheck catches them on its next pass. IA BCBA, RE BCBA, and BT associations are poller via linked recheck. The timer stays off.
+
+### Poller direction — Zeke, 10/29
+
+Event-first. The poller stays as the backup until the workflows are proven to cover every mapped change, then it can be phased out. It must make far fewer HubSpot calls. The target is a 30-minute interval with retry by limit type and the Drive section 2 API rules applied. The design is settled in a fresh poller architecture thread. Start that thread from the proposal and the six open questions in [`poller-backup-contract.md`](poller-backup-contract.md).
+
+Findings from the 10/29 review that thread needs. Each is read from code, not proven at runtime.
+
+- Worker reads drive the cost, not the searches. A full recheck tick is about 800 HubSpot calls: about 231,000 a day at 5 minutes, or 38,500 at 30 minutes.
+- The sweep can re-enqueue a record on every tick, because the writeback PATCH moves `hs_lastmodifieddate` past `integration_last_write`.
+- The workers still require the checkbox to contain `Yes`. Zeke and Danny both say a known CentralReach id is the ongoing gate.
 
 ---
 
@@ -336,7 +346,7 @@ The poller backup contract is written in [`poller-backup-contract.md`](poller-ba
 | Link | Role |
 | --- | --- |
 | [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot. Webhook proof passed 2026-10-29 mid-morning. |
-| [`poller-backup-contract.md`](poller-backup-contract.md) | Poller vs workflow for Case Status, Staffing Status, name rollups, and staffing associations. Timer cost. |
+| [`poller-backup-contract.md`](poller-backup-contract.md) | Poller vs workflow for Case Status, Staffing Status, name rollups, and staffing associations. Timer cost, HubSpot limits, the 10/29 direction, and open questions for the poller architecture thread. |
 | [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md) | pstack read order, prompts, transcript IDs |
 | [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) | Local harness vs sandbox done vs production verification tomorrow |
 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Drive + repo index |

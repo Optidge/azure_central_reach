@@ -29,7 +29,7 @@
 | What the code *does today* on `main` | [`hubspot-centralreach-field-mappings-current-state.md`](hubspot-centralreach-field-mappings-current-state.md) |
 | What we are *trying to finish* in sandbox | [`Change Detection Completion Phase.md`](Change Detection Completion Phase.md) |
 | Sandbox vs prod portals and app settings | [`sandbox_vs_production_mvp.md`](sandbox_vs_production_mvp.md) |
-| Parallel agent rules (do not cross streams) | [`plans/PARALLEL-COORDINATION.md`](plans/PARALLEL-COORDINATION.md) |
+| Parallel agent rules (do not cross streams) | [`CHECKPOINT.md`](CHECKPOINT.md) agent / session hygiene and the workstream notes there |
 
 **Rule:** Drive wins for business rules. [`CHECKPOINT.md`](CHECKPOINT.md) “Danny — 10/28” wins over older repo waiting lists until Danny folds those answers into the guide body. The repo mapping doc wins for what the code does on the commit you are reviewing.
 
@@ -42,8 +42,8 @@ Read in this sequence unless pstack is scoped to one topic only.
 | # | Document | Why |
 | --- | --- | --- |
 | 1 | [`CHECKPOINT.md`](CHECKPOINT.md) | Current branch, deploy baseline, Danny 10/28 timing table, open test rows |
-| 2 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Links and phase pointer |
-| 3 | [`plans/phase-1a-client-intake-trigger.md`](plans/phase-1a-client-intake-trigger.md) | Confirmed MVP: webhook primary, poller backup. Timer is off on the app today. Sandbox end-to-end turns it on and proves it. |
+| 2 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Links and where to look next |
+| 3 | [`poller-backup-contract.md`](poller-backup-contract.md) | Webhook primary, poller backup. Timer is off. 10/29 direction and open questions for the poller architecture thread. |
 | 4 | [`hubspot-centralreach-field-mappings-current-state.md`](hubspot-centralreach-field-mappings-current-state.md) | Runtime flow, change detection, sensitive tier |
 | 5 | [`Change Detection Completion Phase.md`](Change Detection Completion Phase.md) | Completion criteria, sync-property read path, open decisions table |
 | 6 | [`sandbox_vs_production_mvp.md`](sandbox_vs_production_mvp.md) | Portal IDs, queues, prod inventory |

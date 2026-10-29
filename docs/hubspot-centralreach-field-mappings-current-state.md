@@ -4,7 +4,7 @@ Documentation of field mappings, transforms, and **change detection** implemente
 
 **Business source of truth (field map, triggers, labels):** [Google Drive — Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit). See [`docs/SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md). When this file and Google Drive differ, the Drive doc wins for *what we should build*; this file wins for *what the repo does now*.
 
-**Sandbox trigger (Oct 25, 2026):** On portal `50850427`, the primary path is a HubSpot workflow webhook, `POST /api/hubspot-webhook`. The body is `objectTypeId` and `recordId` only. Azure reads the mapped values. `intakePoller` is disabled on `centralreachserverless` **today**. That is the current app setting, not the finished architecture. Sandbox end-to-end turns the timer on and proves a poller-only sync through the same queues. See `docs/plans/phase-1a-client-intake-trigger.md` and `.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`.
+**Sandbox trigger (Oct 25, 2026):** On portal `50850427`, the primary path is a HubSpot workflow webhook, `POST /api/hubspot-webhook`. The body is `objectTypeId` and `recordId` only. Azure reads the mapped values. `intakePoller` is disabled on `centralreachserverless` **today**. That is the current app setting, not the finished architecture. Sandbox end-to-end turns the timer on and proves a poller-only sync through the same queues. See [`poller-backup-contract.md`](poller-backup-contract.md), [`CHECKPOINT.md`](CHECKPOINT.md), and `.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`.
 
 **Source of truth in code:** mapping modules under `src/mappings/`, constants in `src/constants/centralReach.mjs`, orchestration in `src/workflows/`.
 
@@ -112,7 +112,7 @@ When enqueued, Service Bus message includes `dealId`, `hsLastModifiedDate`, `wor
 | `hs_lastmodifieddate` | Lookback filter + must be newer than integration write for re-sync |
 | `integration_last_write` | Compared to `hs_lastmodifieddate` in `shouldSyncDeal`; updated by client sync writeback after CR upsert |
 
-After a successful client sync, the workflow sets `integration_last_write` and `updated_by_integration`, which prevents re-enqueue until the deal is modified again in HubSpot.
+After a client sync, including a `noop`, the workflow sets `integration_last_write` and `updated_by_integration`. The value comes from the Azure clock before the PATCH. HubSpot stamps `hs_lastmodifieddate` when it applies the PATCH, so the sweep can re-enqueue the deal on the next tick. See [`poller-backup-contract.md`](poller-backup-contract.md).
 
 ### Related env vars (deals / intake)
 
@@ -148,7 +148,7 @@ Rule for all three families: if `integration_last_write` is empty → **sync**; 
 | **BT/RBT** | `hs_lastmodifieddate`, `integration_last_write` | Same comparison as deals (`shouldSyncBtRbt` → `shouldSyncDeal`). |
 | **BCBA** | `hs_lastmodifieddate`, `integration_last_write`, `updated_by_integration` | Reads `updated_by_integration`; both branches still require last-modified newer than last write. |
 
-These properties are **not** mapped to CentralReach. After a successful (or employee `noop`/`blocked`) writeback, the workflow sets `integration_last_write` (and usually `updated_by_integration`), which blocks re-enqueue until HubSpot modifies the record again.
+These properties are **not** mapped to CentralReach. After a `success` or `noop` writeback (employees also on `blocked`), the workflow sets `integration_last_write` and usually `updated_by_integration`. The writeback PATCH itself moves `hs_lastmodifieddate` past that value, so it does not reliably block a sweep re-enqueue. See [`poller-backup-contract.md`](poller-backup-contract.md).
 
 ### Layer 2 — Content hash fields (`last_sync_hash`)
 
@@ -363,14 +363,14 @@ Values come from the sync result (CR contact ID) or the workflow (timestamps, ha
 | --- | --- | --- | --- |
 | `HUBSPOT_CR_CONTACT_ID_PROPERTY` (env; fallback `client_id_number`) | `contactId` (CR API response) | String of ID from create/update response (`contactId`, `id`, etc.) | CentralReach → HubSpot |
 | `central_reach_link_to_client` | `contactId` (CR API response) | Built URL: `https://members.centralreach.com/#contacts/details/?id={contactId}` | CentralReach → HubSpot |
-| `last_sync_hash` | *(integration)* mapped client contact JSON | SHA-256 of mapped client contact body (metadata **not** included in hash) | CentralReach → HubSpot |
+| `last_sync_hash` | *(integration)* mapped client state | SHA-256 of core payload, metadata, label ids, and staffing association ids (see Layer 2 above) | CentralReach → HubSpot |
 | `last_sync_at` | *(integration)* workflow | ISO timestamp | CentralReach → HubSpot |
 | `last_sync_status` | *(integration)* workflow | `success`, `noop`, or `error` | CentralReach → HubSpot |
 | `last_sync_error` | *(integration)* workflow | Empty string on success; error message (truncated) on failure | CentralReach → HubSpot |
 | `integration_last_write` | *(integration)* workflow | ISO timestamp on success path | CentralReach → HubSpot |
 | `updated_by_integration` | *(integration)* workflow | Set to `true` on success path | CentralReach → HubSpot |
 
-> **Note:** On success, **client metadata and labels are still written to CentralReach even when the identity payload hash matches** (`operation: noop`). Only the contact body PUT is skipped in that case.
+> **Note:** On a full hash match (`operation: noop`), the contact PUT and the metadata and label writes are all skipped. The HubSpot writeback PATCH still runs.
 
 ---
 
@@ -470,7 +470,7 @@ State code comes from `location_home` via the same US state normalization used o
 | `HUBSPOT_EMPLOYEE_ID_PROPERTY` (env; default `employee_id`) | `contactId` (CR API response) | String of contact ID from create/update | CentralReach → HubSpot |
 | `central_reach_link_to_rt_rbt` | `contactId` (CR API response) | Built CR profile URL (BT/RBT records only) | CentralReach → HubSpot |
 | `central_reach_record_link` | `contactId` (CR API response) | Built CR profile URL (BCBA records only) | CentralReach → HubSpot |
-| `last_sync_hash` | *(integration)* employee JSON + metadata map | SHA-256 of stable-sorted `{ employee, metadata }` object | CentralReach → HubSpot |
+| `last_sync_hash` | *(integration)* employee JSON, metadata map, and label ids | SHA-256 of stable-sorted `{ employee, metadata, labels }` object | CentralReach → HubSpot |
 | `last_sync_at` | *(integration)* workflow | ISO timestamp | CentralReach → HubSpot |
 | `last_sync_status` | *(integration)* workflow | `success`, `noop`, `blocked`, or `error` | CentralReach → HubSpot |
 | `last_sync_error` | *(integration)* workflow | Empty or blocked reason / error message | CentralReach → HubSpot |
@@ -484,7 +484,7 @@ State code comes from `location_home` via the same US state normalization used o
 ## Callouts (current behavior)
 
 1. **Change detection reference:** Full eligibility + hash field lists are in **[Change detection (current codebase)](#change-detection-current-codebase)** above (as of 2026-10-27).
-2. **Client vs employee hash scope:** Client `last_sync_hash` is **contact body only**; employee hash is **body + metadata**. Client metadata still writes on contact-body noop.
+2. **Hash scope:** Both hashes cover the contact body, metadata, and label ids. The client hash also covers staffing association ids. A full match skips the CentralReach writes and still patches HubSpot bookkeeping.
 3. **Employee update preservation:** For records with an existing CR contact ID, outbound PUT may keep CR `externalSystemId` and `primaryEmail` instead of HubSpot-mapped values (`buildEmployeePayloadForContactId`).
 4. **Shared metadata ID:** HubSpot record link for employees uses metadata field **`138703`** for both BT/RBT and BCBA (constant names differ in `centralReach.mjs`; ID is the same).
 5. **Metadata empty values:** Blank HubSpot values do not send a CR metadata PUT that clears existing CR values.

@@ -78,4 +78,4 @@ Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other 
 
 The poller marker passed and the timer is off. CentralReach metadata `132304` still has the test marker `POLL1`. The remaining work is that restore, then the other `not run` matrix rows. Production poller stays off.
 
-The poller-or-workflow contract for Case Status, Staffing Status, the name rollups, and the staffing associations is in [`poller-backup-contract.md`](poller-backup-contract.md). Read that before changing the timer or the workflows.
+The poller-or-workflow contract for Case Status, Staffing Status, the name rollups, and the staffing associations is in [`poller-backup-contract.md`](poller-backup-contract.md). Read that before changing the timer or the workflows. Zeke's 10/29 direction (event-first, poller kept as the backup at a 30-minute target with far fewer calls) and the open questions for the poller architecture thread are in the same file.

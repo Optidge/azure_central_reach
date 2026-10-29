@@ -191,7 +191,7 @@ Links are GitHub `main`. Symbol names are the stable handles. Line numbers on `m
 - [Google Doc — Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit) — sections 3, 4, 5, 6, 7, 8, 9, and 11
 - [`docs/SOURCE-OF-TRUTH.md`](https://github.com/Optidge/azure_central_reach/blob/main/docs/SOURCE-OF-TRUTH.md)
 - [`docs/hubspot-centralreach-field-mappings-current-state.md`](https://github.com/Optidge/azure_central_reach/blob/main/docs/hubspot-centralreach-field-mappings-current-state.md) — as-built, may lag the Google Doc
-- [`docs/plans/phase-1a-client-intake-trigger.md`](https://github.com/Optidge/azure_central_reach/blob/main/docs/plans/phase-1a-client-intake-trigger.md) — webhook primary, poller backup
+- [`docs/poller-backup-contract.md`](https://github.com/Optidge/azure_central_reach/blob/main/docs/poller-backup-contract.md) — webhook primary, poller backup
 - [`f215d9d`](https://github.com/Optidge/azure_central_reach/commit/f215d9dc945ae494a5813ffb883b0abe09894352) — current hybrid detection commit
 
 ### Fetch lists and orchestration
