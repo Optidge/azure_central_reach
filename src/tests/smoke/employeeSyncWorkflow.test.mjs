@@ -1,9 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  enteredInCentralReachContainsYes,
-  runEmployeeSyncWorkflow
-} from "../../workflows/employeeSyncWorkflow.mjs";
+import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+
+function withRequestedKeys(fetchRecord) {
+  return async (recordId, objectTypeId, requested = []) => {
+    const record = await fetchRecord(recordId, objectTypeId, requested);
+    if (!record) {
+      return record;
+    }
+    return {
+      ...record,
+      properties: {
+        ...Object.fromEntries(requested.map((name) => [name, null])),
+        ...record.properties
+      }
+    };
+  };
+}
 
 function buildDeps(overrides = {}) {
   const calls = {
@@ -73,7 +86,10 @@ function buildDeps(overrides = {}) {
     buildErrorLog: () => ({})
   };
 
-  return { deps: { ...deps, ...overrides }, calls };
+  const merged = { ...deps, ...overrides };
+  merged.getBtRbtRecordById = withRequestedKeys(merged.getBtRbtRecordById);
+  merged.getBcbaRecordById = withRequestedKeys(merged.getBcbaRecordById);
+  return { deps: merged, calls };
 }
 
 test("workflow writes success state on successful update", async () => {
@@ -112,12 +128,18 @@ test("workflow returns noop when hash is unchanged", async () => {
 
   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "noop");
-  assert.equal(calls.stateWrites[0].data.operation, "noop");
+  assert.equal(calls.writebacks.length, 0);
+  assert.equal(calls.stateWrites.length, 0);
 });
 
 test("hash match does not noop when employee_id is missing", async () => {
   let upsertCalled = false;
   const { deps } = buildDeps({
+    getConfig: () => ({
+      hubspot: { btRbtObjectTypeId: "2-btrbt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
+      features: { allowEmployeeCreate: true, putOnlyMode: false },
+      ttl: { successTtlSeconds: 120, failTtlSeconds: 60 }
+    }),
     getBtRbtRecordById: async () => ({
       id: "1",
       properties: {
@@ -142,8 +164,8 @@ test("hash match does not noop when employee_id is missing", async () => {
   assert.equal(result.crContactId, "101");
 });
 
-test("workflow returns blocked when creation is disabled", async () => {
-  const { deps } = buildDeps({
+test("workflow blocks an unlinked employee before any upsert when creation is disabled", async () => {
+  const { deps, calls } = buildDeps({
     getBtRbtRecordById: async () => ({
       id: "1",
       properties: {
@@ -153,15 +175,23 @@ test("workflow returns blocked when creation is disabled", async () => {
         entered_in_centralreach: "Yes"
       }
     }),
-    createOrUpdateEmployee: async () => ({ operation: "blocked", reason: "disabled" })
+    createOrUpdateEmployee: async () => {
+      throw new Error("should not be called");
+    }
   });
 
   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "blocked");
+  assert.equal(calls.writebacks[0].properties.last_sync_status, "blocked");
 });
 
 test("workflow writes BCBA CentralReach link property", async () => {
   const { deps, calls } = buildDeps({
+    getConfig: () => ({
+      hubspot: { btRbtObjectTypeId: "2-btrbt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
+      features: { allowEmployeeCreate: true, putOnlyMode: false },
+      ttl: { successTtlSeconds: 120, failTtlSeconds: 60 }
+    }),
     createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "200" }),
     buildEmployeePayload: () => ({
       employeePayload: { externalSystemId: "2", firstName: "Pat", lastName: "Morgan" },
@@ -295,14 +325,6 @@ test("workflow logs warning when metadata write reports failed fields", async ()
   assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
 });
 
-test("entered_in_centralreach matches the Yes token, not a longer value", () => {
-  assert.equal(enteredInCentralReachContainsYes("Yes"), true);
-  assert.equal(enteredInCentralReachContainsYes("Yes - Active"), false);
-  assert.equal(enteredInCentralReachContainsYes("Yes - Generic"), false);
-  assert.equal(enteredInCentralReachContainsYes(""), false);
-  assert.equal(enteredInCentralReachContainsYes(null), false);
-});
-
 test("workflow skips when entered_in_centralreach does not contain Yes", async () => {
   const { deps, calls } = buildDeps({
     getBtRbtRecordById: async () => ({
@@ -321,7 +343,7 @@ test("workflow skips when entered_in_centralreach does not contain Yes", async (
   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "skipped");
   assert.equal(result.operation, "noop");
-  assert.equal(result.reason, "entered_in_centralreach does not contain Yes");
+  assert.equal(result.reason, "no-id-and-box-not-yes");
   assert.equal(calls.writebacks.length, 0);
   assert.equal(calls.stateWrites.length, 0);
 });
@@ -336,4 +358,21 @@ test("workflow writes fail state and rethrows errors", async () => {
     /PayloadValidationError/
   );
   assert.equal(calls.stateWrites[0].type, "fail");
+});
+
+test("dry run stops after the hash compare with no upsert and no writeback", async () => {
+  const { deps, calls } = buildDeps({
+    getConfig: () => ({
+      hubspot: { btRbtObjectTypeId: "2-btrbt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
+      features: { allowEmployeeCreate: true, putOnlyMode: false, syncDryRun: true },
+      ttl: { successTtlSeconds: 120, failTtlSeconds: 60 }
+    }),
+    createOrUpdateEmployee: async () => {
+      throw new Error("should not be called");
+    }
+  });
+
+  const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+  assert.equal(result.status, "dry-run");
+  assert.equal(calls.writebacks.length, 0);
 });
