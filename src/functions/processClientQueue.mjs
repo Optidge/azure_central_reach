@@ -3,13 +3,15 @@ import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
 import { QUEUE_WORKFLOWS } from "../constants/queues.mjs";
 import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
+import { NEVER_PROCESSED_SOURCE } from "../lib/recordLifecycle.mjs";
 
 const ALLOWED_SOURCES = new Set([
   "intakePoller",
   "clientSyncHttpTest",
   "manualClientSyncTest",
   "hubspotWorkflow",
-  "linkedRecheck"
+  "linkedRecheck",
+  NEVER_PROCESSED_SOURCE
 ]);
 
 function asNonEmptyString(value) {

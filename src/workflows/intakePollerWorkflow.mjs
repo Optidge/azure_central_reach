@@ -1,18 +1,16 @@
 import { getIntakePollerConfig } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
+import { endTickOnRateLimit } from "../lib/retry.mjs";
 import {
   createHubSpotClient,
-  searchIntakeCompleteDeals,
-  searchEligibleBtRbtRecords,
-  searchEligibleBcbaRecords,
+  searchNeverProcessedRecords,
   searchRecordsByKnownProperty
 } from "../lib/hubspotClient.mjs";
 import {
   createStateClient,
   acquireLease,
   releaseLease,
-  hasState,
   putState,
   getState
 } from "../lib/cosmosState.mjs";
@@ -21,114 +19,93 @@ import {
   sendClientSyncMessage,
   sendEmployeeSyncMessage
 } from "../lib/serviceBusClient.mjs";
+import {
+  NEVER_PROCESSED_SOURCE,
+  caseBinding,
+  deriveRecordState,
+  employeeBinding,
+  parseSnapshot,
+  sweepDecision
+} from "../lib/recordLifecycle.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
 
 const POLLER_LEASE_PK = "workflow:intake-poller";
 const POLLER_LEASE_ID = "active-lease";
-const DEDUPE_PK = "dedupe:client-sync";
-const EMPLOYEE_DEDUPE_PK = "dedupe:employee-sync";
-
-function parseTimestamp(value) {
-  if (!value) {
-    return null;
-  }
-
-  const asEpoch = new Date(value).getTime();
-  return Number.isFinite(asEpoch) ? asEpoch : null;
-}
-
-export function shouldSyncDeal(candidate) {
-  const properties = candidate?.properties || {};
-  const hsLastModifiedDate = parseTimestamp(properties.hs_lastmodifieddate);
-  const integrationLastWrite = parseTimestamp(properties.integration_last_write);
-
-  if (!integrationLastWrite) {
-    return true;
-  }
-  if (!hsLastModifiedDate) {
-    return false;
-  }
-
-  return hsLastModifiedDate > integrationLastWrite;
-}
-
-export function shouldSyncBtRbt(candidate) {
-  return shouldSyncDeal(candidate);
-}
-
-function parseBool(value) {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "true" || normalized === "1" || normalized === "yes";
-  }
-  if (typeof value === "number") {
-    return value === 1;
-  }
-  return false;
-}
-
-export function shouldSyncBcba(candidate) {
-  const properties = candidate?.properties || {};
-  const hsLastModifiedDate = parseTimestamp(properties.hs_lastmodifieddate);
-  const integrationLastWrite = parseTimestamp(properties.integration_last_write);
-  const updatedByIntegration = parseBool(properties.updated_by_integration);
-
-  if (!integrationLastWrite) {
-    return true;
-  }
-  if (!hsLastModifiedDate) {
-    return false;
-  }
-  if (updatedByIntegration) {
-    return hsLastModifiedDate > integrationLastWrite;
-  }
-  return hsLastModifiedDate > integrationLastWrite;
-}
 
 export function isLinkedForOngoingRefresh(candidate, idProperty) {
   return Boolean(String(candidate?.properties?.[idProperty] || "").trim());
 }
 
-export function buildIntakeDedupeId(dealId, hsLastModifiedDate) {
-  return `${String(dealId)}:${String(hsLastModifiedDate)}`;
+function sweepTargets(config, send) {
+  const employeeTarget = (entity, objectTypeId, employeeType) => ({
+    entity,
+    objectTypeId,
+    binding: employeeBinding(config.limits.employeeIdProperty),
+    send: (recordId, hsLastModifiedDate) =>
+      send.employee({
+        workflow: "employeeSync",
+        source: NEVER_PROCESSED_SOURCE,
+        employeeType,
+        recordId,
+        hsLastModifiedDate
+      })
+  });
+
+  return [
+    {
+      entity: "client",
+      objectTypeId: "deals",
+      binding: caseBinding(config.limits.crContactIdProperty),
+      send: (recordId, hsLastModifiedDate) =>
+        send.client({
+          dealId: recordId,
+          hsLastModifiedDate,
+          source: NEVER_PROCESSED_SOURCE,
+          workflow: "clientSync"
+        })
+    },
+    employeeTarget("bt_rbt", config.hubspot.btRbtObjectTypeId, HUBSPOT_EMPLOYEE_TYPES.BT_RBT),
+    employeeTarget("bcba", config.hubspot.bcbaObjectTypeId, HUBSPOT_EMPLOYEE_TYPES.BCBA)
+  ];
 }
 
-function buildEmployeeDedupeId(employeeType, recordId, hsLastModifiedDate) {
-  return `${String(employeeType)}:${String(recordId)}:${String(hsLastModifiedDate)}`;
+function recordIdOf(candidate) {
+  return String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
 }
 
-export async function runIntakePollerWorkflow(context) {
+export async function runIntakePollerWorkflow(context, dependencies = {}) {
   void context;
-  const config = getIntakePollerConfig();
-  createHubSpotClient(config);
-  createStateClient(config);
-  createServiceBusClient(config);
+  const config = (dependencies.getIntakePollerConfig || getIntakePollerConfig)();
+  const claimLease = dependencies.acquireLease || acquireLease;
+  const dropLease = dependencies.releaseLease || releaseLease;
+  const searchNeverProcessed =
+    dependencies.searchNeverProcessedRecords || searchNeverProcessedRecords;
+  const searchKnown = dependencies.searchRecordsByKnownProperty || searchRecordsByKnownProperty;
+  const readState = dependencies.getState || getState;
+  const saveState = dependencies.putState || putState;
+  const send = {
+    client: dependencies.sendClientSyncMessage || sendClientSyncMessage,
+    employee: dependencies.sendEmployeeSyncMessage || sendEmployeeSyncMessage
+  };
+  const nowMs = (dependencies.now || Date.now)();
+  (dependencies.createHubSpotClient || createHubSpotClient)(config);
+  (dependencies.createStateClient || createStateClient)(config);
+  (dependencies.createServiceBusClient || createServiceBusClient)(config);
 
   const summary = {
     leaseAcquired: false,
-    candidatesFetched: 0,
-    skippedAlreadyProcessed: 0,
-    skippedShouldSyncFalse: 0,
+    createSweepEnabled: config.sweep.createSweepEnabled,
+    sweep: {},
     messagesEnqueued: 0,
-    btRbtCandidatesFetched: 0,
-    btRbtMessagesEnqueued: 0,
-    btRbtSkippedAlreadyProcessed: 0,
-    btRbtSkippedShouldSyncFalse: 0,
-    bcbaCandidatesFetched: 0,
-    bcbaMessagesEnqueued: 0,
-    bcbaSkippedAlreadyProcessed: 0,
-    bcbaSkippedShouldSyncFalse: 0,
     linkedRecheckEnabled: false,
     linkedClientEnqueued: 0,
     linkedBtRbtEnqueued: 0,
     linkedBcbaEnqueued: 0,
+    endedOnRateLimit: false,
     errorsCount: 0
   };
 
-  const leaseAcquired = await acquireLease({
+  const leaseAcquired = await claimLease({
     pk: POLLER_LEASE_PK,
     id: POLLER_LEASE_ID,
     ttlSeconds: config.ttl.leaseTtlSeconds
@@ -140,250 +117,69 @@ export async function runIntakePollerWorkflow(context) {
     return summary;
   }
 
+  const recordFailure = (stage, error, recordId) => {
+    summary.errorsCount += 1;
+    safeLog("error", "Intake poller step failed.", buildErrorLog({
+      workflow: "intakePoller",
+      stage,
+      error,
+      recordId
+    }));
+    if (endTickOnRateLimit(error).endTick) {
+      summary.endedOnRateLimit = true;
+    }
+  };
+
   try {
-    let candidates = [];
-    try {
-      candidates = await searchIntakeCompleteDeals({
-        limit: config.limits.maxDealsPerRun,
-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes,
-        pipelineId: config.hubspot.dealPipelineId,
-        stageAllowlist: config.hubspot.stageAllowlist
-      });
-    } catch (error) {
-      safeLog(
-        "error",
-        "HubSpot intake search failed.",
-        buildErrorLog({ workflow: "intakePoller", stage: "searchDeals", error })
-      );
-      summary.errorsCount += 1;
-      return summary;
-    }
+    if (config.sweep.createSweepEnabled) {
+      const modifiedBeforeIso = new Date(
+        nowMs - config.sweep.graceMinutes * 60 * 1000
+      ).toISOString();
 
-    summary.candidatesFetched = candidates.length;
-
-    for (const candidate of candidates) {
-      const dealId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-      const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
-      if (!dealId) {
-        summary.skippedShouldSyncFalse += 1;
-        continue;
-      }
-
-      if (!hsLastModifiedDate || !shouldSyncDeal(candidate)) {
-        summary.skippedShouldSyncFalse += 1;
-        continue;
-      }
-
-      const dedupeId = buildIntakeDedupeId(dealId, hsLastModifiedDate);
-      const alreadyProcessed = await hasState({ pk: DEDUPE_PK, id: dedupeId });
-
-      if (alreadyProcessed) {
-        summary.skippedAlreadyProcessed += 1;
-        continue;
-      }
-
-      try {
-        await sendClientSyncMessage({
-          dealId,
-          hsLastModifiedDate,
-          source: "intakePoller",
-          workflow: "clientSync"
-        });
-        summary.messagesEnqueued += 1;
-
-        await putState({
-          pk: DEDUPE_PK,
-          id: dedupeId,
-          type: "dedupe",
-          ttlSeconds: config.ttl.dedupeTtlSeconds,
-          data: {
-            module: "client",
-            source: "intakePoller"
+      for (const target of sweepTargets(config, send)) {
+        const counts = { fetched: 0, enqueued: 0, skipped: 0 };
+        summary.sweep[target.entity] = counts;
+        let candidates;
+        try {
+          candidates = await searchNeverProcessed({
+            objectTypeId: target.objectTypeId,
+            checkboxProperty: target.binding.checkboxProperty,
+            idProperty: target.binding.centralReachIdProperty,
+            modifiedBeforeIso
+          });
+        } catch (error) {
+          recordFailure(`sweep:${target.entity}`, error);
+          if (summary.endedOnRateLimit) {
+            return summary;
           }
-        });
-      } catch (error) {
-        summary.errorsCount += 1;
-        safeLog(
-          "error",
-          "Failed processing intake candidate.",
-          buildErrorLog({
-            workflow: "intakePoller",
-            stage: "processCandidate",
-            error,
-            recordId: dealId
-          })
-        );
-      }
-    }
-
-    try {
-      const btRbtCandidates = await searchEligibleBtRbtRecords({
-        objectTypeId: config.hubspot.btRbtObjectTypeId,
-        pipelineId: config.hubspot.btRbtPipelineId,
-        stageAllowlist: config.hubspot.btRbtStageAllowlist,
-        limit: config.limits.maxBtRbtPerRun,
-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes
-      });
-      summary.btRbtCandidatesFetched = btRbtCandidates.length;
-
-      for (const candidate of btRbtCandidates) {
-        const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-        const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
-        if (!recordId) {
-          summary.btRbtSkippedShouldSyncFalse += 1;
           continue;
         }
+        counts.fetched = candidates.length;
 
-        if (!hsLastModifiedDate || !shouldSyncBtRbt(candidate)) {
-          summary.btRbtSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        const dedupeId = buildEmployeeDedupeId(
-          HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-          recordId,
-          hsLastModifiedDate
-        );
-        const alreadyProcessed = await hasState({ pk: EMPLOYEE_DEDUPE_PK, id: dedupeId });
-        if (alreadyProcessed) {
-          summary.btRbtSkippedAlreadyProcessed += 1;
-          continue;
-        }
-
-        try {
-          await sendEmployeeSyncMessage({
-            workflow: "employeeSync",
-            source: "employeePoller",
-            employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-            recordId,
-            hsLastModifiedDate
-          });
-          summary.btRbtMessagesEnqueued += 1;
-
-          await putState({
-            pk: EMPLOYEE_DEDUPE_PK,
-            id: dedupeId,
-            type: "dedupe",
-            ttlSeconds: config.ttl.dedupeTtlSeconds,
-            data: {
-              module: "employee",
-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-              source: "employeePoller"
-            }
-          });
-        } catch (error) {
-          summary.errorsCount += 1;
-          safeLog(
-            "error",
-            "Failed processing BT/RBT candidate.",
-            buildErrorLog({
-              workflow: "intakePoller",
-              stage: "processBtRbtCandidate",
-              error,
-              recordId
-            })
+        for (const candidate of candidates) {
+          const recordId = recordIdOf(candidate);
+          const state = deriveRecordState(
+            parseSnapshot(candidate?.properties || {}, target.binding, recordId)
           );
+          const decision = sweepDecision(state, {
+            now: nowMs,
+            createSweepEnabled: config.sweep.createSweepEnabled,
+            graceMinutes: config.sweep.graceMinutes
+          });
+          if (!recordId || !decision.enqueue) {
+            counts.skipped += 1;
+            continue;
+          }
+          try {
+            await target.send(recordId, String(candidate.properties.hs_lastmodifieddate));
+            counts.enqueued += 1;
+            summary.messagesEnqueued += 1;
+          } catch (error) {
+            recordFailure(`sweepSend:${target.entity}`, error, recordId);
+          }
         }
       }
-    } catch (error) {
-      summary.errorsCount += 1;
-      safeLog(
-        "error",
-        "BT/RBT poller search failed.",
-        buildErrorLog({
-          workflow: "intakePoller",
-          stage: "searchBtRbt",
-          error
-        })
-      );
     }
-
-    try {
-      const bcbaCandidates = await searchEligibleBcbaRecords({
-        objectTypeId: config.hubspot.bcbaObjectTypeId,
-        pipelineId: config.hubspot.bcbaPipelineId,
-        stageAllowlist: config.hubspot.bcbaStageAllowlist,
-        limit: config.limits.maxBcbaPerRun,
-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes
-      });
-      summary.bcbaCandidatesFetched = bcbaCandidates.length;
-
-      for (const candidate of bcbaCandidates) {
-        const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-        const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
-        if (!recordId) {
-          summary.bcbaSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        if (!hsLastModifiedDate || !shouldSyncBcba(candidate)) {
-          summary.bcbaSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        const dedupeId = buildEmployeeDedupeId(
-          HUBSPOT_EMPLOYEE_TYPES.BCBA,
-          recordId,
-          hsLastModifiedDate
-        );
-        const alreadyProcessed = await hasState({ pk: EMPLOYEE_DEDUPE_PK, id: dedupeId });
-        if (alreadyProcessed) {
-          summary.bcbaSkippedAlreadyProcessed += 1;
-          continue;
-        }
-
-        try {
-          await sendEmployeeSyncMessage({
-            workflow: "employeeSync",
-            source: "employeePoller",
-            employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
-            recordId,
-            hsLastModifiedDate
-          });
-          summary.bcbaMessagesEnqueued += 1;
-
-          await putState({
-            pk: EMPLOYEE_DEDUPE_PK,
-            id: dedupeId,
-            type: "dedupe",
-            ttlSeconds: config.ttl.dedupeTtlSeconds,
-            data: {
-              module: "employee",
-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
-              source: "employeePoller"
-            }
-          });
-        } catch (error) {
-          summary.errorsCount += 1;
-          safeLog(
-            "error",
-            "Failed processing BCBA candidate.",
-            buildErrorLog({
-              workflow: "intakePoller",
-              stage: "processBcbaCandidate",
-              error,
-              recordId
-            })
-          );
-        }
-      }
-    } catch (error) {
-      summary.errorsCount += 1;
-      safeLog(
-        "error",
-        "BCBA poller search failed.",
-        buildErrorLog({
-          workflow: "intakePoller",
-          stage: "searchBcba",
-          error
-        })
-      );
-    }
-
-    summary.messagesEnqueued += summary.btRbtMessagesEnqueued + summary.bcbaMessagesEnqueued;
 
     if (config.limits.linkedRecheckEnabled) {
       summary.linkedRecheckEnabled = true;
@@ -395,7 +191,7 @@ export async function runIntakePollerWorkflow(context) {
           limit: config.limits.maxDealsPerRun,
           countKey: "linkedClientEnqueued",
           send: async (recordId) =>
-            sendClientSyncMessage({
+            send.client({
               dealId: recordId,
               source: "linkedRecheck",
               workflow: "clientSync"
@@ -408,7 +204,7 @@ export async function runIntakePollerWorkflow(context) {
           limit: config.limits.maxBtRbtPerRun,
           countKey: "linkedBtRbtEnqueued",
           send: async (recordId) =>
-            sendEmployeeSyncMessage({
+            send.employee({
               workflow: "employeeSync",
               source: "linkedRecheck",
               employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
@@ -422,7 +218,7 @@ export async function runIntakePollerWorkflow(context) {
           limit: config.limits.maxBcbaPerRun,
           countKey: "linkedBcbaEnqueued",
           send: async (recordId) =>
-            sendEmployeeSyncMessage({
+            send.employee({
               workflow: "employeeSync",
               source: "linkedRecheck",
               employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
@@ -433,8 +229,8 @@ export async function runIntakePollerWorkflow(context) {
 
       for (const spec of rechecks) {
         try {
-          const cursor = await getState({ pk: `recheck:${spec.entity}`, id: "cursor" });
-          const page = await searchRecordsByKnownProperty({
+          const cursor = await readState({ pk: `recheck:${spec.entity}`, id: "cursor" });
+          const page = await searchKnown({
             objectTypeId: spec.objectTypeId,
             propertyName: spec.propertyName,
             properties: ["hs_object_id", spec.propertyName, "hs_lastmodifieddate"],
@@ -442,14 +238,15 @@ export async function runIntakePollerWorkflow(context) {
             after: cursor?.data?.after || null
           });
           for (const candidate of page.results) {
-            const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
+            const recordId = recordIdOf(candidate);
             if (!recordId || !isLinkedForOngoingRefresh(candidate, spec.propertyName)) {
               continue;
             }
             await spec.send(recordId);
             summary[spec.countKey] += 1;
+            summary.messagesEnqueued += 1;
           }
-          await putState({
+          await saveState({
             pk: `recheck:${spec.entity}`,
             id: "cursor",
             type: "recheck-cursor",
@@ -457,26 +254,18 @@ export async function runIntakePollerWorkflow(context) {
             data: { after: page.nextAfter }
           });
         } catch (error) {
-          summary.errorsCount += 1;
-          safeLog(
-            "error",
-            "Linked-record recheck failed.",
-            buildErrorLog({
-              workflow: "intakePoller",
-              stage: `linkedRecheck:${spec.entity}`,
-              error
-            })
-          );
+          recordFailure(`linkedRecheck:${spec.entity}`, error);
+          if (summary.endedOnRateLimit) {
+            return summary;
+          }
         }
       }
-      summary.messagesEnqueued +=
-        summary.linkedClientEnqueued + summary.linkedBtRbtEnqueued + summary.linkedBcbaEnqueued;
     }
 
     return summary;
   } finally {
     try {
-      await releaseLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID });
+      await dropLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID });
     } catch (error) {
       safeLog(
         "error",

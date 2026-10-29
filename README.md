@@ -45,9 +45,8 @@ Behavior notes:
 ## C. Deployment Gate
 
 Do not deploy until manual intake poller test confirms:
-- HubSpot eligible deals can be fetched.
-- `shouldSync` logic runs.
-- Cosmos lease/dedupe state works.
+- The never-processed sweep finds ticked records with no CentralReach id and no `last_sync_at` (`CREATE_SWEEP_ENABLED`, default false; `CREATE_SWEEP_GRACE_MINUTES`, default 10).
+- Cosmos lease state works.
 - Service Bus client-sync messages are enqueued.
 - No PHI appears in logs, state, or Service Bus messages.
 
