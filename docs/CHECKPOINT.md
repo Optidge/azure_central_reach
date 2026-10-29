@@ -14,7 +14,7 @@
 | **Phase** | Sandbox **Change Detection Completion** (portal `50850427` on Function App `centralreachserverless`) |
 | **Business spec** | [Google Drive Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit) |
 | **Deployed code baseline (`main`)** | Hybrid webhook + linked-recheck change detection — [`f215d9d`](https://github.com/Optidge/azure_central_reach/commit/f215d9dc945ae494a5813ffb883b0abe09894352), [PR #1](https://github.com/Optidge/azure_central_reach/pull/1) merged |
-| **Working branch** | `align-sandbox-hubspot-field-sync` @ `037ea72`. Six commits ahead of origin. **Not pushed. Not merged.** Published to sandbox Function App `centralreachserverless` on 2026-10-29. Portal stayed `50850427`. |
+| **Working branch** | `align-sandbox-hubspot-field-sync`. Newest commit is the pause note, ahead of origin. **Not pushed. Not merged.** Published app is still `037ea72` on sandbox Function App `centralreachserverless`. Portal stayed `50850427`. |
 | **Primary signal** | HubSpot workflow → `POST /api/hubspot-webhook` (record id only) |
 | **Backup signal** | `intakePoller` — same queues as the webhook. **Timer is off on the app today.** Sandbox end-to-end turns it on and proves a poller-only sync. It is not optional. Production poller stays off. |
 | **Production portal `50317927`** | Not the live Function App target tonight. Full production move is **tomorrow**. Until then, and for the first production exercise, use **ZZ TEST records only**. |
@@ -112,11 +112,11 @@ Thursday EOD works on United Care’s side. They are adding a read-only Case fie
 
 ## In flight (local / branch)
 
-**Branch `align-sandbox-hubspot-field-sync` at `037ea72` (ahead of origin by 6, not pushed):**
+**Branch `align-sandbox-hubspot-field-sync`, ahead of origin, not pushed. Published app remains `037ea72`:**
 
-- The seven background units in **Paused 2026-10-29** are on this commit and on the published sandbox app.
+- The seven background units in **Paused 2026-10-29** are on `037ea72` and on the published sandbox app.
 - `npm test` passed 85 of 85 before that publish.
-- Merge still waits for the WS.2 proof. Do not publish again unless the resume step says the live app is behind this commit.
+- Merge still waits for the WS.2 proof. Do not publish again unless the resume step says the live app is behind `037ea72`.
 
 **Docs on the branch (not on `main`):**
 

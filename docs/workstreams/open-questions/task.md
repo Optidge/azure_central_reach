@@ -1,6 +1,6 @@
 # Open questions after the 10/28 schema pass. Review.
 
-**Status:** all nine items decided (pass 3, 2026-10-28 late). **Decisions, pass 3** below supersedes pass 2 where they differ. The decisions were then carried out. See [`CHECKPOINT.md`](../../CHECKPOINT.md) **Paused 2026-10-29** for the seven background units. HEAD is `037ea72`. The guardian read, the nine sandbox properties, the option adds, and the IA BCBA constant are done. The live proof is paused. Do not treat this file's "next unit" notes as still open.
+**Status:** all nine items decided (pass 3, 2026-10-28 late). **Decisions, pass 3** below supersedes pass 2 where they differ. The decisions were then carried out. See [`CHECKPOINT.md`](../../CHECKPOINT.md) **Paused 2026-10-29** for the seven background units. The carried-out units are on `037ea72`. The status update is the pause note. Do not treat a later docs commit as a new publish. The guardian read, the nine sandbox properties, the option adds, and the IA BCBA constant are done. The live proof is paused. Do not treat this file's "next unit" notes as still open.
 
 **Start state when this review was written.** Branch `align-sandbox-hubspot-field-sync`, HEAD `9789ebc`. That SHA is an ancestor of `037ea72`.
 

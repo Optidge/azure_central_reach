@@ -1,6 +1,6 @@
 # WS.2 sandbox coverage matrix
 
-**As of:** 2026-10-29 morning, branch `align-sandbox-hubspot-field-sync` at `037ea72`.
+**As of:** 2026-10-29 morning, branch `align-sandbox-hubspot-field-sync`. Matrix draft is `037ea72`. The maintenance note was added with the pause docs.
 **Done bar:** rule 3 in [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md).
 **Status:** Draft. The matrix itself was built from the Drive guide and the code, not from a live run. One later webhook attempt on row 3.8b did not pass. The published worker skipped deal `66712883229` because `enter_in_central_reach` is empty, and CentralReach was redirecting to a maintenance page. That row stays `not run`. See [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**.
 

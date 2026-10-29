@@ -2,7 +2,7 @@
 
 **As of:** 2026-10-29 morning, America/Chicago. **Paused.**  
 **Repo:** `azure_central_reach` (Optidge / United Care ABA)  
-**Checkout:** `align-sandbox-hubspot-field-sync` at `037ea72`. Six commits ahead of origin. Not pushed. Not merged.  
+**Checkout:** `align-sandbox-hubspot-field-sync`. Published app is `037ea72`. The newest commit is this pause note (docs only). Ahead of origin. Not pushed. Not merged.  
 **Status:** The nine schema questions are decided. The seven background units in [`CHECKPOINT.md`](CHECKPOINT.md) under **Paused 2026-10-29** are done through the sandbox publish. The live webhook proof did not pass. Do not start the poller, the 20-minute loop, a merge, or a push until Zeke asks. The branch merges only after the WS.2 proof exists.
 
 This file is the entry point for a new chat. The checkpoint is the living status.
@@ -29,7 +29,7 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 | --- | --- |
 | Phase | Sandbox change-detection completion. Portal `50850427`. Function App `centralreachserverless`. |
 | Deployed baseline | `main` at `f215d9d` (hybrid webhook + linked-recheck). PR #1 merged. |
-| Working branch | `align-sandbox-hubspot-field-sync` at `037ea72`. Published to `centralreachserverless`. Portal `50850427`. **Not pushed. Not merged.** |
+| Working branch | `align-sandbox-hubspot-field-sync`. Published app is `037ea72` on `centralreachserverless`. Portal `50850427`. Newest commit is the pause note. **Not pushed. Not merged.** |
 | Live app | Poller disabled. Both queue workers enabled. Do not publish again unless this commit is no longer what the app is running. |
 | Next gate | Resume only from **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md). CentralReach was redirecting to `maintenance.centralreach.com`. The Case gate on deal `66712883229` is empty. |
 
