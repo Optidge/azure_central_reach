@@ -4,7 +4,7 @@
 
 **Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). Workstream order is WS.1, then WS.2, in [`CHECKPOINT.md`](CHECKPOINT.md). Phases 0–5 are the previous test.
 
-**Checkpoint (current status):** [`CHECKPOINT.md`](CHECKPOINT.md) — updated Oct 28, 2026 evening. Read the “Danny — 10/28” timing table before any older “waiting on Sara” list.
+**Checkpoint (current status):** [`CHECKPOINT.md`](CHECKPOINT.md) — paused 2026-10-29 morning. Read **Paused 2026-10-29** before any older “next session” note. The “Danny — 10/28” timing table still wins over older “waiting on Sara” lists.
 
 **Oct 27 agent transcripts (full handoff):** [`export/cursor-agent-transcripts-oct27-workstream.md`](export/cursor-agent-transcripts-oct27-workstream.md)
 

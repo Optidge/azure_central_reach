@@ -1,8 +1,8 @@
 # WS.2 sandbox coverage matrix
 
-**As of:** 2026-10-29, branch `align-sandbox-hubspot-field-sync` at `474e1f5`.
+**As of:** 2026-10-29 morning, branch `align-sandbox-hubspot-field-sync` at `037ea72`.
 **Done bar:** rule 3 in [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md).
-**Status:** Draft. WS.2 has not run. No HubSpot or CentralReach call was made to build this file.
+**Status:** Draft. The matrix itself was built from the Drive guide and the code, not from a live run. One later webhook attempt on row 3.8b did not pass. The published worker skipped deal `66712883229` because `enter_in_central_reach` is empty, and CentralReach was redirecting to a maintenance page. That row stays `not run`. See [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**.
 
 One row per item in sections 3 to 9 of the Drive guide (Integration Guide V2.0), plus the section 11 gates. A guide item that names several HubSpot fields with separate destinations or separate decisions is split into lettered sub-rows.
 

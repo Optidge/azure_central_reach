@@ -1,8 +1,8 @@
 # Project checkpoint — azure_central_reach
 
-**Last updated:** 2026-10-28 (America/Chicago)  
+**Last updated:** 2026-10-29 morning (America/Chicago). **Paused.**  
 **Audience:** Zeke, pstack reviewers, and implementing agents  
-**Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). The WS.1 definition diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). Open questions from that pass are listed below. Do not start the sandbox poller until those questions are decided.  
+**Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). The nine schema questions are decided. The seven background units below are done through the sandbox publish. The live proof is paused. Do not start the sandbox poller, and do not resume the 20-minute loop, until Zeke asks.  
 **Pointer for doc order and pstack prompts:** [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md)
 
 ---
@@ -14,7 +14,7 @@
 | **Phase** | Sandbox **Change Detection Completion** (portal `50850427` on Function App `centralreachserverless`) |
 | **Business spec** | [Google Drive Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit) |
 | **Deployed code baseline (`main`)** | Hybrid webhook + linked-recheck change detection — [`f215d9d`](https://github.com/Optidge/azure_central_reach/commit/f215d9dc945ae494a5813ffb883b0abe09894352), [PR #1](https://github.com/Optidge/azure_central_reach/pull/1) merged |
-| **Working branch** | `align-sandbox-hubspot-field-sync` @ `69fe219` — broader fetch lists, mappings, sandbox property scripts, and the 10/28 handoff docs. Pushed to GitHub. **Not merged to `main`; not confirmed published beyond prior hybrid deploy** |
+| **Working branch** | `align-sandbox-hubspot-field-sync` @ `037ea72`. Six commits ahead of origin. **Not pushed. Not merged.** Published to sandbox Function App `centralreachserverless` on 2026-10-29. Portal stayed `50850427`. |
 | **Primary signal** | HubSpot workflow → `POST /api/hubspot-webhook` (record id only) |
 | **Backup signal** | `intakePoller` — same queues as the webhook. **Timer is off on the app today.** Sandbox end-to-end turns it on and proves a poller-only sync. It is not optional. Production poller stays off. |
 | **Production portal `50317927`** | Not the live Function App target tonight. Full production move is **tomorrow**. Until then, and for the first production exercise, use **ZZ TEST records only**. |
@@ -81,7 +81,7 @@ Thursday EOD works on United Care’s side. They are adding a read-only Case fie
 | Contacts | Add a **fourth** ongoing workflow for guardian name/email and BCBA personal email. | Not built. Not part of the staffing workstream. |
 | Triggers | Keep CentralReach id writeback fields out of workflow triggers, including `employee_id` and `external_system_id`. | Check when the sandbox workflows are copied to production. |
 | BCBA ids | `employee_id` is “Employee ID (from CR)”. `external_system_id` is “External System ID”, same internal names as BT, on the CentralReach IDs card. CR External System ID is the Workday ID. Send BCBA `workday_id`. On BTs, 77 of 79 match `workday_id`. | Confirm on the production property read before mapping. |
-| Guardian | When two exist, use the Parent/Guardian contact whose email is used for parent communication. | Code sends Case `guardian_first_name` and `guardian_last_name`. |
+| Guardian | When two exist, use the Parent/Guardian contact whose email is used for parent communication. | Live in `src/`. Exactly one type-3 Parent/Guardian contact supplies first name, last name, and email. Any other count uses the Case fields. No HubSpot property marks Sara's contact, so that tie-break is not coded. |
 | Reassessment | Staffed comes from `staffing_status`. No separate stage map. | `staffing_status` is still a blocked-code trigger until the fetch list maps it. |
 | Cleanup stages | Leave them out of CentralReach. HubSpot is moving those cases to Inactive. | Do not add cleanup-stage branches. |
 | New Mexico / Virginia | Skip for now. | Do not add labels. |
@@ -112,12 +112,11 @@ Thursday EOD works on United Care’s side. They are adding a read-only Case fie
 
 ## In flight (local / branch)
 
-**Branch `align-sandbox-hubspot-field-sync` (ahead of `main`):**
+**Branch `align-sandbox-hubspot-field-sync` at `037ea72` (ahead of origin by 6, not pushed):**
 
-- Expands `REQUIRED_DEAL_PROPERTIES`, `BT_RBT_PROPERTIES`, `BCBA_PROPERTIES` and mapping builders toward the completion-phase guide.
-- Adds `scripts/create-sandbox-hubspot-properties.mjs` + `sandbox-hubspot-properties.json`.
-- Updates tests (`clientMetadataMapping`, employee payloads, workflow smoke tests).
-- **Action before next sandbox publish:** `npm test`, review diff vs completion phase, then `func azure functionapp publish centralreachserverless` only when explicitly approved. Do not merge first. Merge waits for the WS.2 proof.
+- The seven background units in **Paused 2026-10-29** are on this commit and on the published sandbox app.
+- `npm test` passed 85 of 85 before that publish.
+- Merge still waits for the WS.2 proof. Do not publish again unless the resume step says the live app is behind this commit.
 
 **Docs on the branch (not on `main`):**
 
@@ -277,25 +276,58 @@ What sandbox end-to-end can prove: the property is requested and a non-sensitive
 
 ## Open after the 10/28 schema pass
 
-The definition diff and the property creates are recorded in [`ws1-schema-diff.md`](ws1-schema-diff.md) under **Actions taken 2026-10-28**. Operator decisions came in 10/28 evening and late evening. The full review and Drive cross-check are in [`workstreams/open-questions/task.md`](workstreams/open-questions/task.md). The guardian contact read is in `src/` and the smoke run passed. None of this is a sandbox sync proof. The poller stays off until the end-to-end unit. The next unit creates the missing sandbox properties.
+The definition diff and the property creates are recorded in [`ws1-schema-diff.md`](ws1-schema-diff.md) under **Actions taken 2026-10-28**. Operator decisions came in 10/28 evening and late evening. The full review and Drive cross-check are in [`workstreams/open-questions/task.md`](workstreams/open-questions/task.md). Items 1, 2, 4, and 7 below were carried out in the seven background units. None of that is a completed sandbox sync proof.
 
 1. **Decided.** Sandbox `supervising_bcba_name` and `ia_bcba_name` already exist as writable text, and a sandbox test types the value. Already created, nothing to add for this test.
-   - The nine production properties still missing in sandbox are created there for parity: Case `hours_bt_work_schedule_1`, `hours_bt_work_schedule_2`, `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`; BCBA `full_name`, `gender`; BT/RBT `active_cases_count`, `bt_to_rbt_path`, `state_home`. Drive wins on mapping. `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`, and BCBA `gender` stay unmapped because Drive says to ignore them. The per-property Drive citations are in the review file.
-   - Meta fields Drive says to map are done later, in this order. First, create the sandbox field from the production definition. Second, call the CentralReach API for the metadata field id. Third, update the code to sync that id. Not started.
-2. **Decided.** Label 98 `Initial Assessment` stays. New sandbox IA BCBA tests use 163 (Case to BCBA) and 164 (BCBA to Case). The constant in `src/constants/staffingAssociations.mjs` moves from 98 to 163 as a WS.2 code edit.
+   - The nine production properties that were missing in sandbox were created there for parity: Case `hours_bt_work_schedule_1`, `hours_bt_work_schedule_2`, `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`; BCBA `full_name`, `gender`; BT/RBT `active_cases_count`, `bt_to_rbt_path`, `state_home`. Drive wins on mapping. `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`, and BCBA `gender` stay unmapped because Drive says to ignore them. The per-property Drive citations are in the review file.
+   - The nine properties were created in sandbox on 2026-10-29. Each read-back had `calculated` false and no formula. No new CentralReach metadata field id was fetched. Mapped destinations already in `src/constants/centralReach.mjs` stay as they are. Do not invent a new CentralReach field.
+2. **Decided and done.** Label 98 `Initial Assessment` stays. New sandbox IA BCBA tests use 163 (Case to BCBA) and 164 (BCBA to Case). `SANDBOX_STAFFING_ASSOCIATION_TYPE_IDS.INITIAL_ASSESSMENT_BCBA` is 163 in commit `bd93185`.
 3. **Decided.** The production writeback fields already exist on Case `0-3`, BCBA `2-48354212`, and BT/RBT `2-48354559`. Do not create them again. The production pass checks that the integration credential writes `last_sync_status` on one ZZ TEST record of each type. That check belongs to the next workstream.
-4. **Decided.** Make sandbox as close to production as it can be. Add sandbox options whose stored value production has and sandbox lacks. Do not delete any (`In Limbo` stays until an explicit delete). When the stored value already matches, do not relabel (`case_status` `Warm`/`Cold`). Field-type gaps are in scope. Where HubSpot cannot make sandbox match, one limitation per object per field goes on the production-testing list. Zeke changes by hand what the API cannot. The mapper does not change. Production testing confirms NJ and CO Medicaid, because the code matches only `medicaid ffs` and production also stores `Medicaid FFS - NJ` and `Medicaid FFS - CO`.
+4. **Decided and done, with two field-type limits.** Sandbox options whose stored value production has and sandbox lacked were added in commit `474e1f5`. Nothing was deleted (`In Limbo` stays). `case_status` stayed `Warm` / `In Limbo` / `Cold`. Contact `contact_category` now has eight values, including Parent/Guardian. BT/RBT `gender` and `location_home` stayed text, so their production select options were not added. `severity_level_clinical` stayed a radio. The mapper was not changed for NJ and CO Medicaid. Production testing confirms those, because the code matches only `medicaid ffs`.
 5. **Decided.** The production formula `1 + 1` on `total_hours_bt1bt2_work_schedule` is not copied, and sandbox hours fields stay writable. Drive section 3 says to use that field and does not mention the formula.
    - Production testing confirms whether a live Case sends the real assigned hours or `2`. The `2` is inferred from the properties API formula plus `buildClientMetadata.mjs`, not seen on a record. Row added to `SANDBOX-DONE.md` **Production verification**.
 6. **Decided.** `HUBSPOT_LINK_TO_BT_RBT_RECORD` and `HUBSPOT_LINK_TO_BCBA_RECORD` both keep CentralReach field id 138703. During sandbox end-to-end, after a write, review the value on one BT/RBT and one BCBA and confirm whether either needs its own CentralReach field.
-7. **Decided.** The workflow fetches the Contacts associated with the Case by association type 3. A Contact counts only when `contact_category` is Parent/Guardian. Exactly one such Contact supplies `firstname`, `lastname`, and `email`. Zero or more than one falls back to the Case `guardian_first_name`, `guardian_last_name`, and `email`. Drive's rule for two guardians is "the Parent/Guardian contact whose email is used for parent communication", but no HubSpot property marks that contact. Production testing confirms whether the Case sync properties remain the source. Smoke tests passed 27 of 27 on 2026-10-28.
+7. **Decided and done.** The workflow fetches the Contacts associated with the Case by association type 3. A Contact counts only when `contact_category` is Parent/Guardian. Exactly one such Contact supplies `firstname`, `lastname`, and `email`. Zero or more than one falls back to the Case `guardian_first_name`, `guardian_last_name`, and `email`. Drive's rule for two guardians is "the Parent/Guardian contact whose email is used for parent communication", but no HubSpot property marks that contact. Production testing confirms whether the Case sync properties remain the source. Commit `c0e3390`. Full `npm test` later passed 85 of 85.
 8. **Decided.** BT/RBT `postal_code` is not created. It exists on neither portal, and staff postal fields are `postal_code_home` and `postal_code__work_`. The BT/RBT `postal_code` fetch and fallback stay in the code. Production testing verifies them, recorded in `SANDBOX-DONE.md` **Production verification**.
 9. **Decided.** Comorbid and maladaptive mappers stay unchanged. Re-read production definitions before any mapper change. Also a production-testing check, because the clinical properties may be deleted before Thursday.
 
+## Paused 2026-10-29
+
+Zeke paused the autonomous run at about 2:26 AM America/Chicago. The 20-minute heartbeat is stopped. Do not start it again until Zeke asks. Do not merge. Do not push. Do not write production portal `50317927`. Do not enable `intakePoller`.
+
+`npm test` passed 85 of 85. `func azure functionapp publish centralreachserverless` then exited 0 for commit `037ea72`. After publish, `HUBSPOT_PORTAL_ID` was `50850427`, `AzureWebJobs.intakePoller.Disabled` was `true`, and both queue workers were enabled (`Disabled` `false`).
+
+### Seven background units
+
+| # | Unit | Result |
+| --- | --- | --- |
+| 1 | Parent/Guardian contact read | Done. Commit `c0e3390`. One qualifying contact supplies the name and email. Any other count uses the Case fields. |
+| 2 | Nine sandbox properties | Done. Commit `5b5814b`. Created on portal `50850427` with no formula. |
+| 3 | BT/RBT mailing state | Done. Commit `ecf4e27`. `state_home` is preferred. `location_home` still feeds the state labels. |
+| 4 | Sandbox IA BCBA type | Done. Commit `bd93185`. Constant is 163. Label 98 stays Initial Assessment. |
+| 5 | Sandbox option adds | Done. Commit `474e1f5`. Old options kept. BT/RBT `gender` and `location_home` stayed text. |
+| 6 | Coverage matrix | Done as a draft. Commit `037ea72`. [`ws2-coverage-matrix.md`](ws2-coverage-matrix.md). Street rows from 2026-10-27 are the only `passed` rows. |
+| 7 | One published webhook proof | Not passed. The app accepted the webhook with HTTP 202. `processClientQueue` skipped deal `66712883229` because `enter_in_central_reach` is empty. `home_apt` was restored in HubSpot. `last_sync_status` stayed `noop`. `last_sync_at` stayed `2026-10-27T23:40:30.448Z`. `street_address` was not changed. |
+
+Local evidence for unit 7 is gitignored `.test-evidence/ws2-3.8b.md`. The local decision log is untracked `.audit/ws2-sandbox.tsv`. Do not commit either. `docs/state.md` is an unrelated template. Do not commit it.
+
+### Why the proof stopped
+
+Deal `66712883229` is still linked to CentralReach client `5324526`. The sandbox code still requires `enter_in_central_reach` to contain `Yes`. The gate was left empty on purpose after the skip.
+
+CentralReach is in maintenance. `GET https://partners-api.centralreach.com/enterprise/v1/contacts/client/5324526` returned 302 to `maintenance.centralreach.com`. The same redirect hit employee `5324528` and `/contacts/metadata-configuration`. The token request still returned 200. The published app uses that same host and path. The last check was about 2:06 AM America/Chicago. Do not set the gate until a client GET returns JSON. A leading-slash request against that base URL drops `/enterprise/v1` and is not a valid read.
+
+### Resume only when Zeke asks
+
+1. Read a CentralReach client with the `/enterprise/v1` prefix and no redirect. If it is still maintenance, stop.
+2. On sandbox portal `50850427` only, set deal `66712883229` `enter_in_central_reach` to `Yes`. That is the sandbox gate, not the production backfill.
+3. Rerun row 3.8b. Set, change, and clear `home_apt`, then restore it. A pass is HubSpot, Azure `last_sync_status` plus a moved `last_sync_at`, and CentralReach `AddressLine2` agreeing. HTTP 202 is not a pass. Do not print the street or the original apartment.
+4. After that webhook path is healthy, turn `intakePoller` on in sandbox for one poller-only edit on an already linked record. The fast signal must not be that proof. Then turn the sandbox poller off again if the proof is done. Production poller stays off.
+5. Continue the other `not run` matrix rows. Do not guess-fix label removal, the gate latch, care coordinator `138851`, `staffing_status`, or the name rollups. Rule 8 in `SANDBOX-DONE.md` stays uncoded.
+
 ## Next recommended session
 
-1. All nine items are decided. The three-step meta-field work for the properties Drive maps is next and has not started. Do not create properties outside that work.
-2. WS.2 starts only after those decisions. It closes the sandbox gaps the diff still names, then runs end-to-end with the sensitive limitation, queues processing, and one sandbox poller test on a linked record. Production poller stays off.
+Start at **Paused 2026-10-29** above. The nine schema questions are decided. The seven background units are recorded there. The live proof has not passed.
 
 ---
 
@@ -303,7 +335,7 @@ The definition diff and the property creates are recorded in [`ws1-schema-diff.m
 
 | Link | Role |
 | --- | --- |
-| [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot, 10/28 evening. More updates still coming. |
+| [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot. Paused 2026-10-29 morning. |
 | [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md) | pstack read order, prompts, transcript IDs |
 | [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) | Local harness vs sandbox done vs production verification tomorrow |
 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Drive + repo index |

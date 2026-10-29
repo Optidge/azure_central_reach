@@ -1,8 +1,8 @@
 # Open questions after the 10/28 schema pass. Review.
 
-**Status:** all nine items decided (pass 3, 2026-10-28 late). **Decisions, pass 3** below supersedes pass 2 where they differ. The guardian Contact read landed in `src/` after this review. Smoke tests passed 27 of 27. No HubSpot property was created in the pass that wrote these decisions. No merge, publish, or poller change. The next unit creates the missing sandbox properties.
+**Status:** all nine items decided (pass 3, 2026-10-28 late). **Decisions, pass 3** below supersedes pass 2 where they differ. The decisions were then carried out. See [`CHECKPOINT.md`](../../CHECKPOINT.md) **Paused 2026-10-29** for the seven background units. HEAD is `037ea72`. The guardian read, the nine sandbox properties, the option adds, and the IA BCBA constant are done. The live proof is paused. Do not treat this file's "next unit" notes as still open.
 
-**Start state.** Branch `align-sandbox-hubspot-field-sync`, HEAD `9789ebc`.
+**Start state when this review was written.** Branch `align-sandbox-hubspot-field-sync`, HEAD `9789ebc`. That SHA is an ancestor of `037ea72`.
 
 **Goal.** Decide what to do with each of the nine items in `docs/CHECKPOINT.md` under **Open after the 10/28 schema pass** (lines 278 to 290), so WS.2 can start.
 

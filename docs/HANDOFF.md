@@ -1,9 +1,9 @@
 # Handoff — fresh agent
 
-**As of:** 2026-10-28, about 7:18 PM America/Chicago  
+**As of:** 2026-10-29 morning, America/Chicago. **Paused.**  
 **Repo:** `azure_central_reach` (Optidge / United Care ABA)  
-**Checkout:** `align-sandbox-hubspot-field-sync`. Handoff commit `69fe219`.  
-**Status:** Commit `69fe219` is pushed and is not on `main`. The WS.1 definition diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). Open questions are in [`CHECKPOINT.md`](CHECKPOINT.md) under **Open after the 10/28 schema pass**. Do not start the sandbox poller until those questions are decided. The branch merges only after the WS.2 proof exists.
+**Checkout:** `align-sandbox-hubspot-field-sync` at `037ea72`. Six commits ahead of origin. Not pushed. Not merged.  
+**Status:** The nine schema questions are decided. The seven background units in [`CHECKPOINT.md`](CHECKPOINT.md) under **Paused 2026-10-29** are done through the sandbox publish. The live webhook proof did not pass. Do not start the poller, the 20-minute loop, a merge, or a push until Zeke asks. The branch merges only after the WS.2 proof exists.
 
 This file is the entry point for a new chat. The checkpoint is the living status.
 
@@ -29,9 +29,9 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 | --- | --- |
 | Phase | Sandbox change-detection completion. Portal `50850427`. Function App `centralreachserverless`. |
 | Deployed baseline | `main` at `f215d9d` (hybrid webhook + linked-recheck). PR #1 merged. |
-| Working branch | `align-sandbox-hubspot-field-sync`. Handoff commit `69fe219`. Broader fetch lists and sandbox property scripts. **Not merged. Not confirmed published.** |
-| Tonight’s doc edits | Handoff commit `69fe219` is pushed and is not on `main`. The sandbox done-bar wording is a later commit on this branch, also not on `main`. |
-| Next gate | Review the open questions in [`CHECKPOINT.md`](CHECKPOINT.md). The WS.1 diff exists. Do not start the sandbox poller. |
+| Working branch | `align-sandbox-hubspot-field-sync` at `037ea72`. Published to `centralreachserverless`. Portal `50850427`. **Not pushed. Not merged.** |
+| Live app | Poller disabled. Both queue workers enabled. Do not publish again unless this commit is no longer what the app is running. |
+| Next gate | Resume only from **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md). CentralReach was redirecting to `maintenance.centralreach.com`. The Case gate on deal `66712883229` is empty. |
 
 Architecture:
 
@@ -65,14 +65,15 @@ The timer is **off on the app today**. That is the current setting. Sandbox is n
 
 ## Start here
 
-The WS.1 diff is written. Start with the open questions in [`CHECKPOINT.md`](CHECKPOINT.md).
+Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other step. The WS.1 diff is written and the nine questions are decided. Do not recreate the nine sandbox properties, the option adds, the guardian read, or the IA BCBA constant. Do not set `enter_in_central_reach` until a CentralReach client GET returns JSON.
 
 - The diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). It compares production property definitions, association labels, and CentralReach metadata and org labels with `src/constants/centralReach.mjs`.
 - The production definition read uses the HubSpot CLI (`hs`). Reads and changes on the live Function App use the Azure CLI (`az`). That covers app settings, the poller switch, and the queues. Publishing the app is `func azure functionapp publish centralreachserverless`, and only when explicitly approved. CentralReach metadata uses the discovery commands in [`centralreach-metadata-and-labels-discovery.md`](centralreach-metadata-and-labels-discovery.md).
 - Do not export record values. Do not print secrets.
-- Do not merge, publish, write sandbox or production records, or enable the poller during WS.1.
+- Do not merge, push, or enable the poller until Zeke asks and the resume steps in the checkpoint are true.
 - Do not implement backfill or staffing-signal behavior.
 - Do not change the comorbid / maladaptive mapper.
 - Do not invent the Grad Permit BCBA internal name.
+- Do not write production portal `50317927`.
 
-WS.2 starts only after the open questions are decided. WS.2 is the new end-to-end, including the queues and one sandbox poller test. Production poller stays off.
+WS.2 proof is the remaining work. It includes one healthy webhook sync, then one sandbox poller test on an already linked record. Production poller stays off.
