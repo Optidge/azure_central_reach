@@ -43,7 +43,7 @@ Read in this sequence unless pstack is scoped to one topic only.
 | --- | --- | --- |
 | 1 | [`CHECKPOINT.md`](CHECKPOINT.md) | Current branch, deploy baseline, Danny 10/28 timing table, open test rows |
 | 2 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Links and where to look next |
-| 3 | [`poller-backup-contract.md`](poller-backup-contract.md) | Webhook primary, poller backup. Timer is off. 10/29 direction and open questions for the poller architecture thread. |
+| 3 | [`poller-backup-contract.md`](poller-backup-contract.md) | Webhook primary, poller backup. Timer is off. Settled 10/29 build target. Not coded. Recheck page size is still open. |
 | 4 | [`hubspot-centralreach-field-mappings-current-state.md`](hubspot-centralreach-field-mappings-current-state.md) | Runtime flow, change detection, sensitive tier |
 | 5 | [`Change Detection Completion Phase.md`](Change Detection Completion Phase.md) | Completion criteria, sync-property read path, open decisions table |
 | 6 | [`sandbox_vs_production_mvp.md`](sandbox_vs_production_mvp.md) | Portal IDs, queues, prod inventory |

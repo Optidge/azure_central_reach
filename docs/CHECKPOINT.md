@@ -331,13 +331,15 @@ The poller backup contract is written in [`poller-backup-contract.md`](poller-ba
 
 ### Poller direction — Zeke, 10/29
 
-Event-first. The poller stays as the backup until the workflows are proven to cover every mapped change, then it can be phased out. It must make far fewer HubSpot calls. The target is a 30-minute interval with retry by limit type and the Drive section 2 API rules applied. The design is settled in a fresh poller architecture thread. Start that thread from the proposal and the six open questions in [`poller-backup-contract.md`](poller-backup-contract.md).
+Event-first. The poller stays as the backup until the workflows are proven to cover every mapped change. Linked recheck can move to sandbox-only after the evidence named in the contract. The never-processed create sweep stays. The target interval is 30 minutes. The timer stays off until Zeke asks.
 
-Findings from the 10/29 review that thread needs. Each is read from code, not proven at runtime.
+The build target is settled in [`poller-backup-contract.md`](poller-backup-contract.md). It is not coded. Replace the stage sweep with a never-processed sweep (box `Yes`, no CentralReach id, no `last_sync_at`, older than 10 minutes). Gate workers on "CentralReach id or box Yes." Skip the no-change `integration_last_write` PATCH. Write HubSpot `error` on the final Service Bus delivery before that sweep ships. Retry a dead-lettered linked record at 30 minutes and at 2 hours, then stop. Dry-run the first pass on sandbox portal `50850427`. Recheck page size is still open.
 
-- Worker reads drive the cost, not the searches. A full recheck tick is about 800 HubSpot calls: about 231,000 a day at 5 minutes, or 38,500 at 30 minutes.
-- The sweep can re-enqueue a record on every tick, because the writeback PATCH moves `hs_lastmodifieddate` past `integration_last_write`.
-- The workers still require the checkbox to contain `Yes`. Zeke and Danny both say a known CentralReach id is the ongoing gate.
+Findings the implementation has to respect. Each is read from code, not proven at runtime.
+
+- Worker reads drive the cost, not the searches. A full recheck tick is about 800 HubSpot calls on the change path, closer to 700 when every employee run is a hash match. That is about 231,000 a day at 5 minutes, or 38,500 at 30 minutes, using the 800 figure.
+- The stage sweep can re-enqueue a record on every tick, because the writeback PATCH moves `hs_lastmodifieddate` past `integration_last_write`. The build target removes that sweep.
+- The workers still require the checkbox to contain `Yes`. The build target changes that gate. Do not turn dry run off until the would-write list is reviewed. CentralReach client `5324526` was already written by the 10/29 webhook proof.
 
 ---
 
@@ -346,7 +348,7 @@ Findings from the 10/29 review that thread needs. Each is read from code, not pr
 | Link | Role |
 | --- | --- |
 | [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot. Webhook proof passed 2026-10-29 mid-morning. |
-| [`poller-backup-contract.md`](poller-backup-contract.md) | Poller vs workflow for Case Status, Staffing Status, name rollups, and staffing associations. Timer cost, HubSpot limits, the 10/29 direction, and open questions for the poller architecture thread. |
+| [`poller-backup-contract.md`](poller-backup-contract.md) | Poller vs workflow for Case Status, Staffing Status, name rollups, and staffing associations. Timer cost, HubSpot limits, and the settled 10/29 build target. Not coded. Timer stays off. |
 | [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md) | pstack read order, prompts, transcript IDs |
 | [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) | Local harness vs sandbox done vs production verification tomorrow |
 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Drive + repo index |
