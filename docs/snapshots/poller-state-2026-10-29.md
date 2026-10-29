@@ -51,5 +51,5 @@ git diff pre-poller-state-2026-10-29 poller-state-2026-10-29
 ## What the snapshot is not
 
 - **Not deployed.** The sandbox Function App `centralreachserverless` still runs commit `037ea72`.
-- **Not pushed.** GitHub's copy of the branch stops at `5ccd31c`. The six commits and both tags exist only on Zeke's machine until they are pushed.
+- **Pushed, not merged.** The branch and both tags were pushed to GitHub on 10/29. Nothing was merged to `main`.
 - **Not proven end to end.** Three of the four sandbox dry-run checks passed. The timer stayed disabled, portal `50317927` was not written, and CentralReach was not written. The fourth, queueing a ticked first-time create, is open because sandbox has no eligible record. See the resume point in [HANDOFF.md](../HANDOFF.md).
