@@ -1,7 +1,13 @@
 import { getConfig } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
-import { createHubSpotClient, getDealById, listAssociations, updateDealProperties } from "../lib/hubspotClient.mjs";
+import {
+  createHubSpotClient,
+  getContactById,
+  getDealById,
+  listAssociations,
+  updateDealProperties
+} from "../lib/hubspotClient.mjs";
 import {
   createCentralReachClient,
   createOrUpdateClient,
@@ -20,7 +26,10 @@ import {
 } from "../lib/mappedState.mjs";
 import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { associationsForComparison } from "../constants/staffingAssociations.mjs";
-import { buildClientPayload } from "../mappings/client/buildClientPayload.mjs";
+import {
+  PARENT_GUARDIAN_ASSOCIATION_TYPE_ID,
+  buildClientPayload
+} from "../mappings/client/buildClientPayload.mjs";
 import { buildClientMetadata } from "../mappings/client/buildClientMetadata.mjs";
 import { validateClientPayload } from "../mappings/client/validateClientPayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
@@ -28,15 +37,16 @@ import { STATE_TYPES } from "../constants/state.mjs";
 const CLIENT_STATE_PK = "sync:client";
 const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
 
-// Read synced Case properties below. Do not fetch the Contact or staffing
-// association to fill them. Property sync copies the source onto the Case
-// when that source changes, which is what makes the Case edit detectable.
+// Read synced Case properties below. The workflow fetches type 3 contacts.
+// The Case fields are the fallback when the qualifying count is not one.
+// Do not fetch the staffing association to fill names. Property sync copies
+// the source onto the Case when that source changes, which is what makes
+// the Case edit detectable.
 //
 // Source of truth placements for the sync properties:
-// - guardian_first_name, guardian_last_name, and primary email: section 3,
-//   Parent/Guardian Contact (firstname, lastname, email). The Case internal
-//   name for guardian email is not recorded yet; `email` is the Case field
-//   read today.
+// - guardian_first_name, guardian_last_name, and email: Case fallback for
+//   section 3 when the Parent/Guardian count is not one. The contact fields
+//   are firstname, lastname, and email.
 // - if_services_will_be_in_more_than_one_location__list_the_other_address:
 //   section 3 additional service address. Production's internal name ends in
 //   address. The shorter addres name is not a property on portal 50317927 or
@@ -74,7 +84,7 @@ const REQUIRED_DEAL_PROPERTIES = [
   "phi_last_name", // Production sensitive
   "phi_date_of_birth", // Production sensitive
   "phi_gender", // Production sensitive
-  // Section 3 primary email is the Parent/Guardian Contact. Read the Case copy.
+  // Case fallback for section 3 primary email when the guardian count is not one.
   "email",
   "phone",
   "phone_number__second_",
@@ -91,7 +101,7 @@ const REQUIRED_DEAL_PROPERTIES = [
   "location_central_reach",
   "postal_code",
   "specific_home_location",
-  // Section 3 guardian name is the Parent/Guardian Contact. Read the Case sync.
+  // Case fallback for section 3 guardian name when the guardian count is not one.
   "guardian_first_name",
   "guardian_last_name",
   "enter_in_central_reach",
@@ -223,6 +233,65 @@ function buildCentralReachContactUrl(contactId) {
   return `https://members.centralreach.com/#contacts/details/?id=${id}`;
 }
 
+function throwHubSpotRead(error, scope) {
+  if (isStateClientUnavailable(error)) {
+    return;
+  }
+  const readError = asReadFailure(error, scope);
+  if (readError) {
+    throw readError;
+  }
+  throw error;
+}
+
+async function loadTypeThreeContacts({ loadAssociations, fetchContact, dealId }) {
+  let associations;
+  try {
+    associations = await loadAssociations({
+      fromObjectType: "0-3",
+      fromId: dealId,
+      toObjectType: "0-1"
+    });
+  } catch (error) {
+    throwHubSpotRead(error, "associations");
+    return [];
+  }
+
+  const rows = (Array.isArray(associations) ? associations : []).filter((row) =>
+    (Array.isArray(row?.typeIds) ? row.typeIds : []).some(
+      (typeId) => Number(typeId) === PARENT_GUARDIAN_ASSOCIATION_TYPE_ID
+    )
+  );
+
+  const contacts = [];
+  for (const row of rows) {
+    const contactId = String(row?.toObjectId || "").trim();
+    if (!contactId) {
+      continue;
+    }
+
+    let contact;
+    try {
+      contact = await fetchContact(contactId);
+    } catch (error) {
+      throwHubSpotRead(error, "contact");
+      return [];
+    }
+
+    if (!contact) {
+      continue;
+    }
+
+    contacts.push({
+      ...contact,
+      id: String(contact.id || contactId),
+      typeIds: row.typeIds
+    });
+  }
+
+  return contacts;
+}
+
 export async function runClientSyncWorkflow(
   { dealId, hsLastModifiedDate, source, context },
   dependencies = {}
@@ -232,6 +301,7 @@ export async function runClientSyncWorkflow(
   const initCentralReach = dependencies.createCentralReachClient || createCentralReachClient;
   const initState = dependencies.createStateClient || createStateClient;
   const fetchDeal = dependencies.getDealById || getDealById;
+  const fetchContact = dependencies.getContactById || getContactById;
   const pushWriteback = dependencies.updateDealProperties || updateDealProperties;
   const upsertClient = dependencies.createOrUpdateClient || createOrUpdateClient;
   const pushMetadata = dependencies.updateClientMetadata || updateClientMetadata;
@@ -307,7 +377,12 @@ export async function runClientSyncWorkflow(
       };
     }
 
-    const payload = mapPayload({ deal, config });
+    const guardianContacts = await loadTypeThreeContacts({
+      loadAssociations,
+      fetchContact,
+      dealId: normalizedDealId
+    });
+    const payload = mapPayload({ deal, config, contacts: guardianContacts });
     const validation = validatePayload(payload);
     if (!validation.isValid) {
       throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
@@ -421,7 +496,11 @@ export async function runClientSyncWorkflow(
       }
       throw error;
     }
-    const confirmedPayload = mapPayload({ deal: confirmedDeal, config });
+    const confirmedPayload = mapPayload({
+      deal: confirmedDeal,
+      config,
+      contacts: guardianContacts
+    });
     const confirmedMetadata = mapMetadata({ deal: confirmedDeal });
     const confirmedHash = digestPayload(
       buildComparableState({

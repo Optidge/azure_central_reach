@@ -277,21 +277,24 @@ What sandbox end-to-end can prove: the property is requested and a non-sensitive
 
 ## Open after the 10/28 schema pass
 
-The definition diff and the property creates are recorded in [`ws1-schema-diff.md`](ws1-schema-diff.md) under **Actions taken 2026-10-28**. This list is what is still undecided. None of it is a sandbox sync proof. The poller stays off.
+The definition diff and the property creates are recorded in [`ws1-schema-diff.md`](ws1-schema-diff.md) under **Actions taken 2026-10-28**. Operator decisions came in 10/28 evening and late evening. The full review and Drive cross-check are in [`workstreams/open-questions/task.md`](workstreams/open-questions/task.md). The guardian contact read is in `src/` and the smoke run passed. None of this is a sandbox sync proof. The poller stays off until the end-to-end unit. The next unit creates the missing sandbox properties.
 
-1. Sandbox `supervising_bcba_name` and `ia_bcba_name` exist as writable text. Production copies are calculated and read-only, and the properties API returns no formula. Confirm that a sandbox test may set those values directly.
-2. Sandbox association label `IA BCBA` is type id 163 (Case to BCBA) and 164 (BCBA to Case). Production IA BCBA is 86. The create request cannot set 86. Label 98 is still `Initial Assessment`. Decide whether 98 stays.
-3. Production now has the sandbox writeback fields on Case `0-3`, BCBA `2-48354212`, and BT/RBT `2-48354559`. Deal schema edits needed the private app token in `.env` because the HubSpot CLI key lacks `deals-write`. Custom-object creates used CLI account `united-care-aba`.
-4. Sandbox option lists were not rewritten. Matching production would change stored values, including dropping `In Limbo` from sandbox `case_status`.
-5. The production hours formula `1 + 1` on `total_hours_bt1bt2_work_schedule` was not copied. Sandbox hours fields stay writable.
-6. `HUBSPOT_LINK_TO_BT_RBT_RECORD` and `HUBSPOT_LINK_TO_BCBA_RECORD` both use CentralReach field id 138703. Watch one sandbox write on each contact type before changing the constant.
-7. Drive section **10/28 - Diff Review Pending Leave For Now** still has guardian Case sync fields, BCBA personal email, the staff phone sync field, and `current_primary_bt` as pending. `guardianFromContact` can read `firstname`, `lastname`, and `email` from a contact. `buildClientPayload` still reads the Case fields.
-8. BT/RBT `postal_code` was not created. Case `postal_code` already matches, and staff postal fields are `postal_code_home` and `postal_code__work_`.
-9. Comorbid and maladaptive mappers were not changed.
+1. **Decided.** Sandbox `supervising_bcba_name` and `ia_bcba_name` already exist as writable text, and a sandbox test types the value. Already created, nothing to add for this test.
+   - The nine production properties still missing in sandbox are created there for parity: Case `hours_bt_work_schedule_1`, `hours_bt_work_schedule_2`, `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`; BCBA `full_name`, `gender`; BT/RBT `active_cases_count`, `bt_to_rbt_path`, `state_home`. Drive wins on mapping. `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12`, and BCBA `gender` stay unmapped because Drive says to ignore them. The per-property Drive citations are in the review file.
+   - Meta fields Drive says to map are done later, in this order. First, create the sandbox field from the production definition. Second, call the CentralReach API for the metadata field id. Third, update the code to sync that id. Not started.
+2. **Decided.** Label 98 `Initial Assessment` stays. New sandbox IA BCBA tests use 163 (Case to BCBA) and 164 (BCBA to Case). The constant in `src/constants/staffingAssociations.mjs` moves from 98 to 163 as a WS.2 code edit.
+3. **Decided.** The production writeback fields already exist on Case `0-3`, BCBA `2-48354212`, and BT/RBT `2-48354559`. Do not create them again. The production pass checks that the integration credential writes `last_sync_status` on one ZZ TEST record of each type. That check belongs to the next workstream.
+4. **Decided.** Make sandbox as close to production as it can be. Add sandbox options whose stored value production has and sandbox lacks. Do not delete any (`In Limbo` stays until an explicit delete). When the stored value already matches, do not relabel (`case_status` `Warm`/`Cold`). Field-type gaps are in scope. Where HubSpot cannot make sandbox match, one limitation per object per field goes on the production-testing list. Zeke changes by hand what the API cannot. The mapper does not change. Production testing confirms NJ and CO Medicaid, because the code matches only `medicaid ffs` and production also stores `Medicaid FFS - NJ` and `Medicaid FFS - CO`.
+5. **Decided.** The production formula `1 + 1` on `total_hours_bt1bt2_work_schedule` is not copied, and sandbox hours fields stay writable. Drive section 3 says to use that field and does not mention the formula.
+   - Production testing confirms whether a live Case sends the real assigned hours or `2`. The `2` is inferred from the properties API formula plus `buildClientMetadata.mjs`, not seen on a record. Row added to `SANDBOX-DONE.md` **Production verification**.
+6. **Decided.** `HUBSPOT_LINK_TO_BT_RBT_RECORD` and `HUBSPOT_LINK_TO_BCBA_RECORD` both keep CentralReach field id 138703. During sandbox end-to-end, after a write, review the value on one BT/RBT and one BCBA and confirm whether either needs its own CentralReach field.
+7. **Decided.** The workflow fetches the Contacts associated with the Case by association type 3. A Contact counts only when `contact_category` is Parent/Guardian. Exactly one such Contact supplies `firstname`, `lastname`, and `email`. Zero or more than one falls back to the Case `guardian_first_name`, `guardian_last_name`, and `email`. Drive's rule for two guardians is "the Parent/Guardian contact whose email is used for parent communication", but no HubSpot property marks that contact. Production testing confirms whether the Case sync properties remain the source. Smoke tests passed 27 of 27 on 2026-10-28.
+8. **Decided.** BT/RBT `postal_code` is not created. It exists on neither portal, and staff postal fields are `postal_code_home` and `postal_code__work_`. The BT/RBT `postal_code` fetch and fallback stay in the code. Production testing verifies them, recorded in `SANDBOX-DONE.md` **Production verification**.
+9. **Decided.** Comorbid and maladaptive mappers stay unchanged. Re-read production definitions before any mapper change. Also a production-testing check, because the clinical properties may be deleted before Thursday.
 
 ## Next recommended session
 
-1. Review the nine open items above. Do not create more properties until an item says to.
+1. All nine items are decided. The three-step meta-field work for the properties Drive maps is next and has not started. Do not create properties outside that work.
 2. WS.2 starts only after those decisions. It closes the sandbox gaps the diff still names, then runs end-to-end with the sensitive limitation, queues processing, and one sandbox poller test on a linked record. Production poller stays off.
 
 ---

@@ -116,11 +116,15 @@ function normalizeStateProvince(value) {
   return US_STATE_NAME_TO_CODE[normalizedName] || null;
 }
 
-// Not used by buildClientPayload. Danny's 10/28 note still wants these values
-// copied onto the Case by property sync. Use this only if that sync is not
-// the source. The contact fields are HubSpot's firstname, lastname, and email.
+export const PARENT_GUARDIAN_ASSOCIATION_TYPE_ID = 3;
+const PARENT_GUARDIAN_CATEGORY = "Parent/Guardian";
+
+function contactProperties(contact) {
+  return contact?.properties || contact || {};
+}
+
 export function guardianFromContact(contact) {
-  const props = contact?.properties || contact || {};
+  const props = contactProperties(contact);
   const email = cleanEmail(props.email);
   return {
     GuardianFirstName: props.firstname || null,
@@ -129,11 +133,53 @@ export function guardianFromContact(contact) {
   };
 }
 
-export function buildClientPayload({ deal, config }) {
+function isQualifyingGuardian(contact) {
+  const typeIds = Array.isArray(contact?.typeIds) ? contact.typeIds : [];
+  const onTypeThree = typeIds.some(
+    (typeId) => Number(typeId) === PARENT_GUARDIAN_ASSOCIATION_TYPE_ID
+  );
+  if (!onTypeThree) {
+    return false;
+  }
+  const category = String(contactProperties(contact).contact_category || "").trim();
+  return category === PARENT_GUARDIAN_CATEGORY;
+}
+
+function guardianFromCase(deal) {
+  const props = deal?.properties || {};
+  const email = cleanEmail(props.email);
+  return {
+    source: "case",
+    contactId: null,
+    GuardianFirstName: props.guardian_first_name || null,
+    GuardianLastName: props.guardian_last_name || null,
+    PrimaryEmail: isValidEmail(email) ? email : null
+  };
+}
+
+// Sara's rule picks the Parent/Guardian whose email is used for parent
+// communication. No HubSpot property marks that contact, so a count other
+// than one uses the Case fields.
+export function selectGuardianSource({ deal, contacts } = {}) {
+  const qualifying = (Array.isArray(contacts) ? contacts : []).filter(isQualifyingGuardian);
+  if (qualifying.length !== 1) {
+    return guardianFromCase(deal);
+  }
+
+  const contact = qualifying[0];
+  const contactId = String(contact?.id ?? contactProperties(contact).hs_object_id ?? "").trim();
+  return {
+    source: "contact",
+    contactId: contactId || null,
+    ...guardianFromContact(contact)
+  };
+}
+
+export function buildClientPayload({ deal, config, contacts } = {}) {
   void config;
 
   const props = deal?.properties || {};
-  const email = cleanEmail(props.email);
+  const guardian = selectGuardianSource({ deal, contacts });
 
   return {
     ContactForm: process.env.CR_CLIENT_CONTACT_FORM || "Public Client Intake Form",
@@ -142,8 +188,7 @@ export function buildClientPayload({ deal, config }) {
     LastName: props.phi_last_name || null,
     DateOfBirth: toIsoMidnight(props.phi_date_of_birth),
     Gender: mapGender(props.phi_gender),
-    // Section 3: Parent/Guardian Contact email, read from the Case sync (`email`).
-    PrimaryEmail: isValidEmail(email) ? email : null,
+    PrimaryEmail: guardian.PrimaryEmail,
     PhoneCell: normalizePhone(props.phone),
     PhoneHome: normalizePhone(props.phone_number__second_),
     // Section 3 address. full_home_address and service_address__other are preferred.
@@ -161,9 +206,7 @@ export function buildClientPayload({ deal, config }) {
       props.stateregion || props.location_central_reach || props.location
     ),
     ZipPostalCode: props.postal_code || null,
-    // Waiting on United Care: which guardian is sent when a Case has two
-    // Parent/Guardian contacts. This uses the Case sync fields only.
-    GuardianFirstName: props.guardian_first_name || null,
-    GuardianLastName: props.guardian_last_name || null
+    GuardianFirstName: guardian.GuardianFirstName,
+    GuardianLastName: guardian.GuardianLastName
   };
 }

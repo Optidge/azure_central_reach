@@ -273,6 +273,35 @@ export async function getDealById(dealId, properties = []) {
   return response?.data || null;
 }
 
+const CONTACT_PROPERTIES = ["firstname", "lastname", "email", "contact_category"];
+
+export async function getContactById(contactId, properties = CONTACT_PROPERTIES) {
+  if (!hubSpotHttpClient) {
+    throw new Error("HubSpot client is not initialized");
+  }
+
+  const id = String(contactId || "").trim();
+  if (!id) {
+    throw new Error("HubSpot contactId is required");
+  }
+
+  const requestedProperties = Array.isArray(properties) ? properties : [];
+  const params = requestedProperties.length
+    ? { properties: requestedProperties.join(",") }
+    : undefined;
+
+  const response = await withRetry(
+    () => hubSpotHttpClient.get(`/crm/v3/objects/0-1/${id}`, { params }),
+    {
+      maxAttempts: 3,
+      baseDelayMs: 400,
+      maxDelayMs: 5000
+    }
+  );
+
+  return response?.data || null;
+}
+
 function hubspotMissingProperty(error, propertyName) {
   const status = error?.response?.status;
   if (status !== 400 && status !== 422) {

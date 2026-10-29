@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildClientPayload, guardianFromContact } from "../../mappings/client/buildClientPayload.mjs";
+import {
+  buildClientPayload,
+  guardianFromContact,
+  selectGuardianSource
+} from "../../mappings/client/buildClientPayload.mjs";
 import { validateClientPayload } from "../../mappings/client/validateClientPayload.mjs";
 
 test("buildClientPayload maps and normalizes AWS canonical fields", () => {
@@ -84,6 +88,156 @@ test("guardianFromContact reads the contact and leaves the Case payload alone", 
   assert.equal(payload.PrimaryEmail, "case@example.com");
   assert.equal(payload.GuardianFirstName, "Case");
   assert.equal(payload.GuardianLastName, "Sync");
+});
+
+function guardianDeal() {
+  return {
+    id: "deal-1",
+    properties: {
+      email: "case@example.com",
+      guardian_first_name: "Case",
+      guardian_last_name: "Sync"
+    }
+  };
+}
+
+function guardianContact({ id, typeIds, category, firstname, lastname, email }) {
+  return {
+    id,
+    typeIds,
+    properties: {
+      firstname,
+      lastname,
+      email,
+      contact_category: category
+    }
+  };
+}
+
+test("one qualifying Parent/Guardian contact supplies name and email", () => {
+  const deal = guardianDeal();
+  const contacts = [
+    guardianContact({
+      id: "101",
+      typeIds: [3],
+      category: "Parent/Guardian",
+      firstname: "Jordan",
+      lastname: "Rivera",
+      email: "  Parent@Example.com "
+    })
+  ];
+
+  const source = selectGuardianSource({ deal, contacts });
+  assert.equal(source.source, "contact");
+  assert.equal(source.contactId, "101");
+
+  const payload = buildClientPayload({ deal, contacts });
+  assert.equal(payload.GuardianFirstName, "Jordan");
+  assert.equal(payload.GuardianLastName, "Rivera");
+  assert.equal(payload.PrimaryEmail, "parent@example.com");
+});
+
+test("zero qualifying contacts use the Case guardian fields", () => {
+  const deal = guardianDeal();
+  const source = selectGuardianSource({ deal, contacts: [] });
+  assert.equal(source.source, "case");
+  assert.equal(source.contactId, null);
+
+  const payload = buildClientPayload({ deal, contacts: [] });
+  assert.equal(payload.GuardianFirstName, "Case");
+  assert.equal(payload.GuardianLastName, "Sync");
+  assert.equal(payload.PrimaryEmail, "case@example.com");
+});
+
+test("two qualifying contacts use the Case guardian fields", () => {
+  const deal = guardianDeal();
+  const contacts = [
+    guardianContact({
+      id: "101",
+      typeIds: [3],
+      category: "Parent/Guardian",
+      firstname: "Jordan",
+      lastname: "Rivera",
+      email: "parent@example.com"
+    }),
+    guardianContact({
+      id: "102",
+      typeIds: [3],
+      category: "Parent/Guardian",
+      firstname: "Avery",
+      lastname: "Rivera",
+      email: "avery@example.com"
+    })
+  ];
+
+  const source = selectGuardianSource({ deal, contacts });
+  assert.equal(source.source, "case");
+  assert.equal(source.contactId, null);
+
+  const payload = buildClientPayload({ deal, contacts });
+  assert.equal(payload.GuardianFirstName, "Case");
+  assert.equal(payload.GuardianLastName, "Sync");
+  assert.equal(payload.PrimaryEmail, "case@example.com");
+});
+
+test("a contact with a different category does not count", () => {
+  const deal = guardianDeal();
+  const parent = guardianContact({
+    id: "101",
+    typeIds: [3],
+    category: "Parent/Guardian",
+    firstname: "Jordan",
+    lastname: "Rivera",
+    email: "parent@example.com"
+  });
+  const teammate = guardianContact({
+    id: "102",
+    typeIds: [3],
+    category: "Team Member",
+    firstname: "Sam",
+    lastname: "Other",
+    email: "sam@example.com"
+  });
+
+  const onlyOther = buildClientPayload({ deal, contacts: [teammate] });
+  assert.equal(onlyOther.GuardianFirstName, "Case");
+  assert.equal(onlyOther.GuardianLastName, "Sync");
+  assert.equal(onlyOther.PrimaryEmail, "case@example.com");
+
+  const withParent = buildClientPayload({ deal, contacts: [parent, teammate] });
+  assert.equal(withParent.GuardianFirstName, "Jordan");
+  assert.equal(withParent.GuardianLastName, "Rivera");
+  assert.equal(withParent.PrimaryEmail, "parent@example.com");
+});
+
+test("an association type other than 3 does not count", () => {
+  const deal = guardianDeal();
+  const unlabeled = guardianContact({
+    id: "101",
+    typeIds: [3],
+    category: "Parent/Guardian",
+    firstname: "Jordan",
+    lastname: "Rivera",
+    email: "parent@example.com"
+  });
+  const otherType = guardianContact({
+    id: "102",
+    typeIds: [76],
+    category: "Parent/Guardian",
+    firstname: "Sam",
+    lastname: "Other",
+    email: "sam@example.com"
+  });
+
+  const onlyOtherType = buildClientPayload({ deal, contacts: [otherType] });
+  assert.equal(onlyOtherType.GuardianFirstName, "Case");
+  assert.equal(onlyOtherType.GuardianLastName, "Sync");
+  assert.equal(onlyOtherType.PrimaryEmail, "case@example.com");
+
+  const withUnlabeled = buildClientPayload({ deal, contacts: [unlabeled, otherType] });
+  assert.equal(withUnlabeled.GuardianFirstName, "Jordan");
+  assert.equal(withUnlabeled.GuardianLastName, "Rivera");
+  assert.equal(withUnlabeled.PrimaryEmail, "parent@example.com");
 });
 
 test("validateClientPayload enforces required names", () => {
