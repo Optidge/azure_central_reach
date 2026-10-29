@@ -8,7 +8,7 @@
 
 **Baseline on GitHub:** [`f215d9d`](https://github.com/Optidge/azure_central_reach/commit/f215d9dc945ae494a5813ffb883b0abe09894352) on `main` — hybrid webhook plus linked-recheck change detection. Review that revision. Do not treat an older snapshot as current, and do not reinstate behavior that commit already removed.
 
-**Working tree, not on GitHub yet:** Comments on the Case and staff fetch lists, and on the matching mapping lines, document the sync-property read path below. The Case fetch comments also name the production sensitive-data tier (portal `50317927`, Integration V2 API rule #2). Portal `50850427` cannot store sensitive properties. Those comments are local only. GitHub `main` does not contain them. This document is the instruction until they are committed. `.test-evidence/` is gitignored. Do not edit it while a live test run owns that folder.
+**Branch `align-sandbox-hubspot-field-sync`:** Comments on the Case and staff fetch lists, and on the matching mapping lines, document the sync-property read path below. The Case fetch comments also name the production sensitive-data tier (portal `50317927`, Integration V2 API rule #2). Portal `50850427` cannot store sensitive properties. Those comments are committed on the branch, and the branch is pushed to GitHub. GitHub `main` does not contain the branch commits. This document is the instruction until the branch merges. `.test-evidence/` is gitignored. Do not edit it while a live test run owns that folder.
 
 ---
 

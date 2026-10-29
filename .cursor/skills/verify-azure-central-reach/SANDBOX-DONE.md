@@ -19,6 +19,8 @@ The local harness does **not** prove sandbox done. `POST /api/hubspot-webhook` r
 
 `npm test` is the offline gate. It does not replace either proof.
 
+`align-sandbox-hubspot-field-sync` merges to `main` only after both the WS.1 diff and the WS.2 sandbox end-to-end proof exist.
+
 Status and business timing live in [`docs/CHECKPOINT.md`](../../../docs/CHECKPOINT.md). Row-level criteria live in [`docs/Change Detection Completion Phase.md`](../../../docs/Change%20Detection%20Completion%20Phase.md) sections **Outcome** and **How to verify**. When those disagree with an older waiting list, the checkpoint’s **Danny — 10/28** timing table wins.
 
 ---
@@ -44,9 +46,7 @@ Sandbox change detection is done when every item below is true. A blocked decisi
 | BT/RBT | `64796590207` | employee `5324528` |
 | BCBA | `64797567870` | employee `5324527` |
 
-These three are the address restore baseline from the previous test. One writer per record. Do not share an App Insights window across runners. Evidence folder: `.test-evidence/` (gitignored). Do not edit it while a live run owns it. Latest status: `.test-evidence/TEST-RUN-SUMMARY.md` (Phases 0–5, previous run).
-
-Still open from that summary: BT/RBT Loop 2 clear-set-restore with CentralReach read; BCBA Medicaid isolated suite; the Case clear gap above; blocked-code rows after the fetch list matches workflow triggers; then the poller proof with the queues actually processing.
+These three are the address restore baseline from the previous test. One writer per record. Do not share an App Insights window across runners. Evidence folder: `.test-evidence/` (gitignored). Do not edit it while a live run owns it. Prior evidence: `.test-evidence/TEST-RUN-SUMMARY.md` (Phases 0–5, previous run). Its open items are history. They are not the next run. Carry any row they leave unproven into the WS.2 coverage matrix and prove it there.
 
 ### Explicitly not required for sandbox done
 

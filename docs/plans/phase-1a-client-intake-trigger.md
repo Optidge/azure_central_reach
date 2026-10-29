@@ -44,7 +44,7 @@ Auth is the **legacy private app** already used in each portal. Sandbox app: **C
 | `ALLOW_EMPLOYEE_CREATE` | `true` |
 | `PUT_ONLY_MODE` | `false` |
 
-Create test passed. Eight employees were created in CentralReach. Four Case deals completed the client queue without an error. The client log does not include the CentralReach contact id. The next test, not started, is an in-place phone or city edit on one BCBA and one BT/RBT. Do not use email for that edit. After it passes, the poller-together test is the following step. Production stays off.
+Create test passed. Eight employees were created in CentralReach. Four Case deals completed the client queue without an error. The client log does not include the CentralReach contact id. History: after that create test, the planned follow-up was an in-place phone or city edit on one BCBA and one BT/RBT, then a poller-together test. That plan is superseded. The current run is WS.2 in [`CHECKPOINT.md`](../CHECKPOINT.md): close sandbox gaps, finish sandbox end-to-end with the known sensitive limitation, queue workers processing, and one sandbox poller test on a linked record. Production stays off.
 
 ### Why this architecture
 
@@ -147,8 +147,8 @@ Employee intake in the same poller should follow the same hybrid pattern (`enter
 - [x] Queues in use are `client-sync-queue` and `employee-sync-queue`. `processClientQueue` and `processEmployeeQueue` are enabled. `intakePoller` is disabled.
 - [x] Create test passed. Eight employees were created. Four Case deals completed the client queue.
 - [x] `docs/hubspot-centralreach-field-mappings-current-state.md` trigger section matches this runtime
-- [ ] In-place update test: edit phone or city on BCBA `64796547330` and BT/RBT `64797297759`, then confirm Azure logs `operation: update` with the same CentralReach contact id. Do not use email. Wait 30 seconds between edits of the same record.
-- [ ] Turn `intakePoller` on in sandbox only after that update test passes, then run the webhook and the poller together
+- History, superseded by WS.2: in-place update test editing phone or city on BCBA `64796547330` and BT/RBT `64797297759`, then the webhook and poller together.
+- [ ] WS.2 in [`CHECKPOINT.md`](../CHECKPOINT.md): queue workers processing, then `intakePoller` on in sandbox for one poller-only change on an already linked record. Production poller stays off.
 
 ### Later add-on, not this build
 

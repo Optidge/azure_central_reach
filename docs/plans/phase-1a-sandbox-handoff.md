@@ -73,7 +73,7 @@ Case deals that completed: `66718858241`, `66719211786`, `66718883435`, `6671883
 
 `client-sync-queue` still has one dead letter from an earlier fake deal id. It is not one of these records. `employee-sync-queue` was empty after the test.
 
-Paused next test, not this thread: edit phone or city on BCBA `64796547330` and BT/RBT `64797297759`, then confirm Azure logs `operation: update` with the same CentralReach contact id. Do not use email. Employee update can keep the email already stored in CentralReach. Wait 30 seconds between edits of the same record. After that passes, the poller-together test is the following step.
+History, superseded: this handoff paused a phone or city edit on BCBA `64796547330` and BT/RBT `64797297759`, followed by a poller-together test. Do not run that as the next test. The current run is WS.2 in [`CHECKPOINT.md`](../CHECKPOINT.md): close sandbox gaps, finish sandbox end-to-end with the known sensitive limitation, queue workers processing, and one sandbox poller test on a linked record. Production poller stays off.
 
 ## Lucid
 

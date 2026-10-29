@@ -47,7 +47,7 @@ Read in this sequence unless pstack is scoped to one topic only.
 | 4 | [`hubspot-centralreach-field-mappings-current-state.md`](hubspot-centralreach-field-mappings-current-state.md) | Runtime flow, change detection, sensitive tier |
 | 5 | [`Change Detection Completion Phase.md`](Change Detection Completion Phase.md) | Completion criteria, sync-property read path, open decisions table |
 | 6 | [`sandbox_vs_production_mvp.md`](sandbox_vs_production_mvp.md) | Portal IDs, queues, prod inventory |
-| 7 | [`.test-evidence/TEST-RUN-SUMMARY.md`](../.test-evidence/TEST-RUN-SUMMARY.md) | Latest sandbox test status (local only, gitignored) |
+| 7 | [`.test-evidence/TEST-RUN-SUMMARY.md`](../.test-evidence/TEST-RUN-SUMMARY.md) | Previous test evidence (local only, gitignored). Not the plan for WS.2. |
 | 8 | [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) | Sandbox done is WS.2: gaps closed, sensitive limitation, queues, one poller test. Phases 0–5 are the previous test. |
 
 **Code anchors (after docs):**

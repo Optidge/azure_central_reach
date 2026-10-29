@@ -14,11 +14,11 @@
 | **Phase** | Sandbox **Change Detection Completion** (portal `50850427` on Function App `centralreachserverless`) |
 | **Business spec** | [Google Drive Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit) |
 | **Deployed code baseline (`main`)** | Hybrid webhook + linked-recheck change detection — [`f215d9d`](https://github.com/Optidge/azure_central_reach/commit/f215d9dc945ae494a5813ffb883b0abe09894352), [PR #1](https://github.com/Optidge/azure_central_reach/pull/1) merged |
-| **Working branch** | `align-sandbox-hubspot-field-sync` @ `77f4224` — broader fetch lists, mappings, sandbox property scripts; **not merged to `main`; not confirmed published beyond prior hybrid deploy** |
+| **Working branch** | `align-sandbox-hubspot-field-sync` @ `69fe219` — broader fetch lists, mappings, sandbox property scripts, and the 10/28 handoff docs. Pushed to GitHub. **Not merged to `main`; not confirmed published beyond prior hybrid deploy** |
 | **Primary signal** | HubSpot workflow → `POST /api/hubspot-webhook` (record id only) |
 | **Backup signal** | `intakePoller` — same queues as the webhook. **Timer is off on the app today.** Sandbox end-to-end turns it on and proves a poller-only sync. It is not optional. Production poller stays off. |
 | **Production portal `50317927`** | Not the live Function App target tonight. Full production move is **tomorrow**. Until then, and for the first production exercise, use **ZZ TEST records only**. |
-| **Gate before merge** | **WS.1:** confirm production HubSpot properties, enumerations, and association labels against the Drive map and against sandbox. Then pull CentralReach metadata fields and org labels and compare to `src/constants/centralReach.mjs`. |
+| **Gate before merge** | Both, in order. **WS.1:** confirm production HubSpot properties, enumerations, and association labels against the Drive map and against sandbox. Then pull CentralReach metadata fields and org labels and compare to `src/constants/centralReach.mjs`. **WS.2 proof:** sandbox gaps closed and the sandbox end-to-end passed, with queue workers processing and one sandbox poller test on a linked record. The branch stays unmerged until the WS.2 proof exists. |
 | **10/28 decisions** | Guardian, NM/VA, cleanup stages, Contact workflow, and BCBA `workday_id` stand. Backfill is decided but **waits for full production tomorrow**. Staffing-signal behavior is a **separate workstream**. Comorbid and maladaptive still need a confirmation. |
 
 ---
@@ -117,11 +117,11 @@ Thursday EOD works on United Care’s side. They are adding a read-only Case fie
 - Expands `REQUIRED_DEAL_PROPERTIES`, `BT_RBT_PROPERTIES`, `BCBA_PROPERTIES` and mapping builders toward the completion-phase guide.
 - Adds `scripts/create-sandbox-hubspot-properties.mjs` + `sandbox-hubspot-properties.json`.
 - Updates tests (`clientMetadataMapping`, employee payloads, workflow smoke tests).
-- **Action before next sandbox publish:** `npm test`, review diff vs completion phase, merge or PR, then `func azure functionapp publish centralreachserverless` only when explicitly approved.
+- **Action before next sandbox publish:** `npm test`, review diff vs completion phase, then `func azure functionapp publish centralreachserverless` only when explicitly approved. Do not merge first. Merge waits for the WS.2 proof.
 
-**Local docs (not on `main` yet):**
+**Docs on the branch (not on `main`):**
 
-- This checkpoint and [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md)
+- This checkpoint, [`HANDOFF.md`](HANDOFF.md), and [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md)
 - [`export/cursor-agent-transcripts-oct27-workstream.md`](export/cursor-agent-transcripts-oct27-workstream.md)
 - [`state.md`](state.md) — BPS-style *single-task* state template (separate from this project checkpoint)
 
@@ -150,7 +150,7 @@ Thursday EOD works on United Care’s side. They are adding a read-only Case fie
 
 Phases 0–5 in `.test-evidence/TEST-RUN-SUMMARY.md` are the **previous** test. They show what already passed and what stayed open. They are not the script for the next run. The next end-to-end is WS.2, and it includes the queue workers and the sandbox poller.
 
-**Do not merge `align-sandbox-hubspot-field-sync` until WS.1 is done.** Sandbox is not a clean copy of production. Known gaps are listed under “Sandbox does not match production yet.”
+**Do not merge `align-sandbox-hubspot-field-sync` until WS.1 is done and the WS.2 proof exists.** Sandbox is not a clean copy of production. Known gaps are listed under “Sandbox does not match production yet.”
 
 ### WS.1 — Production schema and CentralReach catalog (first)
 
@@ -163,7 +163,7 @@ Read-only. No production record writes. No production workflow changes. Credenti
 5. **Write the diff** into [`Sandbox props & labels_summary.md`](Sandbox%20props%20%26%20labels_summary.md) (or a sibling inventory file). Fix code or sandbox properties only after that diff exists.
 6. **Missing properties before sandbox testing is finalized.** Include the production staffing trigger names in that diff. Creating a missing sandbox property is in this stream. Building the staffing-signal behavior is not.
 
-A local Node script is the right tool. HubSpot Breeze can help explore the portal, but it will not produce a repeatable diff against the Drive list, sandbox, and `centralReach.mjs`. The script should call the CRM properties API and the associations labels API with `HUBSPOT_PRIVATE_APP_TOKEN_PROD`, and the existing CentralReach discovery CLIs for metadata and labels. Read property **definitions** first. Do not dump record values.
+Tools. The production property definition and association label read uses the HubSpot CLI (`hs`). Reads and changes on the live Function App use the Azure CLI (`az`). That covers app settings, the poller switch, and the queues. Publishing the app is `func azure functionapp publish centralreachserverless`, and only when explicitly approved. CentralReach metadata and org labels stay on the discovery commands in [`centralreach-metadata-and-labels-discovery.md`](centralreach-metadata-and-labels-discovery.md). HubSpot Breeze can help explore the portal, but it will not produce a repeatable diff against the Drive list, sandbox, and `centralReach.mjs`. Read property **definitions** first. Do not dump record values.
 
 ### WS.2 — Close sandbox gaps, then end-to-end with queues and the poller
 
@@ -174,15 +174,16 @@ After WS.1, and not before:
 3. The end-to-end includes the queues and the poller. `processClientQueue` and `processEmployeeQueue` must be processing. After the webhook path on the published sandbox build is healthy, turn `intakePoller` **on in sandbox** and run **one** poller-only change on an already linked record. The poller uses the same queues. Production poller stays off. Writing the poller down as deferred does not finish WS.2.
 4. Drive the new run with the HubSpot CLI and the Azure CLI. Breeze can assist. Claude Code can create extra sandbox records. The original three records stay the address restore baseline. Use Phases 0–5 only as the previous evidence, not as the plan for this run.
 
-### Then — merge, publish, isolated retests
+### Sequence — sandbox publish, WS.2 proof, then merge
 
 1. Fold WS.1 fixes into the branch (or a follow-up commit). Run `npm test` on `main` and on the branch.
-2. Merge, then publish to `centralreachserverless` only when explicitly approved. Confirm the app is still portal `50850427`.
+2. Publish the branch build with `func azure functionapp publish centralreachserverless` only when explicitly approved. Confirm the app is still portal `50850427`. Do not merge before the WS.2 proof.
 3. Reconcile sandbox workflows W1–W3 with the fetch list (`blocked-code` rows).
+4. Run WS.2 on the published sandbox build. Merge to `main` only after the WS.2 proof exists.
 
-### Verification — isolated retests (one writer per record)
+### WS.2 rows carried from prior evidence (one writer per record)
 
-From `.test-evidence/TEST-RUN-SUMMARY.md` **Still open**:
+These rows stayed open in the previous test evidence, `.test-evidence/TEST-RUN-SUMMARY.md`. They are history, not a separate run. Prove each one inside the WS.2 coverage matrix.
 
 | Priority | Scope | Notes |
 | --- | --- | --- |
@@ -191,8 +192,6 @@ From `.test-evidence/TEST-RUN-SUMMARY.md` **Still open**:
 | P0 | Case clears | **Product gap:** `guardian_first_name`, `guardian_last_name`, `insurance_primary` — HubSpot clear + Azure `success` but **CR kept prior value**; fix mapping/metadata DELETE path, then retest |
 | P1 | Blocked-code rows | After fetch list matches workflow triggers: `case_status`, `staffing_status`, insurance labels, `location`, `gender_new`, billing hold, etc. |
 | Required | Poller backup | Part of sandbox end-to-end, not a later option. After webhook health on the published build, timer **on in sandbox**, queue workers processing, one poller-only edit on an already linked record. Concurrency stays a separate check. Production poller stays off. |
-| P2 | Phase 4–5 | Duplicate replay, eligibility scenarios, contact-source / staffing association fixtures — **pending** |
-
 ### 3. Human decisions still open
 
 10/28 closed backfill, guardian selection, comorbid versus clinical, New Mexico / Virginia, cleanup stages, and Reassessment-as-staffing. Do not re-open those. Still waiting:
@@ -260,7 +259,7 @@ What sandbox end-to-end can prove: the property is requested and a non-sensitive
 
 | Item | Note |
 | --- | --- |
-| Production HubSpot token in local `.env` | Key name `HUBSPOT_PRIVATE_APP_TOKEN_PROD`. Use it for WS.1 reads. Do not log the value. |
+| Production HubSpot token in local `.env` | Key name `HUBSPOT_PRIVATE_APP_TOKEN_PROD`. Do not log the value. The WS.1 definition read goes through the HubSpot CLI (`hs`). |
 | Workflow automation API 403 on sandbox app | Reconciliation uses exported workflow snapshot; not blocking retests if snapshot is current |
 | Sandbox sensitive properties | Portal `50850427` cannot store the sensitive tier. Schema names can be confirmed now. A live sensitive GET cannot. |
 
@@ -278,7 +277,7 @@ What sandbox end-to-end can prove: the property is requested and a non-sensitive
 
 ## Next recommended session
 
-1. WS.1 script: production property definitions + association labels, then sandbox diff. No record exports.
+1. WS.1 read with the HubSpot CLI (`hs`): production property definitions + association labels, then sandbox diff. No record exports.
 2. Re-pull CentralReach metadata configuration and org labels. Diff against `src/constants/centralReach.mjs`.
 3. Update [`Sandbox props & labels_summary.md`](Sandbox%20props%20%26%20labels_summary.md) with the diff.
 4. Only then WS.2: close the sandbox gaps, run end-to-end with the sensitive limitation, queues processing, and one sandbox poller test on a linked record.
