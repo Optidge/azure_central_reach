@@ -317,7 +317,7 @@ function buildBtRbtPayload({ record, config }) {
     addressLine2: trimOrNull(properties.home_apt),
     city: trimOrNull(properties.location_city),
     stateProvince: stateCode,
-    zipPostalCode: trimOrNull(properties.postal_code_home) || trimOrNull(properties.postal_code),
+    zipPostalCode: trimOrNull(properties.postal_code_home),
     // Section 6: Contact phone, read from the BT/RBT mirror `employee_phone`.
     phoneCell: normalizePhone(properties.employee_phone)
   };

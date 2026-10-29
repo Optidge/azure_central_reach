@@ -61,7 +61,6 @@ const BT_RBT_PROPERTIES = [
   "location_home",
   "state_home",
   "location",
-  "postal_code",
   "postal_code_home",
   "entered_in_centralreach",
   // Section 6 phone is the Contact mirror on the BT/RBT (`employee_phone`).
