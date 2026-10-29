@@ -1,6 +1,6 @@
 # Project checkpoint — azure_central_reach
 
-**Last updated:** 2026-10-29 mid-morning (America/Chicago). Webhook proof passed. Poller still off.  
+**Last updated:** 2026-10-29 late morning (America/Chicago). Poller marker passed. Restore did not reach CentralReach. Timer is off.  
 **Audience:** Zeke, pstack reviewers, and implementing agents  
 **Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). The nine schema questions are decided. Units 1 through 7 are done on the published sandbox app. Do not enable `intakePoller`, and do not resume the 20-minute loop, until Zeke asks.  
 **Pointer for doc order and pstack prompts:** [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md)
@@ -320,12 +320,12 @@ The overnight attempt failed. The app returned HTTP 202, then skipped the deal b
 1. ~~Read a CentralReach client with the `/enterprise/v1` prefix and no redirect.~~ Done. JSON on mid-morning resume.
 2. ~~On sandbox portal `50850427` only, set deal `66712883229` `enter_in_central_reach` to `Yes`.~~ Done. The gate still contains `Yes`.
 3. ~~Rerun row 3.8b.~~ Done. Evidence in `.test-evidence/ws2-3.8b.md` **Resume proof**. Matrix row 3.8b is `passed`.
-4. Turn `intakePoller` on in sandbox for one poller-only edit on an already linked record. The fast signal must not be that proof. Then turn the sandbox poller off again if the proof is done. Production poller stays off. Do not enable the poller until Zeke asks.
+4. Poller marker passed on 2026-10-29 late morning. Deal `66712883229` is in the sweep allowlist. `work_schedule_details` was set to `POLL1`. `processClientQueue` logged source `intakePoller`. CentralReach metadata `132304` matched `POLL1`. No webhook accept for that edit. HubSpot was then restored to the pre-test value. A later sync logged `noop` and did not push metadata, so field `132304` still has `POLL1`. The timer was turned off. Azure read-back on 2026-10-29 late morning showed `AzureWebJobs.intakePoller.Disabled` `true`. Do not enable it again until Zeke asks. Evidence is `.test-evidence/ws2-poller.md`. Row 3.14 stays `not run` until CentralReach matches the restored HubSpot value.
 5. Continue the other `not run` matrix rows. Do not guess-fix label removal, the gate latch, care coordinator `138851`, `staffing_status`, or the name rollups. Rule 8 in `SANDBOX-DONE.md` stays uncoded.
 
 ## Next recommended session
 
-Start at resume step 4 above only when Zeke asks. The webhook path for row 3.8b is healthy. The sandbox poller proof and the other matrix rows are still open. Do not merge. Do not push.
+One more sync has to clear CentralReach metadata `132304` so it matches the restored HubSpot `work_schedule_details`. Do not turn the timer on until Zeke asks. Do not merge. Do not push. The other matrix rows stay open.
 
 ---
 

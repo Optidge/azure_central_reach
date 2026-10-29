@@ -1,6 +1,6 @@
 # Handoff — fresh agent
 
-**As of:** 2026-10-29 mid-morning, America/Chicago. Webhook proof passed. Poller still off.  
+**As of:** 2026-10-29 late morning, America/Chicago. Poller marker passed. CentralReach restore did not. Timer is off.  
 **Repo:** `azure_central_reach` (Optidge / United Care ABA)  
 **Checkout:** `align-sandbox-hubspot-field-sync`. Published app is `037ea72`. Ahead of origin. Not pushed. Not merged.  
 **Status:** The nine schema questions are decided. Units 1 through 7 in [`CHECKPOINT.md`](CHECKPOINT.md) under **Paused 2026-10-29** are done, including the live webhook proof on row 3.8b. Do not start the poller, the 20-minute loop, a merge, or a push until Zeke asks. The branch merges only after the full WS.2 proof exists, including the poller test.
@@ -31,7 +31,7 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 | Deployed baseline | `main` at `f215d9d` (hybrid webhook + linked-recheck). PR #1 merged. |
 | Working branch | `align-sandbox-hubspot-field-sync`. Published app is `037ea72` on `centralreachserverless`. Portal `50850427`. Newest commit is the pause note. **Not pushed. Not merged.** |
 | Live app | Poller disabled. Both queue workers enabled. Do not publish again unless this commit is no longer what the app is running. |
-| Next gate | Resume step 4 in [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**. One sandbox poller-only edit on an already linked record. Do not enable the poller until Zeke asks. Deal `66712883229` gate still contains `Yes`. |
+| Next gate | Clear CentralReach metadata `132304` so it matches restored HubSpot `work_schedule_details` on deal `66712883229`. The poller marker already passed. The timer is off. Do not enable it until Zeke asks. |
 
 Architecture:
 
@@ -76,4 +76,4 @@ Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other 
 - Do not invent the Grad Permit BCBA internal name.
 - Do not write production portal `50317927`.
 
-The remaining WS.2 work is the sandbox poller test on an already linked record, then the other `not run` matrix rows. Production poller stays off.
+The poller marker passed and the timer is off. CentralReach metadata `132304` still has the test marker `POLL1`. The remaining work is that restore, then the other `not run` matrix rows. Production poller stays off.

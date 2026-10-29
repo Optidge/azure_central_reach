@@ -2,7 +2,7 @@
 
 **As of:** 2026-10-29 morning, branch `align-sandbox-hubspot-field-sync`. Matrix draft is `037ea72`. The maintenance note was added with the pause docs.
 **Done bar:** rule 3 in [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md).
-**Status:** Draft. Row 3.8b passed on the mid-morning 2026-10-29 resume. Evidence is gitignored `.test-evidence/ws2-3.8b.md` **Resume proof**. Other rows stay as drafted. See [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**.
+**Status:** Draft. Row 3.8b passed. The poller marker for `work_schedule_details` reached CentralReach, and the restore did not. Row 3.14 stays `not run`. Evidence is gitignored `.test-evidence/ws2-poller.md`. See [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**.
 
 One row per item in sections 3 to 9 of the Drive guide (Integration Guide V2.0), plus the section 11 gates. A guide item that names several HubSpot fields with separate destinations or separate decisions is split into lettered sub-rows.
 
@@ -16,7 +16,7 @@ One row per item in sections 3 to 9 of the Drive guide (Integration Guide V2.0),
 | Compared | Part of the hashed mapped state. Client: core payload, metadata, labels, and staffing relationships. Employee: outbound payload, metadata for the known field ids, and labels. |
 | Written | Sent to CentralReach, or written back to HubSpot for CR to HS rows. |
 | Fast trigger | Sandbox workflow that watches the property, from the Drive **Sandbox Assets** snapshot of 2026-10-27. W1 Case, W2 BT/RBT, W3 BCBA ongoing refresh. W4 Case, W5 BT/RBT, W6 BCBA entry property. The saved definitions were not re-read for this draft. |
-| Poller coverage | What `intakePollerWorkflow.mjs` can carry. **Recheck** is the linked-record recheck: every record with a CentralReach id, no stage filter, on unless `LINKED_RECHECK_ENABLED=false`. **Sweep** is the modified sweep: pipeline and stage allowlist, `hs_lastmodifieddate` in the lookback window and newer than `integration_last_write`. **None** means the field is not fetched. No poller run has happened yet, so every poller cell is coverage by code, not a result. |
+| Poller coverage | What `intakePollerWorkflow.mjs` can carry. **Recheck** is the linked-record recheck. **Sweep** is the modified sweep. **None** means the field is not fetched. One sweep run on 2026-10-29 synced deal `66712883229` with source `intakePoller`. That run is evidence for the signal, not a pass for every row whose cell says Sweep. |
 | Result | `not run`, `blocked` with a named owner, `signal only`, or `passed` with the doc that records it. |
 
 Only one pass is recorded. SANDBOX-DONE rule 6 says the address populate, clear, repopulate, and restore suite passed on 2026-10-27 for the Case, BT/RBT, and BCBA street lines. `.test-evidence/TEST-RUN-SUMMARY.md` holds older Phase 0 to 5 evidence. SANDBOX-DONE rule 4 says that run is not the WS.2 plan, so it does not mark any other row passed.
