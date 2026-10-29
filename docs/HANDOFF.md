@@ -1,9 +1,9 @@
 # Handoff — fresh agent
 
-**As of:** 2026-10-29 morning, America/Chicago. **Paused.**  
+**As of:** 2026-10-29 mid-morning, America/Chicago. Webhook proof passed. Poller still off.  
 **Repo:** `azure_central_reach` (Optidge / United Care ABA)  
-**Checkout:** `align-sandbox-hubspot-field-sync`. Published app is `037ea72`. The newest commit is this pause note (docs only). Ahead of origin. Not pushed. Not merged.  
-**Status:** The nine schema questions are decided. The seven background units in [`CHECKPOINT.md`](CHECKPOINT.md) under **Paused 2026-10-29** are done through the sandbox publish. The live webhook proof did not pass. Do not start the poller, the 20-minute loop, a merge, or a push until Zeke asks. The branch merges only after the WS.2 proof exists.
+**Checkout:** `align-sandbox-hubspot-field-sync`. Published app is `037ea72`. Ahead of origin. Not pushed. Not merged.  
+**Status:** The nine schema questions are decided. Units 1 through 7 in [`CHECKPOINT.md`](CHECKPOINT.md) under **Paused 2026-10-29** are done, including the live webhook proof on row 3.8b. Do not start the poller, the 20-minute loop, a merge, or a push until Zeke asks. The branch merges only after the full WS.2 proof exists, including the poller test.
 
 This file is the entry point for a new chat. The checkpoint is the living status.
 
@@ -31,7 +31,7 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 | Deployed baseline | `main` at `f215d9d` (hybrid webhook + linked-recheck). PR #1 merged. |
 | Working branch | `align-sandbox-hubspot-field-sync`. Published app is `037ea72` on `centralreachserverless`. Portal `50850427`. Newest commit is the pause note. **Not pushed. Not merged.** |
 | Live app | Poller disabled. Both queue workers enabled. Do not publish again unless this commit is no longer what the app is running. |
-| Next gate | Resume only from **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md). CentralReach was redirecting to `maintenance.centralreach.com`. The Case gate on deal `66712883229` is empty. |
+| Next gate | Resume step 4 in [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**. One sandbox poller-only edit on an already linked record. Do not enable the poller until Zeke asks. Deal `66712883229` gate still contains `Yes`. |
 
 Architecture:
 
@@ -65,7 +65,7 @@ The timer is **off on the app today**. That is the current setting. Sandbox is n
 
 ## Start here
 
-Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other step. The WS.1 diff is written and the nine questions are decided. Do not recreate the nine sandbox properties, the option adds, the guardian read, or the IA BCBA constant. Do not set `enter_in_central_reach` until a CentralReach client GET returns JSON.
+Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other step. The WS.1 diff is written and the nine questions are decided. Do not recreate the nine sandbox properties, the option adds, the guardian read, the IA BCBA constant, or row 3.8b. The Case gate on deal `66712883229` already contains `Yes`.
 
 - The diff is [`ws1-schema-diff.md`](ws1-schema-diff.md). It compares production property definitions, association labels, and CentralReach metadata and org labels with `src/constants/centralReach.mjs`.
 - The production definition read uses the HubSpot CLI (`hs`). Reads and changes on the live Function App use the Azure CLI (`az`). That covers app settings, the poller switch, and the queues. Publishing the app is `func azure functionapp publish centralreachserverless`, and only when explicitly approved. CentralReach metadata uses the discovery commands in [`centralreach-metadata-and-labels-discovery.md`](centralreach-metadata-and-labels-discovery.md).
@@ -76,4 +76,4 @@ Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other 
 - Do not invent the Grad Permit BCBA internal name.
 - Do not write production portal `50317927`.
 
-WS.2 proof is the remaining work. It includes one healthy webhook sync, then one sandbox poller test on an already linked record. Production poller stays off.
+The remaining WS.2 work is the sandbox poller test on an already linked record, then the other `not run` matrix rows. Production poller stays off.

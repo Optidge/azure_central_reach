@@ -1,8 +1,8 @@
 # Project checkpoint — azure_central_reach
 
-**Last updated:** 2026-10-29 morning (America/Chicago). **Paused.**  
+**Last updated:** 2026-10-29 mid-morning (America/Chicago). Webhook proof passed. Poller still off.  
 **Audience:** Zeke, pstack reviewers, and implementing agents  
-**Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). The nine schema questions are decided. The seven background units below are done through the sandbox publish. The live proof is paused. Do not start the sandbox poller, and do not resume the 20-minute loop, until Zeke asks.  
+**Fresh-agent handoff:** [`HANDOFF.md`](HANDOFF.md). The nine schema questions are decided. Units 1 through 7 are done on the published sandbox app. Do not enable `intakePoller`, and do not resume the 20-minute loop, until Zeke asks.  
 **Pointer for doc order and pstack prompts:** [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md)
 
 ---
@@ -307,27 +307,25 @@ Zeke paused the autonomous run at about 2:26 AM America/Chicago. The 20-minute h
 | 4 | Sandbox IA BCBA type | Done. Commit `bd93185`. Constant is 163. Label 98 stays Initial Assessment. |
 | 5 | Sandbox option adds | Done. Commit `474e1f5`. Old options kept. BT/RBT `gender` and `location_home` stayed text. |
 | 6 | Coverage matrix | Done as a draft. Commit `037ea72`. [`ws2-coverage-matrix.md`](ws2-coverage-matrix.md). Street rows from 2026-10-27 are the only `passed` rows. |
-| 7 | One published webhook proof | Not passed. The app accepted the webhook with HTTP 202. `processClientQueue` skipped deal `66712883229` because `enter_in_central_reach` is empty. `home_apt` was restored in HubSpot. `last_sync_status` stayed `noop`. `last_sync_at` stayed `2026-10-27T23:40:30.448Z`. `street_address` was not changed. |
+| 7 | One published webhook proof | Passed on 2026-10-29 mid-morning. Client `5324526` returned JSON. Deal `66712883229` `enter_in_central_reach` was set to `Yes` on portal `50850427`. Set, change, clear, and restore of `home_apt` each reached `last_sync_status` `success`, moved `last_sync_at`, and matched CentralReach `addressLine2`. `home_apt` was restored. Street stayed on the baseline. Poller stayed off. No code change, commit, push, or publish. |
 
-Local evidence for unit 7 is gitignored `.test-evidence/ws2-3.8b.md`. The local decision log is untracked `.audit/ws2-sandbox.tsv`. Do not commit either. `docs/state.md` is an unrelated template. Do not commit it.
+Local evidence for unit 7 is gitignored `.test-evidence/ws2-3.8b.md` (section **Resume proof**). The local decision log is untracked `.audit/ws2-sandbox.tsv`. Do not commit either. `docs/state.md` is an unrelated template. Do not commit it.
 
-### Why the proof stopped
+### Why the first proof stopped (kept for history)
 
-Deal `66712883229` is still linked to CentralReach client `5324526`. The sandbox code still requires `enter_in_central_reach` to contain `Yes`. The gate was left empty on purpose after the skip.
-
-CentralReach is in maintenance. `GET https://partners-api.centralreach.com/enterprise/v1/contacts/client/5324526` returned 302 to `maintenance.centralreach.com`. The same redirect hit employee `5324528` and `/contacts/metadata-configuration`. The token request still returned 200. The published app uses that same host and path. The last check was about 2:06 AM America/Chicago. Do not set the gate until a client GET returns JSON. A leading-slash request against that base URL drops `/enterprise/v1` and is not a valid read.
+The overnight attempt failed. The app returned HTTP 202, then skipped the deal because the gate was empty. CentralReach was returning 302 to `maintenance.centralreach.com`. The gate stayed empty until the mid-morning resume. A leading-slash request against that base URL drops `/enterprise/v1` and is not a valid read.
 
 ### Resume only when Zeke asks
 
-1. Read a CentralReach client with the `/enterprise/v1` prefix and no redirect. If it is still maintenance, stop.
-2. On sandbox portal `50850427` only, set deal `66712883229` `enter_in_central_reach` to `Yes`. That is the sandbox gate, not the production backfill.
-3. Rerun row 3.8b. Set, change, and clear `home_apt`, then restore it. A pass is HubSpot, Azure `last_sync_status` plus a moved `last_sync_at`, and CentralReach `AddressLine2` agreeing. HTTP 202 is not a pass. Do not print the street or the original apartment.
-4. After that webhook path is healthy, turn `intakePoller` on in sandbox for one poller-only edit on an already linked record. The fast signal must not be that proof. Then turn the sandbox poller off again if the proof is done. Production poller stays off.
+1. ~~Read a CentralReach client with the `/enterprise/v1` prefix and no redirect.~~ Done. JSON on mid-morning resume.
+2. ~~On sandbox portal `50850427` only, set deal `66712883229` `enter_in_central_reach` to `Yes`.~~ Done. The gate still contains `Yes`.
+3. ~~Rerun row 3.8b.~~ Done. Evidence in `.test-evidence/ws2-3.8b.md` **Resume proof**. Matrix row 3.8b is `passed`.
+4. Turn `intakePoller` on in sandbox for one poller-only edit on an already linked record. The fast signal must not be that proof. Then turn the sandbox poller off again if the proof is done. Production poller stays off. Do not enable the poller until Zeke asks.
 5. Continue the other `not run` matrix rows. Do not guess-fix label removal, the gate latch, care coordinator `138851`, `staffing_status`, or the name rollups. Rule 8 in `SANDBOX-DONE.md` stays uncoded.
 
 ## Next recommended session
 
-Start at **Paused 2026-10-29** above. The nine schema questions are decided. The seven background units are recorded there. The live proof has not passed.
+Start at resume step 4 above only when Zeke asks. The webhook path for row 3.8b is healthy. The sandbox poller proof and the other matrix rows are still open. Do not merge. Do not push.
 
 ---
 
@@ -335,7 +333,7 @@ Start at **Paused 2026-10-29** above. The nine schema questions are decided. The
 
 | Link | Role |
 | --- | --- |
-| [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot. Paused 2026-10-29 morning. |
+| [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot. Webhook proof passed 2026-10-29 mid-morning. |
 | [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md) | pstack read order, prompts, transcript IDs |
 | [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) | Local harness vs sandbox done vs production verification tomorrow |
 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Drive + repo index |

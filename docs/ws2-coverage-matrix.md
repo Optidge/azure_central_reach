@@ -2,7 +2,7 @@
 
 **As of:** 2026-10-29 morning, branch `align-sandbox-hubspot-field-sync`. Matrix draft is `037ea72`. The maintenance note was added with the pause docs.
 **Done bar:** rule 3 in [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md).
-**Status:** Draft. The matrix itself was built from the Drive guide and the code, not from a live run. One later webhook attempt on row 3.8b did not pass. The published worker skipped deal `66712883229` because `enter_in_central_reach` is empty, and CentralReach was redirecting to a maintenance page. That row stays `not run`. See [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**.
+**Status:** Draft. Row 3.8b passed on the mid-morning 2026-10-29 resume. Evidence is gitignored `.test-evidence/ws2-3.8b.md` **Resume proof**. Other rows stay as drafted. See [`CHECKPOINT.md`](CHECKPOINT.md) **Paused 2026-10-29**.
 
 One row per item in sections 3 to 9 of the Drive guide (Integration Guide V2.0), plus the section 11 gates. A guide item that names several HubSpot fields with separate destinations or separate decisions is split into lettered sub-rows.
 
@@ -33,7 +33,7 @@ Only one pass is recorded. SANDBOX-DONE rule 6 says the address populate, clear,
 | 3.6 | Primary Email | Parent/Guardian Contact `email` when exactly one type 3 contact qualifies, else Case `email` | `PrimaryEmail` | yes | yes | yes | none | Recheck | not run |
 | 3.7 | Guardian | Contact `firstname`, `lastname` when exactly one qualifies, else Case `guardian_first_name`, `guardian_last_name` | `GuardianFirstName`, `GuardianLastName` | yes | yes | yes | W1 (Case fields only) | Recheck | not run |
 | 3.8a | Mailing Address, street | `full_home_address`, then `service_address__other`, then `if_services_will_be_in_more_than_one_location__list_the_other_address`, then `street_address` | `AddressLine1` | yes | yes | yes | W1 (`street_address`) | Recheck + sweep | passed, [SANDBOX-DONE.md](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) rule 6 (2026-10-27) |
-| 3.8b | Mailing Address, apt | `home_apt` | `AddressLine2` | yes | yes | yes | W1 | Recheck + sweep | not run |
+| 3.8b | Mailing Address, apt | `home_apt` | `AddressLine2` | yes | yes | yes | W1 | Recheck + sweep | passed |
 | 3.8c | Mailing Address, city | `location_city` | `City` | yes | yes | yes | W1 | Recheck + sweep | not run |
 | 3.8d | Mailing Address, state | `stateregion`, then `location_central_reach`, then `location` | `StateProvince` | yes | yes | yes | none | Recheck + sweep | not run |
 | 3.8e | Mailing Address, postal | `postal_code` | `ZipPostalCode` | yes | yes | yes | W1 | Recheck + sweep | not run |
