@@ -1,6 +1,6 @@
 # Confirmed — Phase 1A MVP — Workflow webhook plus poller backup (HubSpot → Azure → CentralReach)
 
-**Status:** **Sandbox receiver is live. Oct 25, 2026.** Portal `50850427` only. The workflow webhook is the primary path. `HUBSPOT_WEBHOOK_CLIENT_SECRET` is set. The create test passed the same night. The existing poller is the backup and is **disabled** until an in-place update test passes. Production portal `50317927` is not enabled. Latch, discovery, reconciliation, and contact fan-out are a later add-on, not this build.
+**Status:** **Sandbox receiver is live. Oct 25, 2026.** Portal `50850427` only. The workflow webhook is the primary path. `HUBSPOT_WEBHOOK_CLIENT_SECRET` is set. The create test passed the same night. The existing poller is the backup and uses the same queues. The timer is **disabled on the app today**. Sandbox end-to-end (Oct 28) turns it on after the webhook path is healthy and proves a poller-only sync. Leaving it off does not finish the architecture. Production portal `50317927` is not enabled. Latch, discovery, reconciliation, and contact fan-out are a later add-on, not this build.
 
 **Purpose:** Record the sandbox MVP that is running, and keep the later add-on separate. Business rules stay in the Google Doc. When that Doc and this file disagree on a business rule, follow the Doc.
 
@@ -40,7 +40,7 @@ Auth is the **legacy private app** already used in each portal. Sandbox app: **C
 | Queues in use | `client-sync-queue`, `employee-sync-queue` |
 | Unused queues | `rtbt-sync-queue`, `bcba-sync-queue` |
 | Queue workers | enabled |
-| `intakePoller` | disabled |
+| `intakePoller` | disabled on the app as of Oct 25. Sandbox end-to-end enables it and proves a poller-only sync. |
 | `ALLOW_EMPLOYEE_CREATE` | `true` |
 | `PUT_ONLY_MODE` | `false` |
 
@@ -54,7 +54,7 @@ Staff can turn a workflow on in the sandbox portal and in the production portal.
 
 The webhook carries only the object type and the record id. Mapped field values stay in HubSpot. Azure reads them after the signal, so those values are not sitting in the webhook, the queue, or the info logs.
 
-A workflow does not see every change. Clears, some calculated properties, and some association changes can be missed. The existing poller stays as the backup. It is off in sandbox until an in-place update test passes. After that test, turn it on in sandbox and see what it still catches. Do not redesign it before that.
+A workflow does not see every change. Clears, some calculated properties, and some association changes can be missed. The existing poller is the backup and must function in sandbox end-to-end. It is off on the app until the webhook path for that build is healthy. Then turn it on in sandbox and prove a poller-only change still syncs through the same queues. Do not redesign it before that. Do not close the phase with the timer still off.
 
 The webhook and the poller both use the same retrieve, map, and CentralReach update. A second sync process is unnecessary.
 

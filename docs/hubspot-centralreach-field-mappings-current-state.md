@@ -4,7 +4,7 @@ Documentation of field mappings, transforms, and **change detection** implemente
 
 **Business source of truth (field map, triggers, labels):** [Google Drive — Optidge V2](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit). See [`docs/SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md). When this file and Google Drive differ, the Drive doc wins for *what we should build*; this file wins for *what the repo does now*.
 
-**Sandbox trigger (Oct 25, 2026):** On portal `50850427`, the primary path is a HubSpot workflow webhook, `POST /api/hubspot-webhook`. The body is `objectTypeId` and `recordId` only. Azure reads the mapped values. `intakePoller` is disabled on `centralreachserverless` until the in-place update test passes. The poller section below is that backup, not the path that ran the create test. See `docs/plans/phase-1a-client-intake-trigger.md`.
+**Sandbox trigger (Oct 25, 2026):** On portal `50850427`, the primary path is a HubSpot workflow webhook, `POST /api/hubspot-webhook`. The body is `objectTypeId` and `recordId` only. Azure reads the mapped values. `intakePoller` is disabled on `centralreachserverless` **today**. That is the current app setting, not the finished architecture. Sandbox end-to-end turns the timer on and proves a poller-only sync through the same queues. See `docs/plans/phase-1a-client-intake-trigger.md` and `.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`.
 
 **Source of truth in code:** mapping modules under `src/mappings/`, constants in `src/constants/centralReach.mjs`, orchestration in `src/workflows/`.
 
@@ -29,7 +29,7 @@ Documentation of field mappings, transforms, and **change detection** implemente
 ### Runtime flow
 
 1. **Webhook (primary, sandbox):** `POST /api/hubspot-webhook` checks signature v2 and enqueues the record id. A repeat notice during an in-flight refresh is still enqueued. Cases go to `client-sync-queue`. BCBA and BT/RBT go to `employee-sync-queue`.
-2. **Timer (backup, disabled in sandbox):** `src/functions/intakePoller.mjs` → `src/workflows/intakePollerWorkflow.mjs` would search HubSpot and enqueue the same two queues. `AzureWebJobs.intakePoller.Disabled` is true until the in-place update test passes.
+2. **Timer (backup):** `src/functions/intakePoller.mjs` → `src/workflows/intakePollerWorkflow.mjs` searches HubSpot and enqueues the same two queues. `AzureWebJobs.intakePoller.Disabled` is true on the app today. Sandbox end-to-end enables it and proves one poller-only sync. The workers are the same path the webhook uses.
 3. **Queue workers (enabled):** `processClientQueue` and `processEmployeeQueue`.
 4. **Sync:** `src/workflows/clientSyncWorkflow.mjs` or `src/workflows/employeeSyncWorkflow.mjs` maps fields and calls CentralReach. Both initiators use this path.
 5. **Writeback:** Same workflows patch HubSpot with the CentralReach contact id, profile link, and `last_sync_*` fields only (see sections 4 and 8).
@@ -135,7 +135,7 @@ Two layers decide whether HubSpot activity becomes a CentralReach write. Webhook
 
 | Layer | Question | Where |
 | --- | --- | --- |
-| **1. Eligibility** | Should this record be enqueued? | Initial poller search still uses pipeline/stage allowlists plus `hs_lastmodifieddate` vs `integration_last_write`. A separate linked-record recheck (`LINKED_RECHECK_ENABLED`, default on when the poller runs) pages records that already have a CentralReach id, with no stage or timestamp filter. The poller timer stays disabled until separately turned on. |
+| **1. Eligibility** | Should this record be enqueued? | Initial poller search still uses pipeline/stage allowlists plus `hs_lastmodifieddate` vs `integration_last_write`. A separate linked-record recheck (`LINKED_RECHECK_ENABLED`, default on when the poller runs) pages records that already have a CentralReach id, with no stage or timestamp filter. The poller timer is disabled on the app today. Sandbox end-to-end turns it on. |
 | **2. Content hash** | Did the mapped state change? | Webhook and poller workers compare one SHA-256 of core payload, explicit metadata blanks, label ids, and (clients) staffing association ids. Employee workers no longer return before that comparison because the parent timestamp is older than `integration_last_write`. |
 
 ### Layer 1 — Eligibility fields (any HubSpot modification)

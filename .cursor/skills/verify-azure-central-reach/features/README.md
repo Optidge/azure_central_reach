@@ -36,6 +36,10 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 3. `Driving it with verify-acr`
 4. `Gotchas`
 
+## Sandbox done vs these routes
+
+These feature files prove the **local host**. They do not prove sandbox change detection. Read [`../SANDBOX-DONE.md`](../SANDBOX-DONE.md) before calling the integration verified. A webhook **202** is not a CentralReach update. Production verification is a separate pass tomorrow.
+
 ## Features
 
 - [Connectivity test](./connectivity-test.md) — config validation and client factory smoke over HTTP.

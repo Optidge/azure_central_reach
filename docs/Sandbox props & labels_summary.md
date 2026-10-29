@@ -142,7 +142,7 @@ No CentralReach label is removed when HubSpot is set back to No. The client only
 
 | Item | Status | What closes it |
 | --- | --- | --- |
-| Production formulas | Blocked. Sandbox `location`, `reassessment_bcba_name`, `referral_source`, `total_hours_bt1bt2_work_schedule`, and BCBA `city_home`, `state_home`, and `apartment__home` are writable. `calculated` is false and the properties API has no formula. This repo has no production admin token for portal `50317927`. | Copy the real formulas from production in the HubSpot UI, or provide a production token that can read `calculationFormula`. An existing writable property cannot be switched to calculated without that formula. |
+| Production formulas | Open, no longer blocked on access. Sandbox `location`, `reassessment_bcba_name`, `referral_source`, `total_hours_bt1bt2_work_schedule`, and BCBA `city_home`, `state_home`, and `apartment__home` are writable. `calculated` is false. A local production token now exists (`HUBSPOT_PRIVATE_APP_TOKEN_PROD` in `.env`, gitignored). | Read `calculationFormula` from portal `50317927` during WS.1. An existing writable sandbox property still cannot be switched to calculated without that formula. Do not paste the token. |
 | Staffed and Active Case Load | Pending follow-up. You are taking this back to the guide. Staffed is not in the 95-label catalog. Active Case Load is not in the 58 metadata fields. `staffing_status` is fetched and is not turned into a label. | United Care names the CentralReach field or label. A Drive comment on the guide was rejected: this app does not have write access to that doc. Paste the note below if you want it on the doc. |
 | Billing hold label removal | Open in code, not a sandbox property. `cr_billing_hold_label` = Yes adds `1103437`. Setting it back to No does not remove the label. | A CentralReach label delete, once that route is confirmed. |
 
@@ -158,11 +158,11 @@ The Drive comment could not be posted (`appNotAuthorizedToFile` on `1TnUrUUUWuTQ
 | --- | --- |
 | Anthem BCBS, UHC, and payors with no CentralReach label | `src/mappings/client/buildClientMetadata.mjs` `fundingLabelId` |
 | NJ insurance labels, Aetna-CO, Cigna-CO, Carelon-CO, and billing-hold removal | `src/mappings/employees/buildEmployeePayload.mjs` `addBcbaCredentialLabels` |
-| New Mexico and Virginia employee labels | `src/mappings/employees/buildEmployeePayload.mjs` `workStateCodes` |
-| Which guardian when a Case has two | `src/mappings/client/buildClientPayload.mjs` |
-| Comorbid Diagnosis vs Maladaptive Behaviors | `src/mappings/client/buildClientMetadata.mjs` |
-| Staffed / Active Case Load | `src/workflows/clientSyncWorkflow.mjs` fetch list |
-| Unticked records that already have a CentralReach client id | `src/workflows/clientSyncWorkflow.mjs` `enterInCentralReachContainsYes` |
+| New Mexico and Virginia employee labels | Skip for now (10/28). `workStateCodes` must not add them. |
+| Which guardian when a Case has two | Decided 10/28: parent-communication email. Code still sends the Case name fields. |
+| Comorbid and maladaptive clinical fields | Danny said main fields only. Confirm the live properties before changing code. The mapper may still read `comorbid_diagnosis__clinical`. |
+| Active / Staffed labels | Pessy confirming they exist in CentralReach (10/28). |
+| Unticked records that already have a CentralReach client id | Rule decided. Implement in full production tomorrow, not in sandbox. Code still requires Yes. |
 | BT/RBT `Yes - Generic` and `No- Made Inactive` | `src/workflows/employeeSyncWorkflow.mjs` `enteredInCentralReachContainsYes` |
 
 Stages Sara's list did not cover are not branch logic in this repo. The sync follows `case_status` and `staffing_status`, so no stage comment was added. The upcoming-auth `_f` fields are not read, so no comment was added.
@@ -171,11 +171,11 @@ Stages Sara's list did not cover are not branch logic in this repo. The sync fol
 
 1. **Funding source labels.** Anthem BCBS has no HubSpot option. The open question is whether it is `Anthem NY Commercial-Carelon` (that option now exists and maps to Carelon `1107648`). UHC is not an `insurance_primary` option and was not added. Aetna or Cigna in NJ, Aetna in CO, and Other have HubSpot values and no CentralReach label. Pessy is answering.
 2. **BCBA credential labels with no CentralReach label.** `nj_insurance_labels` (MCD-NJ, Horizon-NJ), Aetna-CO, Cigna-CO, and Carelon-CO.
-3. **New Mexico and Virginia** BCBA and BT labels. HubSpot work states include them. CentralReach labels do not.
-4. **Stages not on Sara's list.** Restaffing-BCBA AND BT Needed, Reassessment, Closed Lost, and the cleanup stages (Prior Service Cleanup, Prior In Process Cleanup, Contact Only Cleanup, Lost in the Shuffle). Confirming with Sara. The code does not map these stage ids itself.
-5. **Which guardian** goes to CentralReach when a Case has two Parent/Guardian contacts. The code sends Case `guardian_first_name` and `guardian_last_name`.
-6. **Comorbid Diagnosis.** Same treatment as Maladaptive Behaviors (parent/guardian field, clinical values merged in)? Confirming with Sara. The code still reads `comorbid_diagnosis__clinical`.
-7. **Active Staffed / Active Case Load.** Section 6. Pending your follow-up. Not coded.
-8. **BT/RBT gate values.** Sara still to say how `Yes - Generic` and `No- Made Inactive` should behave. Stored `Yes` (the label `Yes - Active`) is the only value that passes.
-9. **Records already in CentralReach that were never ticked.** Sara to choose backfill of `enter_in_central_reach`, or also treat a CentralReach client id as passing the gate. The code requires the Yes token.
-10. **Upcoming auth `_f` fields.** Map the plain auth fields unless Sara wants CentralReach to see the next auth early. The `_f` copies are not in the fetch list.
+3. **New Mexico and Virginia.** Skip for now (Danny, 10/28). Do not add labels.
+4. **Stages.** Cleanup stages stay out of CentralReach. HubSpot is moving those cases to Inactive. Reassessment does not get its own map: Staffed comes from `staffing_status`. Closed Lost and Restaffing-BCBA AND BT Needed were not answered on 10/28.
+5. **Which guardian.** Decided 10/28: the Parent/Guardian contact whose email is used for parent communication. The code still sends Case `guardian_first_name` and `guardian_last_name`.
+6. **Comorbid and maladaptive.** Danny said main fields only, with clinical copies deleted before Thursday. Confirm that in the portal before changing the mapper. The code still reads `comorbid_diagnosis__clinical`.
+7. **Active / Staffed labels.** Pessy is confirming they exist in CentralReach (10/28). Active Case Load is still not an API field in this repo.
+8. **BT/RBT gate values.** Sara still has not said how `Yes - Generic` and `No- Made Inactive` should behave. Stored `Yes` (the label `Yes - Active`) is the only value that passes.
+9. **Records already in CentralReach.** The rule is decided: a CR client id is enough for about 74 cases. Implement that in full production tomorrow, not in sandbox. The sandbox code still requires the Yes token.
+10. **Upcoming auth `_f` fields.** Map the plain auth fields unless Sara wants CentralReach to see the next auth early. The `_f` copies are not in the fetch list. Not mentioned on 10/28.
