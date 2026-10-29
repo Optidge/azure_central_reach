@@ -325,7 +325,9 @@ The overnight attempt failed. The app returned HTTP 202, then skipped the deal b
 
 ## Next recommended session
 
-One more sync has to clear CentralReach metadata `132304` so it matches the restored HubSpot `work_schedule_details`. Do not turn the timer on until Zeke asks. Do not merge. Do not push. The other matrix rows stay open.
+One more sync has to clear CentralReach metadata `132304` so it matches the restored HubSpot `work_schedule_details`. Do not turn the timer on until Zeke asks. Do not merge. The other matrix rows stay open.
+
+The poller backup contract is written in [`poller-backup-contract.md`](poller-backup-contract.md). Case Status and Staffing Status are poller. The BCBA and BT name rollups are workflow. IA BCBA, RE BCBA, and BT associations are poller via linked recheck. The timer stays off.
 
 ---
 
@@ -334,9 +336,11 @@ One more sync has to clear CentralReach metadata `132304` so it matches the rest
 | Link | Role |
 | --- | --- |
 | [`HANDOFF.md`](HANDOFF.md) | Fresh-agent snapshot. Webhook proof passed 2026-10-29 mid-morning. |
+| [`poller-backup-contract.md`](poller-backup-contract.md) | Poller vs workflow for Case Status, Staffing Status, name rollups, and staffing associations. Timer cost. |
 | [`PSTACK-REVIEW-CONTEXT.md`](PSTACK-REVIEW-CONTEXT.md) | pstack read order, prompts, transcript IDs |
 | [`.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md`](../.cursor/skills/verify-azure-central-reach/SANDBOX-DONE.md) | Local harness vs sandbox done vs production verification tomorrow |
 | [`SOURCE-OF-TRUTH.md`](SOURCE-OF-TRUTH.md) | Drive + repo index |
 | [`Change Detection Completion Phase.md`](Change Detection Completion Phase.md) | Build + verify plan |
 | [Oct 27 transcript export](export/cursor-agent-transcripts-oct27-workstream.md) | Full chat handoff |
+| [Oct 28–29 transcript export](export/cursor-agent-transcripts-oct28-29-handoff.md) | Later handoff chats |
 | [GitHub repo](https://github.com/Optidge/azure_central_reach) | `Optidge/azure_central_reach` |

@@ -77,3 +77,5 @@ Read **Paused 2026-10-29** in [`CHECKPOINT.md`](CHECKPOINT.md) before any other 
 - Do not write production portal `50317927`.
 
 The poller marker passed and the timer is off. CentralReach metadata `132304` still has the test marker `POLL1`. The remaining work is that restore, then the other `not run` matrix rows. Production poller stays off.
+
+The poller-or-workflow contract for Case Status, Staffing Status, the name rollups, and the staffing associations is in [`poller-backup-contract.md`](poller-backup-contract.md). Read that before changing the timer or the workflows.
