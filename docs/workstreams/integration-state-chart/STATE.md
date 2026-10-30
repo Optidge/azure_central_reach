@@ -12,7 +12,7 @@ Produce one state chart that is also the integration flow for HubSpot to Central
 
 ## Current status
 
-Last step: all five reviews are in. The remaining open items are listed below.
+Last step: Zeke settled the sandbox Yes gate, the six sandbox workflows, the writeback timestamp check, the label catalog comparison, and item 15. The remaining open items are listed below.
 
 ## Key facts
 
@@ -39,7 +39,7 @@ Last step: all five reviews are in. The remaining open items are listed below.
 
 Settled on that tab. The create gate is Entered in CR, with no stage restriction. Case uses contains Yes. BCBA and BT/RBT use equals Yes. The 74 cases that already have a Central Reach id sync without the box. The guardian is the Parent/Guardian contact whose email is used for parent communication. Label rules include add and remove. HubSpot dates are YYYY-MM-DD and must be written as midnight UTC.
 
-Still open on that tab. Central Reach label ids, the date string Central Reach accepts, MAPPING_VERSION, live Function App settings, five versus thirty minutes, whether sandbox approval covers this repo, the writeback timestamp race, whether the six sandbox workflows exist, Yes - Generic, the state_home format, whether a blank non-label field clears Central Reach, gender value mapping, and field 138703. The tab also names portal 50317927 as the live portal and does not say the poller reads it.
+Still open on that tab. The date string Central Reach accepts, MAPPING_VERSION, live Function App settings, five versus thirty minutes, whether sandbox approval covers this repo, Yes - Generic, the state_home format, whether a blank non-label field clears Central Reach, gender value mapping, and field 138703. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, and the label catalog comparison are settled in the 2026-10-30 section. The writeback timestamp race is a sandbox integration test check.
 
 The tab has a one-time credential link under Prod access. It was not copied here. Remove it from the shared doc if it has already been used.
 
@@ -59,11 +59,34 @@ The fresh poller enqueues from timestamps and stage filters. No source file read
 
 Still open in git. No commit chooses the next mapping version. Both tips still schedule the poller every five minutes, and archive `746ce10` says thirty minutes only after Zeke asks. No commit says the sandbox pass covers a fresh-repo deploy.
 
+## Settled 2026-10-30
+
+1. Sandbox creates require Entered in Central Reach = Yes on every initial record. Already-linked records keep syncing. The chart keeps that gate. A sandbox poller run that creates records without Yes is not approved.
+
+7. Moved to the sandbox integration test list below. The later modified time is inferred from `new Date()` inside the HubSpot patch. It has not been measured.
+
+8. Compared the Google Doc label names to `central_reach_test_integration/output_files/all_labels_v3.json` (95 org labels, fetched 2026-10-27 via `node get_all_labels.js orglabels`). Names still absent, so a later fetch only helps after United Care adds them:
+
+- Staffed (section 7, `staffing_status`). No catalog name contains Staffed.
+- Active Case Load. Absent from the label catalog and from the 58-field metadata config.
+- New Mexico and Virginia employee labels (sections 8 and 9).
+- Guide payor rows with no catalog name: Aetna or Cigna in NJ, Aetna in CO, Other, MCD-NJ, Horizon-NJ, Aetna-CO, Cigna-CO, Carelon-CO.
+
+Section 7 Active and Inactive match catalog names Active Client `1125427` and In-Active Client `1121488`. `src/constants/centralReach.mjs` still has three old ids. CO Client is `1082500` in code and `1132648` in the catalog. NY Employee is `1107685` in code and `1132655` in the catalog. `BCBA` is `1052629` in code, which the catalog names BCBA LBA NY. The header BCBA id in the catalog is `1130668`. The discovery note says those constants were updated. This checkout still has the old numbers.
+
+13. Zeke confirmed the six sandbox workflows are created, enabled, and on. The HubSpot workflow list call returned 403, missing the `automation` scope, so this file has no workflow ids. The receiver is `src/functions/hubspotWebhook.mjs` (`POST /api/hubspot-webhook`). The callout is `docs/Change Detection Completion Phase.md`, Section 11, the paragraph that names W1 through W6. W1 through W3 are the fast signal. W4 through W6 watch the entry property as known or unknown. Azure keeps the Yes gate.
+
+15. Off this chart. Follow up later. The chart keeps the one employee queue this tree has.
+
+## Sandbox integration test, confirm then
+
+- A writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred, not measured.
+- The label names listed under item 8 are still absent from the production catalog. Confirm with United Care before another `get_all_labels.js orglabels` run.
+- The three stale ids in `src/constants/centralReach.mjs` (CO Client, NY Employee, header BCBA).
+
 ## Remaining open items
 
-Closed by the five reviews, and not repeated below. Asana is out. The previous build is the archive checkout. The webhook is primary and the poller is the backup. The date parser is needed and is still uncommitted. An employee create HTTP 400 is stored as blocked. The four redesign commits stay off this branch. BT/RBT `postal_code` stays removed. The judge file says the later handoff line that says to keep that fetch is outdated. Portal `50317927` stays off. The Workday id stays unchanged. Dry run is not a product state.
-
-1. The code Yes gate versus a sandbox poller run without it. The guide says create only on exact Yes, and already-linked records keep syncing. The intake judge says Zeke told them to leave that block out. The docs judge says a poller on this tree without the gate can create unticked records in production Central Reach. The chart keeps the gate. A poller run of the current fresh code is a separate approval.
+Closed earlier, and not repeated below. Asana is out. The previous build is the archive checkout. The webhook is primary and the poller is the backup. The date parser is needed and is still uncommitted. An employee create HTTP 400 is stored as blocked. The four redesign commits stay off this branch. BT/RBT `postal_code` stays removed. Portal `50317927` stays off. The Workday id stays unchanged. Dry run is not a product state. Items 1, 7, 8, 13, and 15 are settled above.
 
 2. BT/RBT "Yes - Generic" and "No- Made Inactive." The guide says Sara has not confirmed them.
 
@@ -75,23 +98,15 @@ Closed by the five reviews, and not repeated below. Asana is out. The previous b
 
 6. Live Function App settings and the published commit. The archive notes are from 10/29 and 10/30. Nobody has re-read `centralreachserverless`.
 
-7. Whether a writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred from `new Date()` inside the patch. Not measured.
-
-8. Central Reach label ids. The archive catalog has numbers. Neither checkout proves they match the guide or the production org.
-
 9. The date string Central Reach accepts. HubSpot dates are `YYYY-MM-DD` written as midnight UTC. No run has shown Central Reach accept a real date from this code.
 
 10. `state_home` format, gender value mapping, whether a blank non-label field clears Central Reach, and field `138703`. The guide or the judges leave each one undecided.
 
 11. Which HubSpot field marks the guardian contact used for parent communication. The business rule is that contact. The field is not named.
 
-12. Rows still waiting on United Care. Comorbid, Active Staffed, the staff phone internal name, and the alternate service address source.
-
-13. Whether the six sandbox workflows are enabled. One read of the guide says they are enabled. A later read of the first tab and the sandbox assets export found no enabled or disabled status.
+12. Rows still waiting on United Care. Comorbid, the staff phone internal name, and the alternate service address source. Active Staffed is the missing Staffed label in item 8.
 
 14. Label removal. The guide says remove a label when it goes back to No. The sync code only adds labels.
-
-15. One employee queue versus split queues, for production only. The chart uses the one queue this tree has.
 
 ## Open
 
