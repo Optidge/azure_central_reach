@@ -12,7 +12,7 @@ Produce one state chart that is also the integration flow for HubSpot to Central
 
 ## Current status
 
-Last step: re-read the Google Doc on 2026-10-30, including unresolved comments. Items the guide still leaves for Zeke are under Waiting on Zeke. The first deploy is confirmed only after the remaining open list is closed.
+Last step: four read-only checks on 2026-10-30. Azure re-read `centralreachserverless`. The Google Doc and its comments were re-read. The fresh tree on `review_and_update_code` was traced. HubSpot in this session reads portal `246184070`, not sandbox `50850427`. The four checks that can run on this branch are under Sandbox integration test. The first deploy still waits on Remaining open items.
 
 ## Key facts
 
@@ -136,35 +136,41 @@ The three stale ids in `src/constants/centralReach.mjs`. CO Client is `1082500` 
 
 ### Sandbox integration test
 
-Whether a blank write clears field `138703` after it was filled, and whether a blank write clears a previously filled non-label core field. The code path is described above. The Central Reach result is not.
+These four checks can run on this branch. They do not wait on Waiting on Zeke. Run them against this checkout. The live Function App is the 2026-10-29 package, deployment `3abcd7d8-78ed-49a7-b095-477091840f30`, and that package is not commit `ee8b279`.
 
-The date string Central Reach accepts. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` and employee dates as `YYYY-MM-DD`. The sandbox posts sent null, so that run does not show which string Central Reach accepts.
+Date string. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` (`buildClientPayload.mjs`) and employee dates as `YYYY-MM-DD` (`buildEmployeePayload.mjs`). The earlier sandbox posts sent null, so that run does not show which string Central Reach accepts.
 
-Whether a writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred from `new Date()` inside the HubSpot patch. Not measured.
+Blank core field. Empty employee and client core values go out as JSON `null`. A sandbox write shows whether Central Reach clears the stored value.
+
+Metadata DELETE. `metadataClearFieldIds` DELETEs a known field when the new value is blank and the prior hash was filled. A normal HubSpot edit does not blank `138703`. The mapper fills `138703` from the portal, the object type, and the record id. A missing portal omits `138703` and does not DELETE it. Use a field this mapper can blank, such as work address `133819` or a BCBA Medicaid id.
+
+Writeback time. Employee `integration_last_write` and `last_sync_at` share one `new Date()`. The client patch calls `new Date()` once per field. Neither path reads `hs_lastmodifieddate` after the patch. The poller skips until HubSpot's modified time is later. A sandbox write is what measures that order. The webhook does not use that comparison.
 
 ### Waiting on Zeke
 
-The published commit on `centralreachserverless`. The 2026-10-29 zip deploy has no git SHA. The handoff's recorded build `037ea72` is unverified and is not that zip. The allowlisted flags are settled above.
+Reviewed 2026-10-30 against the Google Doc, Azure, this tree, and HubSpot portal `246184070`. Portal `246184070` is not sandbox `50850427`. Property and association results from `246184070` do not close a sandbox item.
 
-BT Active Staffed. Section 6 asks what that row is on the Central Reach side. Section 10's next step is still open: confirm HubSpot owns `# of Active Cases` (`active_cases_count`), create an employee metadata field for that count, and test one employee update. There is no Employee Case Load API. The comment on that row is unresolved. This is separate from the missing Staffed label.
+Published commit. Still open. Active deployment `3abcd7d8-78ed-49a7-b095-477091840f30` finished 2026-10-29 05:51:26 UTC with an empty message, a null author, deployer `core_tools`, and no git SHA. `037ea72` is on `align-sandbox-hubspot-field-sync` and is not recorded on that deployment. Azure does not prove the package bytes differ from `037ea72`. The allowlisted flags still match. `ALLOW_EMPLOYEE_CREATE` is `true`, `PUT_ONLY_MODE` is `false`, and `HUBSPOT_PORTAL_ID` is `50850427`. `037ea72` is not an ancestor of this branch `ee8b279`.
 
-SUB BCBA. Section 4, association type 234. The guide asks whether Central Reach needs the substitute when On Leave BCBA is 236. The comment dated 10/27 says "REVIEW ZEKE" and is unresolved.
+BT Active Staffed. Still open. Section 6 asks what that row is on the Central Reach side. Section 10 still says confirm HubSpot owns the count, create a metadata field, and test one employee update. The unresolved comment from 2026-10-28 says there is no endpoint and a meta field would be needed. `active_cases_count` does not appear under `src`. There is no case-load route in `centralReachClient.mjs`. This is separate from the missing Staffed label. It does not block the four sandbox checks.
 
-The five Case integration properties. Section 10 asks which of these are still needed: `updated_by_integration`, `integration_last_write`, `employee_id`, `supervising_bcba`, `create_record`. The guide says all five are empty.
+SUB BCBA. Still open. Section 4, association type 234. The unresolved comment is "10/27 - REVIEW ZEKE". No file under `src` contains `234` or `236`. Deal sync keeps association type ids outside the exclude set, and those rows change the client hash only. Nothing writes a substitute to Central Reach.
 
-Production private-app scopes. Section 10 says the sensitive read and write scopes are already set. It still lists additional scopes to add: custom objects, appointments, and tickets.
+Five Case integration properties. The empty Case copies stay open. The doc asks which of `updated_by_integration`, `integration_last_write`, `employee_id`, `supervising_bcba`, and `create_record` are still needed, and it says all five are empty. This session cannot read those properties on portal `50850427`. On this tree the names are not all unused. `updated_by_integration` and `integration_last_write` are read and written on BT/RBT, BCBA, and Deal. `employee_id` is the Central Reach contact id on the staff object. `supervising_bcba` is read from the Deal and written to client metadata `131308`. `create_record` has no reader or writer in `src`.
 
-BCBA External System ID. The 10/29 note says confirm this in production testing. The guide says Central Reach's External System ID is the Workday ID, and that a BCBA can send `workday_id`, because 77 of 79 BT values match. The chart still leaves the Workday id unchanged until that confirm.
+Production private-app scopes. Answered on the doc. Danny's 10/28 note says the Central Reach Integration app already has every scope on the section 10 list. This session did not read that app. The token here is portal `246184070`. That token includes custom-object and tickets scopes. Appointments and users calls returned 403.
 
-The 10/29 production checklist. The heading says leave it for now, and it is not closed. Replicate the sandbox property sync for guardian first name, last name, and email onto Case in production. BCBA personal email is not confirmed. Create the production staff phone sync field. Create the alternate service-address workflow. `current_primary_bt` is only a consideration, not a confirmed build.
+BCBA External System ID. Still open for the production confirm. This tree sets `externalSystemId` to the HubSpot record id on create. An update by an existing contact id keeps the `externalSystemId` already stored in Central Reach. No source file reads `workday_id`. Section 5 says the External System ID stores the HubSpot record id. Danny's 10/28 note says it is the Workday ID. The doc does not reconcile those two sentences.
 
-The guide's minimum changes before production name one item that is not already on the sandbox list: rapid-notification loss. Blank metadata, the employee timestamp, and an intentional blank versus a failed read are already on the sandbox list or in the bring-over notes.
+The 10/29 production checklist. Still open. The heading says leave it for now. Guardian name and email on Case, BCBA personal email, the production staff phone field, the alternate service-address workflow, and `current_primary_bt` are production work. They do not block the four sandbox checks.
 
-The BT/RBT `postal_code` fetch. Archive commit `17451af` removes that request. A newer uncommitted archive `HANDOFF.md` says to keep it. The clean tree still requests `postal_code`. The recovery review recommends removing it with the missing-read halt. Zeke has not chosen. The guide maps BT/RBT mail and work postal fields as `postal_code_home` and `postal_code__work_`, not `postal_code`.
+Rapid-notification loss. The doc names it under minimum changes before production. This tree does not record that loss. The webhook enqueues with no `shouldSync` gate. The poller syncs a Deal only when `hs_lastmodifieddate` is later than `integration_last_write`. A sandbox can show those two doors for a mapped field.
+
+BT/RBT `postal_code`. Still open. The guide maps mail and work postal fields to `postal_code_home` and `postal_code__work_`. The fresh BT/RBT GET still requests `postal_code` as well (`employeeSyncWorkflow.mjs`), and core zip falls back from `postal_code_home` to `postal_code`. Archive commit `17451af` removes that request and that fallback. The uncommitted archive `docs/HANDOFF.md` says to keep the fetch. `docs/Azure_repo_recovery_handoff.md` calls that keep instruction outdated. This tree has no absent-property halt. The keep-or-remove choice is still Zeke's.
 
 ## Open
 
-The list in Remaining open items is the current list. Notion is not a chart authority. Asana is not in use. Do not deploy, and do not start an end-to-end run, while any item in that list is open. The first deploy is confirmed when that list is closed.
+The list in Remaining open items is the current list. Notion is not a chart authority. Asana is not in use. Do not deploy while any item in that list is open. The four checks under Sandbox integration test can run on this branch. The live Function App is a different package. The first deploy is confirmed when that list is closed.
 
 ##my follow ups after task
 Remove Asana from the requirements. We are not using Asana.
