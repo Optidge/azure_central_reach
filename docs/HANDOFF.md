@@ -23,6 +23,14 @@ Do not print tokens. `HUBSPOT_PRIVATE_APP_TOKEN` and `HUBSPOT_PRIVATE_APP_TOKEN_
 
 ---
 
+## Resume point (10/29 7:23 PM): fresh sandbox orchestrator
+
+The next round starts in a new chat. Read [sandbox-e2e-resume.md](sandbox-e2e-resume.md) and follow it. Do not read prior chats.
+
+The first fan-out is an in-process webhook route check for Case, BT/RBT, and BCBA, plus a read-only reviewer. No host, no queues, no CentralReach write, and the timer stays off. Live posts and the poller still wait on the blocked rows in [CHECKPOINT.md](CHECKPOINT.md) and [ws2-coverage-matrix.md](ws2-coverage-matrix.md).
+
+Branch `align-sandbox-hubspot-field-sync` matched origin at `c52058a` on the 5:28 PM measurement, including both poller snapshot tags. That measurement replaces the "not pushed" line in the 4:42 PM section below.
+
 ## Resume point (10/29 4:42 PM): poller state design
 
 The accepted design is built on `align-sandbox-hubspot-field-sync` (commits `6571ad5` to `0b8e785`, not pushed or published). `npm test` passes 101 of 101. The design is in [poller-state-decision.md](poller-state-decision.md). `SYNC_DRY_RUN` and `CREATE_SWEEP_ENABLED` both default to false.
