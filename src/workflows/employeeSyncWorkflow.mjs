@@ -34,8 +34,6 @@ import { STATE_TYPES } from "../constants/state.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
 
 const EMPLOYEE_STATE_PK = "sync:employee";
-const BLOCKED_CREATE_MESSAGE =
-  "PUT_ONLY_MODE enabled: create disabled until sandbox. Provide an existing employee_id or disable PUT_ONLY_MODE + enable ALLOW_EMPLOYEE_CREATE.";
 
 const BT_RBT_PROPERTIES = [
   "hs_object_id",

@@ -83,6 +83,22 @@ export function getOptionalEnv(name, defaultValue = "") {
   return value.trim();
 }
 
+export const SANDBOX_HUBSPOT_PORTAL_ID = "50850427";
+
+export function employeeCreateFeatures({
+  portalId = "",
+  allowEmployeeCreate = "",
+  putOnlyMode = ""
+} = {}) {
+  const sandbox = String(portalId).trim() === SANDBOX_HUBSPOT_PORTAL_ID;
+  const allowRaw = String(allowEmployeeCreate ?? "").trim();
+  const putRaw = String(putOnlyMode ?? "").trim();
+  return {
+    allowEmployeeCreate: allowRaw === "" ? sandbox : allowRaw.toLowerCase() === "true",
+    putOnlyMode: putRaw === "" ? !sandbox : putRaw.toLowerCase() !== "false"
+  };
+}
+
 function isPlaceholderValue(value) {
   if (!value) {
     return false;
@@ -287,10 +303,10 @@ export function getConfig() {
       clientSyncQueueName: getRequiredEnv("CLIENT_SYNC_QUEUE_NAME"),
       employeeSyncQueueName: getRequiredEnv("EMPLOYEE_SYNC_QUEUE_NAME")
     },
-    features: {
-      allowEmployeeCreate:
-        String(getOptionalEnv("ALLOW_EMPLOYEE_CREATE", "false")).toLowerCase() === "true",
-      putOnlyMode: String(getOptionalEnv("PUT_ONLY_MODE", "true")).toLowerCase() !== "false"
-    }
+    features: employeeCreateFeatures({
+      portalId: getOptionalEnv("HUBSPOT_PORTAL_ID", ""),
+      allowEmployeeCreate: process.env.ALLOW_EMPLOYEE_CREATE,
+      putOnlyMode: process.env.PUT_ONLY_MODE
+    })
   };
 }
