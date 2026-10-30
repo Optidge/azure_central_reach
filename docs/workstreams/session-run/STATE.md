@@ -32,4 +32,4 @@ Read this file before the next edit. The env files already work for local `func 
 ## Open
 
 - Sandbox integration continues on branch `sandbox-integration`. Record is `docs/workstreams/sandbox-integration/STATE.md`.
-- Sandbox 24-hour report on portal `50850427` is still not created.
+- Sandbox 24-hour report on portal `50850427` is still not created. The CLI key on that portal cannot save it.
