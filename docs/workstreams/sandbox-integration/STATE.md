@@ -26,6 +26,8 @@ The pause read printed only headings and no property type. A later read on accou
 
 Last step: four read-only checks on 2026-10-30. Azure re-read `centralreachserverless`. The Google Doc and its comments were re-read. The fresh tree on `review_and_update_code` was traced. HubSpot in this session reads portal `246184070`, not sandbox `50850427`. Three of the four checks under Sandbox integration test can run on this branch. The date-string check still turns all-digit HubSpot dates into null. The first deploy still waits on Remaining open items.
 
+Azure stop, 2026-10-30 afternoon. Function App `centralreachserverless` in `centralreachintegration` was Running and is now Stopped via `az functionapp stop`. No VMs in the subscription. Cosmos `ucr-hs-cr-cosmos-prod` is serverless (usage-billed). Service Bus `ucr-hs-cr-sb-prod` Standard stays Active (no stop without delete). Storage `centralreachintegrab751` stays available. Restart later with `az functionapp start -g centralreachintegration -n centralreachserverless`.
+
 ## Key facts
 
 - Fresh repo: this checkout, branch `sandbox-integration`. The fresh-tree notes below were first taken on `review_and_update_code`.
