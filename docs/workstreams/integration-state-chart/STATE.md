@@ -12,6 +12,18 @@ Produce one state chart that is also the integration flow for HubSpot to Central
 
 ## Current status
 
+Paused 2026-10-30 at the user's request. Do not deploy. Do not create HubSpot records. The user creates and updates test records with the HubSpot CLI.
+
+First action on resume. Read `integration_last_write` on sandbox portal `50850427` for deals, BT/RBT `2-55656309`, and BCBA `2-55656302`, using `hs api` with account `UnitedCare_Test_Integration`. The read was started and then killed before any type came back. If the property is a date or datetime, create the 24-hour report on that sandbox account only. The connected MCP account is portal `246184070`. Do not create the report there.
+
+What is already checked. There is one Function App, `centralreachserverless`, in resource group `centralreachintegration`. It is the HubSpot sandbox runtime. `HUBSPOT_PORTAL_ID` is `50850427`. It writes production Central Reach. There is no second production Function App in the docs. The published package is still the 2026-10-29 deploy `3abcd7d8-78ed-49a7-b095-477091840f30`, not this branch. A live call to that app does not run this checkout. `src/lib/writebackAllowlist.mjs` writes `integration_last_write` on Case, BT/RBT, and BCBA. Error paths stamp `last_sync_at` and skip `integration_last_write`. Employee blocked creates do stamp `integration_last_write`. The sandbox property type is not confirmed. `docs/CHECKPOINT.md` and `docs/HANDOFF.md` are absent.
+
+Source readiness, recorded after the pause. Confirmed in this checkout. Blank core values go out as JSON null (`trimOrNull` in `buildEmployeePayload.mjs`, `|| null` in `buildClientPayload.mjs`). Metadata DELETE is implemented for a blank known field when the prior hash was filled. Do not use `138703` for that check. Work address `133819` or a BCBA Medicaid id can blank. Writeback clocks are implemented and neither workflow reads `hs_lastmodifieddate` after the patch. The date-string check is not ready for epoch digit strings. `normalizeDate` and `toIsoMidnight` pass an all-digit string to `new Date`, which does not parse it, so those dates still become null. A `YYYY-MM-DD` employee date and an ISO client date pass. The Yes gate is absent. No file under `src` reads `enter_in_central_reach` or `entered_in_centralreach`. BT/RBT still requests `postal_code` in `employeeSyncWorkflow.mjs`. There is no absent-read halt in this tree.
+
+The sandbox property read returned no type. Each of the three `hs api` calls printed only its heading. `integration_last_write` on portal `50850427` is still unconfirmed. The Drive callout quotes were not collected. The stop landed before that read reported.
+
+Still open from this session. The `integration_last_write` property type on sandbox portal `50850427`. The 24-hour report, not created. The quoted Drive callouts. A date parser that accepts HubSpot epoch digit strings, if those are still the sandbox values. The Yes gate, if this run must refuse unticked creates.
+
 Last step: four read-only checks on 2026-10-30. Azure re-read `centralreachserverless`. The Google Doc and its comments were re-read. The fresh tree on `review_and_update_code` was traced. HubSpot in this session reads portal `246184070`, not sandbox `50850427`. The four checks that can run on this branch are under Sandbox integration test. The first deploy still waits on Remaining open items.
 
 ## Key facts
