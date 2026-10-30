@@ -9,11 +9,11 @@ Done when.
 - `docs/workstreams/session-run/PR-AND-BRANCH.md` names which PRs stay open, which branch to create for sync code, and what `main` is for.
 - This file stays current after each meaningful step.
 
-Current status. Env restore worked. `.env` and `local.settings.json` are local, gitignored, and pointed at sandbox portal `50850427`. The three `AzureWebJobs.*.Disabled` flags are `true`. This notes branch is the merge. PR 2 and PR 3 stay open. No deploy. No sync code in this pass.
+Current status. Env restore worked. `.env` and `local.settings.json` are local, gitignored, and pointed at sandbox portal `50850427`. The three `AzureWebJobs.*.Disabled` flags are `true`. The notes merge is on `main` at `028d087`. The sandbox integration workstream is branch `sandbox-integration`. PR 2 and PR 3 stay open. No deploy.
 
-Last step. A review chat confirmed the env files must stay off git. The only remote work to merge is `docs/session-run-notes`.
+Last step. Pointed the next thread at `docs/workstreams/sandbox-integration/STATE.md`.
 
-Next action. After this branch is on `main`, create the 24-hour report on portal `50850427` for deals, BT/RBT `2-55656309`, and BCBA `2-55656302`, filtered on `integration_last_write` after 1 day ago. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
+Next action. Continue sandbox work only on `sandbox-integration`. The start prompt is `docs/workstreams/sandbox-integration/START.md`. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
 
 ## Handoff
 
@@ -31,5 +31,5 @@ Read this file before the next edit. The env files already work for local `func 
 
 ## Open
 
-- Wait for Zeke on which branch to create next, if any.
-- Sandbox 24-hour report on portal `50850427` still not created (separate from branch work).
+- Sandbox integration continues on branch `sandbox-integration`. Record is `docs/workstreams/sandbox-integration/STATE.md`.
+- Sandbox 24-hour report on portal `50850427` is still not created.
