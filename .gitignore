@@ -1,5 +1,6 @@
 node_modules/
 local.settings.json
+.test-evidence/
 .env
 .DS_Store
 coverage/
@@ -8,5 +9,8 @@ bin/
 obj/
 .funcignore
 prompts/
+docs/open-items.md
+docs/combined-agent-transcripts.md
+combined-agent-transcripts.md
 .cursor/skills/verify-azure-central-reach/artifacts/**
 !.cursor/skills/verify-azure-central-reach/artifacts/.gitkeep

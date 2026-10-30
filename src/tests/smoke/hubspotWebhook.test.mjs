@@ -111,6 +111,81 @@ test("bcba and bt object ids route to the employee queue", () => {
   );
 });
 
+test("case, bt/rbt, and bcba webhooks enqueue only the matching sender", async () => {
+  const routeSettings = { ...settings, cosmosReady: false };
+  const enqueuedAt = "2026-10-29T00:00:00.000Z";
+  const cases = [
+    {
+      label: "case",
+      objectTypeId: "0-3",
+      recordId: "41001",
+      target: "client",
+      clientMessages: [{
+        dealId: "41001",
+        source: "hubspotWorkflow",
+        workflow: "clientSync",
+        enqueuedAt
+      }],
+      employeeMessages: []
+    },
+    {
+      label: "bt/rbt",
+      objectTypeId: settings.btRbtObjectTypeId,
+      recordId: "41002",
+      target: "employee",
+      clientMessages: [],
+      employeeMessages: [{
+        recordId: "41002",
+        employeeType: "bt_rbt",
+        source: "hubspotWorkflow",
+        workflow: "employeeSync",
+        enqueuedAt
+      }]
+    },
+    {
+      label: "bcba",
+      objectTypeId: settings.bcbaObjectTypeId,
+      recordId: "41003",
+      target: "employee",
+      clientMessages: [],
+      employeeMessages: [{
+        recordId: "41003",
+        employeeType: "bcba",
+        source: "hubspotWorkflow",
+        workflow: "employeeSync",
+        enqueuedAt
+      }]
+    }
+  ];
+
+  for (const item of cases) {
+    const rawBody = JSON.stringify({
+      objectTypeId: item.objectTypeId,
+      recordId: item.recordId
+    });
+    const clientMessages = [];
+    const employeeMessages = [];
+    const response = await hubspotWebhook(signedRequest(rawBody), {}, {
+      settings: routeSettings,
+      rawBody,
+      enqueuedAt,
+      sendClientSyncMessage: async (message) => {
+        clientMessages.push(message);
+      },
+      sendEmployeeSyncMessage: async (message) => {
+        employeeMessages.push(message);
+      }
+    });
+
+    assert.equal(response.status, 202, item.label);
+    assert.equal(response.jsonBody.target, item.target, item.label);
+    assert.equal(response.jsonBody.objectTypeId, item.objectTypeId, item.label);
+    assert.equal(response.jsonBody.recordId, item.recordId, item.label);
+    assert.deepEqual(clientMessages, item.clientMessages, item.label);
+    assert.deepEqual(employeeMessages, item.employeeMessages, item.label);
+  }
+});
+
 test("repeat notice for the same record is still enqueued", async () => {
   const rawBody = JSON.stringify({ objectTypeId: "0-3", recordId: "12345" });
   let sends = 0;

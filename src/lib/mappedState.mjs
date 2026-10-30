@@ -1,6 +1,6 @@
 import { sha256 } from "./hash.mjs";
 
-export const MAPPING_VERSION = "hybrid-2026-10-27";
+export const MAPPING_VERSION = "guide-sandbox-2026-10-27";
 
 const NULL_TOKEN = "null";
 

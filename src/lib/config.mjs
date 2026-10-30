@@ -45,8 +45,6 @@ const REQUIRED_ENV_NAMES = [
 const REQUIRED_INTAKE_ENV_NAMES = [
   "HUBSPOT_PRIVATE_APP_TOKEN",
   "HUBSPOT_BASE_URL",
-  "HS_DEAL_PIPELINE_ID",
-  "HS_STAGE_ALLOWLIST_JSON",
   "MAX_BT_RBT_PER_RUN",
   "MAX_BCBA_PER_RUN",
   "MAX_DEALS_PER_RUN",
@@ -60,11 +58,7 @@ const REQUIRED_INTAKE_ENV_NAMES = [
   "CLIENT_SYNC_QUEUE_NAME",
   "EMPLOYEE_SYNC_QUEUE_NAME",
   "HS_BT_RBT_OBJECT_TYPE_ID",
-  "HS_BT_RBT_PIPELINE_ID",
-  "HS_BT_RBT_STAGE_ALLOWLIST_JSON",
-  "HS_BCBA_OBJECT_TYPE_ID",
-  "HS_BCBA_PIPELINE_ID",
-  "HS_BCBA_STAGE_ALLOWLIST_JSON"
+  "HS_BCBA_OBJECT_TYPE_ID"
 ];
 
 export function getRequiredEnv(name) {
@@ -81,6 +75,14 @@ export function getOptionalEnv(name, defaultValue = "") {
     return defaultValue;
   }
   return value.trim();
+}
+
+export function getBooleanEnv(name, defaultValue) {
+  const value = getOptionalEnv(name, "").toLowerCase();
+  if (value === "") {
+    return defaultValue;
+  }
+  return value === "true";
 }
 
 function isPlaceholderValue(value) {
@@ -187,21 +189,17 @@ export function getIntakePollerConfig() {
     hubspot: {
       privateAppToken: getRequiredEnv("HUBSPOT_PRIVATE_APP_TOKEN"),
       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
-      dealPipelineId: getRequiredEnv("HS_DEAL_PIPELINE_ID"),
-      stageAllowlist: parseRequiredJsonArray("HS_STAGE_ALLOWLIST_JSON"),
       btRbtObjectTypeId: getRequiredEnv("HS_BT_RBT_OBJECT_TYPE_ID"),
-      btRbtPipelineId: getRequiredEnv("HS_BT_RBT_PIPELINE_ID"),
-      btRbtStageAllowlist: parseRequiredJsonArray("HS_BT_RBT_STAGE_ALLOWLIST_JSON"),
-      bcbaObjectTypeId: getRequiredEnv("HS_BCBA_OBJECT_TYPE_ID"),
-      bcbaPipelineId: getRequiredEnv("HS_BCBA_PIPELINE_ID"),
-      bcbaStageAllowlist: parseRequiredJsonArray("HS_BCBA_STAGE_ALLOWLIST_JSON")
+      bcbaObjectTypeId: getRequiredEnv("HS_BCBA_OBJECT_TYPE_ID")
+    },
+    sweep: {
+      createSweepEnabled: getBooleanEnv("CREATE_SWEEP_ENABLED", false),
+      graceMinutes: Number(getOptionalEnv("CREATE_SWEEP_GRACE_MINUTES", "10"))
     },
     limits: {
       maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
       maxBtRbtPerRun: Number(getRequiredEnv("MAX_BT_RBT_PER_RUN")),
       maxBcbaPerRun: Number(getRequiredEnv("MAX_BCBA_PER_RUN")),
-      maxSearchRequestsPerRun: Number(getOptionalEnv("MAX_SEARCH_REQUESTS_PER_SECTION", "1")),
-      lookbackMinutes: Number(getOptionalEnv("LOOKBACK_MINUTES", "15")),
       linkedRecheckEnabled:
         String(getOptionalEnv("LINKED_RECHECK_ENABLED", "true")).toLowerCase() !== "false",
       crContactIdProperty: getOptionalEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY", "client_id_number"),
@@ -290,7 +288,8 @@ export function getConfig() {
     features: {
       allowEmployeeCreate:
         String(getOptionalEnv("ALLOW_EMPLOYEE_CREATE", "false")).toLowerCase() === "true",
-      putOnlyMode: String(getOptionalEnv("PUT_ONLY_MODE", "true")).toLowerCase() !== "false"
+      putOnlyMode: String(getOptionalEnv("PUT_ONLY_MODE", "true")).toLowerCase() !== "false",
+      syncDryRun: getBooleanEnv("SYNC_DRY_RUN", false)
     }
   };
 }

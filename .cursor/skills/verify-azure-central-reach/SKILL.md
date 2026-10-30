@@ -1,6 +1,6 @@
 ---
 name: verify-azure-central-reach
-description: "Drive the Azure Central Reach Functions app (HTTP API + local func host) to prove connectivity, intake poller, and client sync scaffold behavior. Use when verifying azure_central_reach changes, HubSpot/CR intake gates, or local Functions HTTP routes."
+description: "Drive the Azure Central Reach Functions app (HTTP API + local func host) to prove connectivity, intake poller, and client sync scaffold behavior. Use when verifying azure_central_reach changes, HubSpot/CR intake gates, or local Functions HTTP routes. Sandbox change-detection done criteria and the separate production pass are in SANDBOX-DONE.md. Do not add a second verification skill."
 ---
 
 # Verify Azure Central Reach
@@ -8,6 +8,8 @@ description: "Drive the Azure Central Reach Functions app (HTTP API + local func
 This skill is for agents. The primary user surface is the **local Azure Functions HTTP API** (not a browser UI). Secondary surfaces: `npm test` unit/smoke suite, Service Bus queue processors (do not enable for default verification).
 
 Repo root is the workspace containing `package.json` and `src/functions/`.
+
+**Sandbox “done” and production tomorrow:** read [`SANDBOX-DONE.md`](SANDBOX-DONE.md) before claiming the integration is verified. This harness proves local HTTP shape only. A sandbox row is done only with HubSpot, Azure `last_sync_status`, and a CentralReach read-back on portal `50850427`. Production verification is a separate pass. Do not create another verification skill for the same app.
 
 ## Launch
 

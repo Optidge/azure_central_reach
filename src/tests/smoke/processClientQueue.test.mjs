@@ -34,7 +34,9 @@ test("valid message calls workflow with dealId and hsLastModifiedDate", async ()
     dealId: "123",
     hsLastModifiedDate: "1700000000000",
     source: "intakePoller",
-    context: baseContext
+    context: baseContext,
+    deliveryCount: 1,
+    replayCount: 0
   });
 });
 

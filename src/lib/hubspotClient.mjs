@@ -4,17 +4,6 @@ import { HubSpotReadError } from "./mappedState.mjs";
 
 let hubSpotHttpClient = null;
 const SEARCH_LIMIT = 50;
-const EMPLOYEE_SEARCH_PROPERTIES = [
-  "hs_object_id",
-  "employee_id",
-  "hs_lastmodifieddate",
-  "updated_by_integration",
-  "integration_last_write",
-  "last_sync_hash",
-  "last_sync_at",
-  "last_sync_status",
-  "last_sync_error"
-];
 
 function extractHubspotErrorBlob(error) {
   const data = error?.response?.data || {};
@@ -50,68 +39,6 @@ function extractHubspotErrorBlob(error) {
   return messageParts.join(" ").toLowerCase();
 }
 
-function isLookbackFilterError(error) {
-  const status = error?.response?.status;
-  if (status !== 400 && status !== 422) {
-    return false;
-  }
-  const blob = extractHubspotErrorBlob(error);
-  return (
-    blob.includes("hs_lastmodifieddate") &&
-    (blob.includes("invalid") ||
-      blob.includes("unknown") ||
-      blob.includes("filter") ||
-      blob.includes("property") ||
-      blob.includes("validation"))
-  );
-}
-
-function buildObjectSearchPayload({
-  pipelineProperty,
-  stageProperty,
-  pipelineId,
-  stageAllowlist,
-  properties,
-  limit,
-  after,
-  sinceIso,
-  includeLookback
-}) {
-  const filters = [
-    {
-      propertyName: pipelineProperty,
-      operator: "EQ",
-      value: pipelineId
-    },
-    {
-      propertyName: stageProperty,
-      operator: "IN",
-      values: stageAllowlist
-    }
-  ];
-
-  if (includeLookback && sinceIso) {
-    filters.push({
-      propertyName: "hs_lastmodifieddate",
-      operator: "GTE",
-      value: sinceIso
-    });
-  }
-
-  return {
-    filterGroups: [{ filters }],
-    properties,
-    sorts: [
-      {
-        propertyName: "hs_lastmodifieddate",
-        direction: "DESCENDING"
-      }
-    ],
-    limit,
-    ...(after ? { after } : {})
-  };
-}
-
 async function runSearch(objectPath, payload) {
   if (!hubSpotHttpClient) {
     throw new Error("HubSpot client is not initialized");
@@ -142,113 +69,6 @@ export function createHubSpotClient(config) {
   return hubSpotHttpClient;
 }
 
-export async function searchIntakeCompleteDeals({
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes,
-  pipelineId,
-  stageAllowlist
-}) {
-  return searchCustomObjectRecords({
-    objectTypeId: "deals",
-    pipelineProperty: "pipeline",
-    stageProperty: "dealstage",
-    pipelineId,
-    stageAllowlist,
-    limit,
-    maxSearchRequestsPerRun,
-    lookbackMinutes,
-    properties: ["hs_object_id", "hs_lastmodifieddate", "integration_last_write"]
-  });
-}
-
-export async function searchCustomObjectRecords({
-  objectTypeId,
-  pipelineProperty = "hs_pipeline",
-  stageProperty = "hs_pipeline_stage",
-  pipelineId,
-  stageAllowlist,
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes,
-  properties = EMPLOYEE_SEARCH_PROPERTIES
-}) {
-  const normalizedObjectTypeId = String(objectTypeId || "").trim();
-  if (!normalizedObjectTypeId) {
-    throw new Error("HubSpot objectTypeId is required for search");
-  }
-
-  const cappedLimit = Math.max(Number(limit) || 0, 0);
-  if (cappedLimit === 0) {
-    return [];
-  }
-  if (!pipelineId || !Array.isArray(stageAllowlist) || stageAllowlist.length === 0) {
-    throw new Error("Missing required HubSpot intake search filters");
-  }
-
-  const perRequestLimit = Math.min(SEARCH_LIMIT, cappedLimit);
-  const maxSearchRequests = Math.max(Number(maxSearchRequestsPerRun) || 1, 1);
-  const sinceIso = new Date(
-    Date.now() - Math.max(Number(lookbackMinutes) || 0, 0) * 60 * 1000
-  ).toISOString();
-
-  let after = null;
-  let includeLookback = true;
-  let requests = 0;
-  const deals = [];
-
-  while (deals.length < cappedLimit && requests < maxSearchRequests) {
-    const payload = buildObjectSearchPayload({
-      pipelineProperty,
-      stageProperty,
-      pipelineId,
-      stageAllowlist,
-      properties,
-      limit: perRequestLimit,
-      after,
-      sinceIso,
-      includeLookback
-    });
-
-    let searchResult;
-    try {
-      searchResult = await runSearch(`/crm/v3/objects/${normalizedObjectTypeId}/search`, payload);
-    } catch (error) {
-      if (includeLookback && isLookbackFilterError(error)) {
-        includeLookback = false;
-        const fallbackPayload = buildObjectSearchPayload({
-          pipelineProperty,
-          stageProperty,
-          pipelineId,
-          stageAllowlist,
-          properties,
-          limit: perRequestLimit,
-          after,
-          sinceIso,
-          includeLookback
-        });
-        searchResult = await runSearch(
-          `/crm/v3/objects/${normalizedObjectTypeId}/search`,
-          fallbackPayload
-        );
-      } else {
-        throw error;
-      }
-    }
-
-    requests += 1;
-    const pageResults = Array.isArray(searchResult?.results) ? searchResult.results : [];
-    deals.push(...pageResults);
-
-    after = searchResult?.paging?.next?.after || null;
-    if (!after) {
-      break;
-    }
-  }
-
-  return deals.slice(0, cappedLimit);
-}
-
 export async function getDealById(dealId, properties = []) {
   if (!hubSpotHttpClient) {
     throw new Error("HubSpot client is not initialized");
@@ -269,6 +89,35 @@ export async function getDealById(dealId, properties = []) {
     baseDelayMs: 400,
     maxDelayMs: 5000
   });
+
+  return response?.data || null;
+}
+
+const CONTACT_PROPERTIES = ["firstname", "lastname", "email", "contact_category"];
+
+export async function getContactById(contactId, properties = CONTACT_PROPERTIES) {
+  if (!hubSpotHttpClient) {
+    throw new Error("HubSpot client is not initialized");
+  }
+
+  const id = String(contactId || "").trim();
+  if (!id) {
+    throw new Error("HubSpot contactId is required");
+  }
+
+  const requestedProperties = Array.isArray(properties) ? properties : [];
+  const params = requestedProperties.length
+    ? { properties: requestedProperties.join(",") }
+    : undefined;
+
+  const response = await withRetry(
+    () => hubSpotHttpClient.get(`/crm/v3/objects/0-1/${id}`, { params }),
+    {
+      maxAttempts: 3,
+      baseDelayMs: 400,
+      maxDelayMs: 5000
+    }
+  );
 
   return response?.data || null;
 }
@@ -406,48 +255,6 @@ export async function updateObjectProperties(objectTypeId, objectId, properties)
   return response?.data || null;
 }
 
-export async function searchEligibleBtRbtRecords({
-  objectTypeId,
-  pipelineId,
-  stageAllowlist,
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes
-}) {
-  return searchCustomObjectRecords({
-    objectTypeId,
-    pipelineProperty: "hs_pipeline",
-    stageProperty: "hs_pipeline_stage",
-    pipelineId,
-    stageAllowlist,
-    limit,
-    maxSearchRequestsPerRun,
-    lookbackMinutes,
-    properties: EMPLOYEE_SEARCH_PROPERTIES
-  });
-}
-
-export async function searchEligibleBcbaRecords({
-  objectTypeId,
-  pipelineId,
-  stageAllowlist,
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes
-}) {
-  return searchCustomObjectRecords({
-    objectTypeId,
-    pipelineProperty: "hs_pipeline",
-    stageProperty: "hs_pipeline_stage",
-    pipelineId,
-    stageAllowlist,
-    limit,
-    maxSearchRequestsPerRun,
-    lookbackMinutes,
-    properties: EMPLOYEE_SEARCH_PROPERTIES
-  });
-}
-
 export async function getBtRbtRecordById(recordId, objectTypeId, properties = []) {
   return getObjectById(objectTypeId, recordId, properties);
 }
@@ -460,6 +267,45 @@ function assertHubSpotReady() {
   if (!hubSpotHttpClient) {
     throw new Error("HubSpot client is not initialized");
   }
+}
+
+/**
+ * One page of records Azure never processed: checkbox Yes, no CentralReach id,
+ * no last_sync_at, and last modified before the grace cutoff. The caller still
+ * runs each result through the record state machine for the exact Yes token.
+ */
+export async function searchNeverProcessedRecords({
+  objectTypeId,
+  checkboxProperty,
+  idProperty,
+  modifiedBeforeIso
+}) {
+  assertHubSpotReady();
+  const payload = {
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: checkboxProperty, operator: "IN", values: ["Yes"] },
+          { propertyName: idProperty, operator: "NOT_HAS_PROPERTY" },
+          { propertyName: "last_sync_at", operator: "NOT_HAS_PROPERTY" },
+          { propertyName: "hs_lastmodifieddate", operator: "LT", value: modifiedBeforeIso }
+        ]
+      }
+    ],
+    properties: [
+      "hs_object_id",
+      checkboxProperty,
+      idProperty,
+      "last_sync_at",
+      "last_sync_status",
+      "hs_lastmodifieddate"
+    ],
+    sorts: [{ propertyName: "hs_lastmodifieddate", direction: "ASCENDING" }],
+    limit: SEARCH_LIMIT
+  };
+
+  const searchResult = await runSearch(`/crm/v3/objects/${objectTypeId}/search`, payload);
+  return Array.isArray(searchResult?.results) ? searchResult.results : [];
 }
 
 export async function searchRecordsByKnownProperty({

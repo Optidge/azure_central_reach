@@ -82,7 +82,9 @@ export async function processEmployeeQueue(message, context, dependencies = {}) 
       employeeType: validated.employeeType,
       hsLastModifiedDate: validated.hsLastModifiedDate,
       source: asNonEmptyString(payload?.source) || undefined,
-      context
+      context,
+      deliveryCount: message?.deliveryCount ?? context?.triggerMetadata?.deliveryCount,
+      replayCount: Number(payload?.replayCount) || 0
     });
 
     safeLog("info", "Employee queue message processed.", {
