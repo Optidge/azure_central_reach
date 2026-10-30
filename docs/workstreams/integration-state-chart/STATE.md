@@ -12,7 +12,7 @@ Produce one state chart that is also the integration flow for HubSpot to Central
 
 ## Current status
 
-Last step: the Drive guide and the current source are recorded. What is still open is grouped at the bottom.
+Last step: discover and confirm on 2026-10-30. The judge files and the prior chat do not close the field questions, the running commit, or the blank-clear writes. The first deploy is confirmed only after the remaining open list is closed.
 
 ## Key facts
 
@@ -96,43 +96,63 @@ Employee create on the sandbox portal. The live app already has the two flags se
 
 ## Sandbox integration test, confirm then
 
+These checks are repeated in Remaining open items. That section is the current list.
+
 - A writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred, not measured.
 - The label names listed under item 8 are still absent from the production catalog. Confirm with United Care before another `get_all_labels.js orglabels` run.
 - The three stale ids in `src/constants/centralReach.mjs` (CO Client, NY Employee, header BCBA).
 - A blank write clears employee metadata `138703` after it was filled.
 - A blank write clears a previously filled non-label core field.
-- Item 9 stays in Zeke's other chat. Evidence only. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` and employee dates as `YYYY-MM-DD`.
+- Item 9 stays a sandbox write. Evidence only. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` and employee dates as `YYYY-MM-DD`. The sandbox posts sent null, so Central Reach never accepted or rejected those strings from this code.
 - The code already DELETEs a metadata field when the new value is blank and the prior hash was filled. A client core blank is sent as JSON null. The sandbox write is what shows whether CentralReach empties the field.
+
+## Discover and confirm, 2026-10-30
+
+Reviewed against `docs/workstreams/repository-review-confirm-and-update/` and the prior chat. A recommendation in a judge file is not a close. An assistant note in the transcript is not a close.
+
+Answered, and not repeated in the remaining list.
+
+- The poller timer in source is `0 */5 * * * *`. Thirty minutes is a written target only. Leave five minutes unless Zeke asks for thirty.
+- Asana is not a source. The judge files do not use it.
+- The connected HubSpot account is portal `246184070`. The sandbox portal on the app is `50850427`. They are different accounts.
+- The chart keeps the exact-`Yes` gate. Already-linked records keep syncing. `Yes - Generic` does not count as that token. A sandbox poller run that creates records without Yes is not approved. The intake judge's note that the gate was not needed for the earlier sandbox test does not change the chart.
+- `MAPPING_VERSION` stays `hybrid-2026-10-27`. No next string is chosen. A bump is not required before the first deploy.
+- The allowlisted live flags recorded above stay settled. The judge files did not re-read Azure, and this pass does not reopen them.
+- Zeke confirmed the approval rule. The first deploy of this fresh repo is confirmed when every item in Remaining open items is closed. The handoff file does not authorize a deploy by itself.
 
 ## Remaining open items
 
-Closed earlier, and not repeated below. Items 1, 3, 4, 7, 8, 11, 13, and 15 are settled above. Comorbid, staff phone, and the alternate address read are settled above. Label removal is a known code gap and stays off this chart.
+Closed earlier, and not repeated below. Items 1, 3, 4, 7, 8, 11, 13, and 15 are settled above. Comorbid, staff phone, and the alternate address read are settled above. Label removal is a known code gap and stays off this chart. The first deploy waits on this list.
 
 ### Still with Sara
 
-2. BT/RBT "Yes - Generic" and "No- Made Inactive." Section 11 still says Sara has not confirmed them.
+2. BT/RBT "Yes - Generic" and "No- Made Inactive." No confirmation is in the guide note, the judge files, or the prior chat. The token rule above is separate from these option labels.
 
 ### Still with United Care
 
-The Staffed label, and the payor rows in item 8. Pessy is confirming that the Active and Staffed labels exist. They are not in `all_labels_v3.json`.
+The Staffed label, and the payor rows in item 8. Pessy is confirming that the Active and Staffed labels exist. They are not in `all_labels_v3.json`. Active Client `1125427` and In-Active Client `1121488` already match catalog names.
+
+The three stale ids in `src/constants/centralReach.mjs`. CO Client is `1082500` in code and `1132648` in the catalog. NY Employee is `1107685` in code and `1132655` in the catalog. `BCBA` is `1052629` in code, which the catalog names BCBA LBA NY. The header BCBA id in the catalog is `1130668`. Neither tree proves the code numbers.
 
 ### Sandbox integration test
 
-Item 10. Whether a blank write clears field `138703` or a previously filled non-label core field. The code path is described above. State format and gender wording are settled.
+Whether a blank write clears field `138703` after it was filled, and whether a blank write clears a previously filled non-label core field. The code path is described above. The Central Reach result is not.
+
+The date string Central Reach accepts. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` and employee dates as `YYYY-MM-DD`. The sandbox posts sent null, so that run does not show which string Central Reach accepts.
+
+Whether a writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred from `new Date()` inside the HubSpot patch. Not measured.
 
 ### Waiting on Zeke
 
-5. Whether this fresh repo is approved for a deploy or an end-to-end run. No file says it is.
-
-6. The published commit on `centralreachserverless`. The 2026-10-29 zip deploy has no git SHA. The allowlisted flags are settled above.
-
-9. The date string Central Reach accepts. Handled in Zeke's other chat. The evidence above does not close it.
+The published commit on `centralreachserverless`. The 2026-10-29 zip deploy has no git SHA. The handoff's recorded build `037ea72` is unverified and is not that zip. The allowlisted flags are settled above.
 
 BT Active Staffed. Section 6 asks Zeke to confirm that row. It is separate from the missing Staffed label.
 
+The BT/RBT `postal_code` fetch. Archive commit `17451af` removes that request. A newer uncommitted archive `HANDOFF.md` says to keep it. The clean tree still requests `postal_code`. The recovery review recommends removing it with the missing-read halt. Zeke has not chosen.
+
 ## Open
 
-The list in Remaining open items is the current list. Notion is not a chart authority. Asana is not in use.
+The list in Remaining open items is the current list. Notion is not a chart authority. Asana is not in use. Do not deploy, and do not start an end-to-end run, while any item in that list is open. The first deploy is confirmed when that list is closed.
 
 ##my follow ups after task
 Remove Asana from the requirements. We are not using Asana.
