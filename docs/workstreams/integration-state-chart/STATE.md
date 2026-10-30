@@ -12,7 +12,7 @@ Produce one state chart that is also the integration flow for HubSpot to Central
 
 ## Current status
 
-Last step: Zeke settled the sandbox Yes gate, the six sandbox workflows, the writeback timestamp check, the label catalog comparison, and item 15. The remaining open items are listed below.
+Last step: the Drive guide and the current source are recorded. What is still open is grouped at the bottom.
 
 ## Key facts
 
@@ -39,7 +39,7 @@ Last step: Zeke settled the sandbox Yes gate, the six sandbox workflows, the wri
 
 Settled on that tab. The create gate is Entered in CR, with no stage restriction. Case uses contains Yes. BCBA and BT/RBT use equals Yes. The 74 cases that already have a Central Reach id sync without the box. The guardian is the Parent/Guardian contact whose email is used for parent communication. Label rules include add and remove. HubSpot dates are YYYY-MM-DD and must be written as midnight UTC.
 
-Still open on that tab. The date string Central Reach accepts, MAPPING_VERSION, live Function App settings, five versus thirty minutes, whether sandbox approval covers this repo, Yes - Generic, the state_home format, whether a blank non-label field clears Central Reach, gender value mapping, and field 138703. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, and the label catalog comparison are settled in the 2026-10-30 section. The writeback timestamp race is a sandbox integration test check.
+Still open on that tab. The date string Central Reach accepts, MAPPING_VERSION, the published commit, five versus thirty minutes, whether sandbox approval covers this repo, Yes - Generic, whether a blank non-label field clears Central Reach, and a blank clear of field 138703. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, the label catalog comparison, the live sandbox flags, and the employee state and gender shapes are settled below. The writeback timestamp race is a sandbox integration test check.
 
 The tab has a one-time credential link under Prod access. It was not copied here. Remove it from the shared doc if it has already been used.
 
@@ -78,35 +78,57 @@ Section 7 Active and Inactive match catalog names Active Client `1125427` and In
 
 15. Off this chart. Follow up later. The chart keeps the one employee queue this tree has.
 
+6. The allowlisted live settings on `centralreachserverless` match `docs/sandbox_vs_production_mvp.md`. `ALLOW_EMPLOYEE_CREATE` is `true`. `PUT_ONLY_MODE` is `false`. `HUBSPOT_PORTAL_ID` is `50850427`. `intakePoller` is disabled. Both queue workers are enabled. The published commit is still unknown. The active zip deploy finished 2026-10-29 05:51 UTC with an empty message and no git SHA. `WEBSITE_NODE_DEFAULT_VERSION` is unset.
+
+10. Employee state and gender are settled from the fetched core records. `stateProvince` is a two-letter code (`NY` on contact 4737831). A filled `gender` is the word `Male` (contact 4778843). An empty gender is stored as an empty string. Field `138703` is the employee metadata field HubSpot Link to Record, type input, in `metadata_configuration_org.json`. A blank write that clears `138703`, or a previously filled non-label core field, is not in any artifact.
+
+Employee create on the sandbox portal. The live app already has the two flags set to allow a create. `employeeCreateFeatures` in `src/lib/config.mjs` now does the same when `HUBSPOT_PORTAL_ID` is `50850427` and both variables are unset. An explicit value still wins. Any other portal stays blocked unless the variables allow a create. That code change is local and is not published.
+
+3. `MAPPING_VERSION` is `hybrid-2026-10-27` in `src/lib/mappedState.mjs`. `hashMappedState` hashes the mapped payload only. Changing the version string does not by itself write every linked record. It changes the value stored on the sync state and in the logs. No file picks a next string.
+
+4. The intake poller timer is `0 */5 * * * *` in `src/functions/intakePoller.mjs`. Thirty minutes is not coded. Leave the timer at five minutes unless Zeke asks for thirty.
+
+11. The guardian is the Parent/Guardian contact. The guide names Contact `firstname`, `lastname`, `email`, and `contact_category`. Sara's note says the contact card, the one whose email is used for parent communication. This tree reads Case `guardian_first_name`, `guardian_last_name`, and `email` (`PrimaryEmail`). The guide does not give a different Case internal name for that email. The live portal was not re-read. The connected HubSpot account is portal `246184070`.
+
+12. Comorbid is the main field only. That is Sara's latest answer. An older "still confirming" bullet in the guide was not revised. Staff phone is `employee_phone` on the BT/RBT and BCBA payloads. The guide does not name a different destination. The alternate service address read is the truncated `if_services_will_be_in_more_than_one_location__list_the_other_addres`, then `street_address`. The guide does not name a separate source field. Client Staffed is added when `staffing_status` is Staffed and removed when that value is blank. The Staffed label is still absent from the catalog.
+
+14. The guide says remove the Billing Hold label when `cr_billing_hold_label` goes back to No. `updateContactLabels` only POSTs `/contacts/{id}/labels`. An empty list skips the call. There is no label delete. Label removal stays off this chart.
+
 ## Sandbox integration test, confirm then
 
 - A writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred, not measured.
 - The label names listed under item 8 are still absent from the production catalog. Confirm with United Care before another `get_all_labels.js orglabels` run.
 - The three stale ids in `src/constants/centralReach.mjs` (CO Client, NY Employee, header BCBA).
+- A blank write clears employee metadata `138703` after it was filled.
+- A blank write clears a previously filled non-label core field.
+- Item 9 stays in Zeke's other chat. Evidence only. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` and employee dates as `YYYY-MM-DD`.
+- The code already DELETEs a metadata field when the new value is blank and the prior hash was filled. A client core blank is sent as JSON null. The sandbox write is what shows whether CentralReach empties the field.
 
 ## Remaining open items
 
-Closed earlier, and not repeated below. Asana is out. The previous build is the archive checkout. The webhook is primary and the poller is the backup. The date parser is needed and is still uncommitted. An employee create HTTP 400 is stored as blocked. The four redesign commits stay off this branch. BT/RBT `postal_code` stays removed. Portal `50317927` stays off. The Workday id stays unchanged. Dry run is not a product state. Items 1, 7, 8, 13, and 15 are settled above.
+Closed earlier, and not repeated below. Items 1, 3, 4, 7, 8, 11, 13, and 15 are settled above. Comorbid, staff phone, and the alternate address read are settled above. Label removal is a known code gap and stays off this chart.
 
-2. BT/RBT "Yes - Generic" and "No- Made Inactive." The guide says Sara has not confirmed them.
+### Still with Sara
 
-3. The next `MAPPING_VERSION`. Fresh is `hybrid-2026-10-27`. Archive is `guide-sandbox-2026-10-27`. No source picks the next value. A bump writes every linked record on the next sync.
+2. BT/RBT "Yes - Generic" and "No- Made Inactive." Section 11 still says Sara has not confirmed them.
 
-4. Five minutes versus thirty. Source is every five minutes. The archive target is thirty, only after Zeke asks.
+### Still with United Care
 
-5. Whether the sandbox pass approves a deploy or an end-to-end run from this fresh repo. No file says it does.
+The Staffed label, and the payor rows in item 8. Pessy is confirming that the Active and Staffed labels exist. They are not in `all_labels_v3.json`.
 
-6. Live Function App settings and the published commit. The archive notes are from 10/29 and 10/30. Nobody has re-read `centralreachserverless`.
+### Sandbox integration test
 
-9. The date string Central Reach accepts. HubSpot dates are `YYYY-MM-DD` written as midnight UTC. No run has shown Central Reach accept a real date from this code.
+Item 10. Whether a blank write clears field `138703` or a previously filled non-label core field. The code path is described above. State format and gender wording are settled.
 
-10. `state_home` format, gender value mapping, whether a blank non-label field clears Central Reach, and field `138703`. The guide or the judges leave each one undecided.
+### Waiting on Zeke
 
-11. Which HubSpot field marks the guardian contact used for parent communication. The business rule is that contact. The field is not named.
+5. Whether this fresh repo is approved for a deploy or an end-to-end run. No file says it is.
 
-12. Rows still waiting on United Care. Comorbid, the staff phone internal name, and the alternate service address source. Active Staffed is the missing Staffed label in item 8.
+6. The published commit on `centralreachserverless`. The 2026-10-29 zip deploy has no git SHA. The allowlisted flags are settled above.
 
-14. Label removal. The guide says remove a label when it goes back to No. The sync code only adds labels.
+9. The date string Central Reach accepts. Handled in Zeke's other chat. The evidence above does not close it.
+
+BT Active Staffed. Section 6 asks Zeke to confirm that row. It is separate from the missing Staffed label.
 
 ## Open
 

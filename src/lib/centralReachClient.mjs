@@ -547,7 +547,7 @@ export async function createOrUpdateEmployee(payload) {
       operation: "blocked",
       crContactId: null,
       reason:
-        "PUT_ONLY_MODE enabled: create disabled until sandbox. Provide an existing employee_id or disable PUT_ONLY_MODE + enable ALLOW_EMPLOYEE_CREATE."
+        "PUT_ONLY_MODE is on, so this run will not create an employee."
     };
   }
 
