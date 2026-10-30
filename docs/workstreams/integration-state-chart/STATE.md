@@ -12,7 +12,7 @@ Produce one state chart that is also the integration flow for HubSpot to Central
 
 ## Current status
 
-Last step: discover and confirm on 2026-10-30. The judge files and the prior chat do not close the field questions, the running commit, or the blank-clear writes. The first deploy is confirmed only after the remaining open list is closed.
+Last step: re-read the Google Doc on 2026-10-30, including unresolved comments. Items the guide still leaves for Zeke are under Waiting on Zeke. The first deploy is confirmed only after the remaining open list is closed.
 
 ## Key facts
 
@@ -39,7 +39,7 @@ Last step: discover and confirm on 2026-10-30. The judge files and the prior cha
 
 Settled on that tab. The create gate is Entered in CR, with no stage restriction. Case uses contains Yes. BCBA and BT/RBT use equals Yes. The 74 cases that already have a Central Reach id sync without the box. The guardian is the Parent/Guardian contact whose email is used for parent communication. Label rules include add and remove. HubSpot dates are YYYY-MM-DD and must be written as midnight UTC.
 
-Still open on that tab. The date string Central Reach accepts, MAPPING_VERSION, the published commit, five versus thirty minutes, whether sandbox approval covers this repo, Yes - Generic, whether a blank non-label field clears Central Reach, and a blank clear of field 138703. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, the label catalog comparison, the live sandbox flags, and the employee state and gender shapes are settled below. The writeback timestamp race is a sandbox integration test check.
+Still open on that tab. The date string Central Reach accepts, MAPPING_VERSION, the published commit, five versus thirty minutes, whether sandbox approval covers this repo, Yes - Generic, whether a blank non-label field clears Central Reach, and a blank clear of field 138703. A 2026-10-30 re-read also left these for Zeke: SUB BCBA, the five empty Case integration properties, the additional private-app scopes, the BCBA Workday id confirm, and the 10/29 production checklist. Those are under Waiting on Zeke. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, the label catalog comparison, the live sandbox flags, and the employee state and gender shapes are settled below. The writeback timestamp race is a sandbox integration test check.
 
 The tab has a one-time credential link under Prod access. It was not copied here. Remove it from the shared doc if it has already been used.
 
@@ -82,7 +82,7 @@ Section 7 Active and Inactive match catalog names Active Client `1125427` and In
 
 10. Employee state and gender are settled from the fetched core records. `stateProvince` is a two-letter code (`NY` on contact 4737831). A filled `gender` is the word `Male` (contact 4778843). An empty gender is stored as an empty string. Field `138703` is the employee metadata field HubSpot Link to Record, type input, in `metadata_configuration_org.json`. A blank write that clears `138703`, or a previously filled non-label core field, is not in any artifact.
 
-Employee create on the sandbox portal. The live app already has the two flags set to allow a create. `employeeCreateFeatures` in `src/lib/config.mjs` now does the same when `HUBSPOT_PORTAL_ID` is `50850427` and both variables are unset. An explicit value still wins. Any other portal stays blocked unless the variables allow a create. That code change is local and is not published.
+Employee create on the sandbox portal. The live app already has the two flags set to allow a create. `employeeCreateFeatures` in `src/lib/config.mjs` now does the same when `HUBSPOT_PORTAL_ID` is `50850427` and both variables are unset. An explicit value still wins. Any other portal stays blocked unless the variables allow a create. That change is on `review_and_update_code` in pull request 4. It is not published to the Function App.
 
 3. `MAPPING_VERSION` is `hybrid-2026-10-27` in `src/lib/mappedState.mjs`. `hashMappedState` hashes the mapped payload only. Changing the version string does not by itself write every linked record. It changes the value stored on the sync state and in the logs. No file picks a next string.
 
@@ -146,9 +146,21 @@ Whether a writeback leaves `hs_lastmodifieddate` later than `integration_last_wr
 
 The published commit on `centralreachserverless`. The 2026-10-29 zip deploy has no git SHA. The handoff's recorded build `037ea72` is unverified and is not that zip. The allowlisted flags are settled above.
 
-BT Active Staffed. Section 6 asks Zeke to confirm that row. It is separate from the missing Staffed label.
+BT Active Staffed. Section 6 asks what that row is on the Central Reach side. Section 10's next step is still open: confirm HubSpot owns `# of Active Cases` (`active_cases_count`), create an employee metadata field for that count, and test one employee update. There is no Employee Case Load API. The comment on that row is unresolved. This is separate from the missing Staffed label.
 
-The BT/RBT `postal_code` fetch. Archive commit `17451af` removes that request. A newer uncommitted archive `HANDOFF.md` says to keep it. The clean tree still requests `postal_code`. The recovery review recommends removing it with the missing-read halt. Zeke has not chosen.
+SUB BCBA. Section 4, association type 234. The guide asks whether Central Reach needs the substitute when On Leave BCBA is 236. The comment dated 10/27 says "REVIEW ZEKE" and is unresolved.
+
+The five Case integration properties. Section 10 asks which of these are still needed: `updated_by_integration`, `integration_last_write`, `employee_id`, `supervising_bcba`, `create_record`. The guide says all five are empty.
+
+Production private-app scopes. Section 10 says the sensitive read and write scopes are already set. It still lists additional scopes to add: custom objects, appointments, and tickets.
+
+BCBA External System ID. The 10/29 note says confirm this in production testing. The guide says Central Reach's External System ID is the Workday ID, and that a BCBA can send `workday_id`, because 77 of 79 BT values match. The chart still leaves the Workday id unchanged until that confirm.
+
+The 10/29 production checklist. The heading says leave it for now, and it is not closed. Replicate the sandbox property sync for guardian first name, last name, and email onto Case in production. BCBA personal email is not confirmed. Create the production staff phone sync field. Create the alternate service-address workflow. `current_primary_bt` is only a consideration, not a confirmed build.
+
+The guide's minimum changes before production name one item that is not already on the sandbox list: rapid-notification loss. Blank metadata, the employee timestamp, and an intentional blank versus a failed read are already on the sandbox list or in the bring-over notes.
+
+The BT/RBT `postal_code` fetch. Archive commit `17451af` removes that request. A newer uncommitted archive `HANDOFF.md` says to keep it. The clean tree still requests `postal_code`. The recovery review recommends removing it with the missing-read halt. Zeke has not chosen. The guide maps BT/RBT mail and work postal fields as `postal_code_home` and `postal_code__work_`, not `postal_code`.
 
 ## Open
 
