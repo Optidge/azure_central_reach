@@ -13,7 +13,7 @@ Current status. Env restore worked. `.env` and `local.settings.json` are local, 
 
 Last step. Pointed the next thread at `docs/workstreams/sandbox-integration/STATE.md`.
 
-Next action. Continue sandbox work only on `sandbox-integration`. The start prompt is `docs/workstreams/sandbox-integration/START.md`. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
+Next action. Continue sandbox work only on `sandbox-integration`. Agent git commands: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. The start prompt is `docs/workstreams/sandbox-integration/START.md`. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
 
 ## Handoff
 
