@@ -202,3 +202,5 @@ Undo after push (no force-push): `git revert --no-edit <bad_commit_sha>` then `g
 - [`docs/workstreams/pr-transfer-tracker.md`](../pr-transfer-tracker.md) — named code slices to port
 - [`docs/workstreams/sandbox-integration/START.md`](../sandbox-integration/START.md) — paste block for a new Cursor thread
 - [`docs/workstreams/session-run/STATE.md`](STATE.md) — session system of record
+
+**On GitHub:** file is on branch `sandbox-integration` ([PR #6](https://github.com/Optidge/azure_central_reach/pull/6)). It is not on `main` until that PR merges.

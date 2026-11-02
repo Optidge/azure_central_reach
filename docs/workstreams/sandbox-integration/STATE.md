@@ -30,7 +30,7 @@ Azure stop, 2026-10-30 afternoon. Function App `centralreachserverless` in `cent
 
 ## Key facts
 
-- Fresh repo: this checkout, branch `sandbox-integration`. The fresh-tree notes below were first taken on `review_and_update_code`.
+- Fresh repo: this checkout, branch `sandbox-integration`. Open PR 6. Agent git commands: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. The fresh-tree notes below were first taken on `review_and_update_code`.
 - Previous build: the archive checkout at `/Users/zeke/Desktop/projects/client_projects/Optidge/azure_central_reach_backup_2026-10-30` (branch `align-sandbox-hubspot-field-sync`, tip `a8e3be7`). Do not look for a repo named `azure_central_reach_recovery`. Notion is not a chart source.
 - Judges: `docs/workstreams/repository-review-confirm-and-update/` (five files) plus `docs/Azure_repo_recovery_handoff.md`.
 - User-cited diagram: [Hybrid Change Detection MVP](https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit?tab=t.0), tab `t.0`. Google Doc id `1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk`.
