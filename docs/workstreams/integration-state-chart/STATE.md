@@ -16,15 +16,13 @@ Paused 2026-10-30 at the user's request. Do not deploy. Do not create HubSpot re
 
 Property type, confirmed 2026-10-30 with `hs api` on account `UnitedCare_Test_Integration`. `integration_last_write` is `type` `datetime` and `fieldType` `date` on deals, BT/RBT `2-55656309`, and BCBA `2-55656302`. Create the 24-hour report on sandbox portal `50850427` only. The connected MCP account is portal `246184070`. Do not create the report there.
 
-What is already checked. There is one Function App, `centralreachserverless`, in resource group `centralreachintegration`. It is the HubSpot sandbox runtime. `HUBSPOT_PORTAL_ID` is `50850427`. It writes production Central Reach. There is no second production Function App in the docs. The published package is still the 2026-10-29 deploy `3abcd7d8-78ed-49a7-b095-477091840f30`, not this branch. A live call to that app does not run this checkout. `src/lib/writebackAllowlist.mjs` writes `integration_last_write` on Case, BT/RBT, and BCBA. Error paths stamp `last_sync_at` and skip `integration_last_write`. Employee blocked creates do stamp `integration_last_write`. The sandbox property type is not confirmed. `docs/CHECKPOINT.md` and `docs/HANDOFF.md` are absent.
+What is already checked. There is one Function App, `centralreachserverless`, in resource group `centralreachintegration`. It is the HubSpot sandbox runtime. `HUBSPOT_PORTAL_ID` is `50850427`. It writes production Central Reach. There is no second production Function App in the docs. The published package is still the 2026-10-29 deploy `3abcd7d8-78ed-49a7-b095-477091840f30`, not this branch. A live call to that app does not run this checkout. `src/lib/writebackAllowlist.mjs` writes `integration_last_write` on Case, BT/RBT, and BCBA. Error paths stamp `last_sync_at` and skip `integration_last_write`. Employee blocked creates do stamp `integration_last_write`. `docs/CHECKPOINT.md` and `docs/HANDOFF.md` are absent.
 
 Source readiness, recorded after the pause. Confirmed in this checkout. Blank core values go out as JSON null (`trimOrNull` in `buildEmployeePayload.mjs`, `|| null` in `buildClientPayload.mjs`). Metadata DELETE is implemented for a blank known field when the prior hash was filled. Do not use `138703` for that check. Work address `133819` or a BCBA Medicaid id can blank. Writeback clocks are implemented and neither workflow reads `hs_lastmodifieddate` after the patch. The date-string check is not ready for epoch digit strings. `normalizeDate` and `toIsoMidnight` pass an all-digit string to `new Date`, which does not parse it, so those dates still become null. A `YYYY-MM-DD` employee date and an ISO client date pass. The Yes gate is absent. No file under `src` reads `enter_in_central_reach` or `entered_in_centralreach`. BT/RBT still requests `postal_code` in `employeeSyncWorkflow.mjs`. There is no absent-read halt in this tree.
 
-The sandbox property read returned no type. Each of the three `hs api` calls printed only its heading. `integration_last_write` on portal `50850427` is still unconfirmed. The Drive callout quotes were not collected. The stop landed before that read reported.
+The pause read printed only headings and no property type. A later read on account `UnitedCare_Test_Integration` returned `type` `datetime` and `fieldType` `date` on deals, BT/RBT `2-55656309`, and BCBA `2-55656302`. `docs/workstreams/sandbox-resume/STATE.md` records that read. The 24-hour report is still not created. On 2026-10-30, account `UnitedCare_Test_Integration` on portal `50850427` could not save one. The create path returned HTTP 404. List and analytics calls require a reporting scope this key does not have. HubSQL is gated for this account. Create the report in that portal's UI, or add a reporting scope to that app and try again. The Drive callout quotes are still not collected. The date parser still drops all-digit HubSpot date strings. The Yes gate is still absent from this tree.
 
-Still open from this session. The `integration_last_write` property type on sandbox portal `50850427`. The 24-hour report, not created. The quoted Drive callouts. A date parser that accepts HubSpot epoch digit strings, if those are still the sandbox values. The Yes gate, if this run must refuse unticked creates.
-
-Last step: four read-only checks on 2026-10-30. Azure re-read `centralreachserverless`. The Google Doc and its comments were re-read. The fresh tree on `review_and_update_code` was traced. HubSpot in this session reads portal `246184070`, not sandbox `50850427`. The four checks that can run on this branch are under Sandbox integration test. The first deploy still waits on Remaining open items.
+Last step: four read-only checks on 2026-10-30. Azure re-read `centralreachserverless`. The Google Doc and its comments were re-read. The fresh tree on `review_and_update_code` was traced. HubSpot in this session reads portal `246184070`, not sandbox `50850427`. Three of the four checks under Sandbox integration test can run on this branch. The date-string check still turns all-digit HubSpot dates into null. The first deploy still waits on Remaining open items.
 
 ## Key facts
 
@@ -45,13 +43,13 @@ Last step: four read-only checks on 2026-10-30. Azure re-read `centralreachserve
 - Bring into the fresh repo, from the judge review. The date-parser hunk. The exact-`Yes` or already-linked gate (`Yes - Generic` does not count). The missing-read halt, shipped with the `postal_code` removal and the `other_address` correction. The webhook routing test only. The Yes gate is not in the clean tree today. The intake judge would run the sandbox poller without it. The other judges say a poller without the gate can create unticked records in production Central Reach. The chart draws the gate and marks that disagreement.
 - Leave off the chart. The worker and poller redesign (`planAttempt`, create-sweep, never-processed search). Dry run, waiting for a person to tick Yes, and pausing workers as product states. Whole archive workflow files. Treating an absent HubSpot key as a blank delete. Label removal. Split employee queues. A 30-minute poller. Portal `50317927` and the 74 backfill cases. Changing `externalSystemId` to a Workday id.
 - Employee HTTP 400 completes as blocked and stamps `integration_last_write`. It is not a failure and it does not dead-letter. That is why those employees were not retried.
-- Still open, so the chart must not draw them as settled. Drive Tab 1 field rows, label ids, which date string Central Reach accepts, the mapping-version bump, live Function App settings, five minutes versus thirty, and whether the earlier test approval covers this repo.
+- Still open, so the chart must not draw them as settled. Drive Tab 1 field rows, label ids, and which date string Central Reach accepts. The mapping-version bump, the allowlisted live flags, five minutes versus thirty, and the earlier test approval are settled under Discover and confirm.
 
 ## Google Doc tab t.0, reviewed
 
 Settled on that tab. The create gate is Entered in CR, with no stage restriction. Case uses contains Yes. BCBA and BT/RBT use equals Yes. The 74 cases that already have a Central Reach id sync without the box. The guardian is the Parent/Guardian contact whose email is used for parent communication. Label rules include add and remove. HubSpot dates are YYYY-MM-DD and must be written as midnight UTC.
 
-Still open on that tab. The date string Central Reach accepts, MAPPING_VERSION, the published commit, five versus thirty minutes, whether sandbox approval covers this repo, Yes - Generic, whether a blank non-label field clears Central Reach, and a blank clear of field 138703. A 2026-10-30 re-read also left these for Zeke: SUB BCBA, the five empty Case integration properties, the additional private-app scopes, the BCBA Workday id confirm, and the 10/29 production checklist. Those are under Waiting on Zeke. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, the label catalog comparison, the live sandbox flags, and the employee state and gender shapes are settled below. The writeback timestamp race is a sandbox integration test check.
+Still open on that tab, and still open in Remaining open items. The date string Central Reach accepts, the published commit, Yes - Generic, and whether a blank non-label field clears Central Reach. The blank-clear check uses work address `133819` or a BCBA Medicaid id, not field `138703`. Mapping version, five versus thirty minutes, and whether sandbox approval covers this repo are settled under Discover and confirm. A 2026-10-30 re-read also left these for Zeke: SUB BCBA, the five empty Case integration properties, the additional private-app scopes, the BCBA Workday id confirm, and the 10/29 production checklist. Those are under Waiting on Zeke. The tab also names portal 50317927 as the live portal and does not say the poller reads it. The six sandbox workflows, the Yes gate, the label catalog comparison, the live sandbox flags, and the employee state and gender shapes are settled below. The writeback timestamp race is a sandbox integration test check.
 
 The tab has a one-time credential link under Prod access. It was not copied here. Remove it from the shared doc if it has already been used.
 
@@ -69,7 +67,7 @@ The fresh poller enqueues from timestamps and stage filters. No source file read
 
 `c59d580` says the webhook is the primary path and the timer poller is the backup. `17451af` drops BT/RBT `postal_code` after `6571ad5` records that all 20 sandbox BT/RBT records failed the absent-read check. That removal is on the archive tip and not on the fresh tip. `24975b5` says not to import `16d98ee`, `ea02cbe`, `da22900`, and `0b8e785` wholesale, and those four commits are absent from the fresh tip. The fresh mapping version is `hybrid-2026-10-27` from `68c73b1`. The archive version is `guide-sandbox-2026-10-27` from `77f4224`. No commit contains the date parser.
 
-Still open in git. No commit chooses the next mapping version. Both tips still schedule the poller every five minutes, and archive `746ce10` says thirty minutes only after Zeke asks. No commit says the sandbox pass covers a fresh-repo deploy.
+The mapping version stays `hybrid-2026-10-27`. No commit chooses a next string, and a bump is not required before the first deploy. Both tips still schedule the poller every five minutes, and archive `746ce10` says thirty minutes only after Zeke asks. The approval rule is under Discover and confirm. The published commit is still unknown.
 
 ## Settled 2026-10-30
 
@@ -108,12 +106,12 @@ Employee create on the sandbox portal. The live app already has the two flags se
 
 ## Sandbox integration test, confirm then
 
-These checks are repeated in Remaining open items. That section is the current list.
+These checks are repeated in Remaining open items. That section is the current list. The label names and the three stale ids below are United Care items in that list. They are not part of the four checks.
 
 - A writeback leaves `hs_lastmodifieddate` later than `integration_last_write`. Inferred, not measured.
 - The label names listed under item 8 are still absent from the production catalog. Confirm with United Care before another `get_all_labels.js orglabels` run.
 - The three stale ids in `src/constants/centralReach.mjs` (CO Client, NY Employee, header BCBA).
-- A blank write clears employee metadata `138703` after it was filled.
+- A blank write of employee metadata `138703` is not the check. The mapper fills `138703` from the portal, the object type, and the record id. The sandbox check blanks work address `133819` or a BCBA Medicaid id.
 - A blank write clears a previously filled non-label core field.
 - Item 9 stays a sandbox write. Evidence only. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` and employee dates as `YYYY-MM-DD`. The sandbox posts sent null, so Central Reach never accepted or rejected those strings from this code.
 - The code already DELETEs a metadata field when the new value is blank and the prior hash was filled. A client core blank is sent as JSON null. The sandbox write is what shows whether CentralReach empties the field.
@@ -148,7 +146,7 @@ The three stale ids in `src/constants/centralReach.mjs`. CO Client is `1082500` 
 
 ### Sandbox integration test
 
-These four checks can run on this branch. They do not wait on Waiting on Zeke. Run them against this checkout. The live Function App is the 2026-10-29 package, deployment `3abcd7d8-78ed-49a7-b095-477091840f30`, and that package is not commit `ee8b279`.
+Three of these four checks can run on this branch. They do not wait on Waiting on Zeke. Run blank core, metadata DELETE, and writeback time against this checkout. The date-string check stays on this list and is not ready for all-digit HubSpot dates. The live Function App is the 2026-10-29 package, deployment `3abcd7d8-78ed-49a7-b095-477091840f30`, and that package is not commit `ee8b279`.
 
 Date string. Employee GETs store `dateOfBirth` as `1995-09-03T00:00:00.0000000Z`. This tree sends client dates as `YYYY-MM-DDT00:00:00.000Z` (`buildClientPayload.mjs`) and employee dates as `YYYY-MM-DD` (`buildEmployeePayload.mjs`). The earlier sandbox posts sent null, so that run does not show which string Central Reach accepts.
 
@@ -157,6 +155,10 @@ Blank core field. Empty employee and client core values go out as JSON `null`. A
 Metadata DELETE. `metadataClearFieldIds` DELETEs a known field when the new value is blank and the prior hash was filled. A normal HubSpot edit does not blank `138703`. The mapper fills `138703` from the portal, the object type, and the record id. A missing portal omits `138703` and does not DELETE it. Use a field this mapper can blank, such as work address `133819` or a BCBA Medicaid id.
 
 Writeback time. Employee `integration_last_write` and `last_sync_at` share one `new Date()`. The client patch calls `new Date()` once per field. Neither path reads `hs_lastmodifieddate` after the patch. The poller skips until HubSpot's modified time is later. A sandbox write is what measures that order. The webhook does not use that comparison.
+
+Field `138708`. Needs to be confirmed. It does not appear under `src`, in the discovery notes, in the Central Reach JSON exports, or in Google Doc tab t.0. A Drive search for `138708` returned no files. A sandbox write waits until the missing workbook names the field.
+
+Fetch Sara's Metadata Workbook, `United Care ABA - Client Metadata Flow - HubSpot to Central Reach.xlsx`, Drive id `19z3vue0JSkE0QlBO34_83EirCok4q65i`. The guide names that file and it is not in this repo or in `central_reach_test_integration`. The label and metadata JSON exports are already in that sibling tree.
 
 ### Waiting on Zeke
 
@@ -182,7 +184,7 @@ BT/RBT `postal_code`. Still open. The guide maps mail and work postal fields to 
 
 ## Open
 
-The list in Remaining open items is the current list. Notion is not a chart authority. Asana is not in use. Do not deploy while any item in that list is open. The four checks under Sandbox integration test can run on this branch. The live Function App is a different package. The first deploy is confirmed when that list is closed.
+The list in Remaining open items is the current list. Notion is not a chart authority. Asana is not in use. Do not deploy while any item in that list is open. Three of the four checks under Sandbox integration test can run on this branch. The date-string check is not ready for all-digit HubSpot dates. The live Function App is a different package. The 24-hour report on portal `50850427` is still not created. The CLI key on that portal cannot save it. The property type is already confirmed. The first deploy is confirmed when that list is closed.
 
 ##my follow ups after task
 Remove Asana from the requirements. We are not using Asana.

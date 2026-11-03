@@ -10,12 +10,14 @@ Keep `main` as the merged notes and safe baseline. Put sync code on one new bran
 
 | Branch or PR | Role | What you do |
 | --- | --- | --- |
-| `main` | Baseline. Merged docs and the employee-create default from PR 4. | Checkout for reading, docs, session notes. Do not pile sync fixes here as direct commits unless you mean to ship them on `main` immediately. |
+| `main` | Baseline. Merged docs and the employee-create default from PR 4. | Checkout for reading or rare docs-only baseline edits. Do not pile sync fixes here unless you mean to ship on `main` immediately. |
+| `sandbox-integration` | Active sandbox integration line. Head of **PR 6**. | Default branch for sync code and sandbox work. Agent git blocks: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. |
 | `review_and_update_code` | Notes and sandbox pause trail. System of record for those notes is `docs/workstreams/integration-state-chart/STATE.md`. | Read it. Do not treat it as the sync code line. |
-| Next code branch | Zeke names it. It is not `recovery/reviewed-field-alignment`. | He creates it from current `main` when sync code starts. |
+| Next code branch | Not needed if you stay on `sandbox-integration`. | Do not create `recovery/reviewed-field-alignment`. |
 | PR 2 `align-sandbox-hubspot-field-sync` | Archive-shaped sync attempt. Would replace baseline HubSpot search helpers. | Hard stop. Do not merge. It is not a vehicle for this work. Copy named behaviors only, per the tracker. |
-| PR 3 `cursor/remove-verify-azure-central-reach-skill` | Skill deletion only. | Leave open. Do not merge as part of sync work. Conflicts with PR 2 on the skill path. |
+| PR 3 `cursor/remove-verify-azure-central-reach-skill` | Skill deletion only. | **Never merge.** Same deletion is on `sandbox-integration` / PR 6. Close as duplicate later if you want. |
 | PR 4 `review_and_update_code` | Merged. Notes plus sandbox employee-create default. | Already on `main`. Stop treating it as an open vehicle. |
+| PR 6 `sandbox-integration` | Sandbox integration setup and ongoing sandbox branch. | **Open.** Default target for commits. Do not merge to `main` until Zeke asks and sandbox STATE allows. |
 
 ## How this operator works
 
@@ -29,10 +31,12 @@ These habits come from the prior session trail. Keep them so chat switches do no
 
 ## Daily rule
 
-1. Run `git status -sb` and `git branch --show-current` before you edit.
-2. If the work is docs or session state only, stay on `main` or a short-lived `docs/...` branch.
-3. If the work is sync runtime code, use the branch Zeke created. Do not create `recovery/reviewed-field-alignment`.
-4. Open one PR from that branch when the unit is reviewable. Do not reopen PR 2 or 4 as the carrier.
+Copy-paste git blocks: **`docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`**.
+
+1. At session start: fetch, checkout `sandbox-integration`, pull `--ff-only`, then `git status -sb`.
+2. Before any commit: confirm branch, staged files, and no `.env` / `local.settings.json` / `.claude/`.
+3. Sync runtime code and sandbox tests stay on `sandbox-integration` (PR 6). Do not create `recovery/reviewed-field-alignment`.
+4. Do not reopen PR 2 or PR 3 as carriers. Do not merge them.
 5. Do not deploy `centralreachserverless` from a session that only restored env or wrote docs.
 
 ## Create the code branch when you need it

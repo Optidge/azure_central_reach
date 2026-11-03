@@ -36,7 +36,7 @@ Read on October 30, 2026, after the recommendation above. Nothing new was merged
 
 The branch to continue code from does not exist yet. An earlier session named it `recovery/reviewed-field-alignment` and never created it. Create that branch from `main` at `24975b5`. Do not create it from `review_and_update_code`.
 
-`review_and_update_code` is the checkout used during the latest sandbox-test chats. Keep it as notes. Its system of record is `docs/workstreams/integration-state-chart/STATE.md` at `8a84889`. The next note in that file is a property-type read of `integration_last_write` on HubSpot portal `50850427` for deals, BT/RBT `2-55656309`, and BCBA `2-55656302`, using HubSpot CLI account `UnitedCare_Test_Integration`. Do not run that read against portal `246184070`. That was the portal connected in those sessions.
+`review_and_update_code` is the checkout used during the latest sandbox-test chats. Keep it as notes. Its system of record is `docs/workstreams/integration-state-chart/STATE.md` at `8a84889`. The property-type read later returned `type` `datetime` and `fieldType` `date` on deals, BT/RBT `2-55656309`, and BCBA `2-55656302`, on account `UnitedCare_Test_Integration`. Do not repeat that read against portal `246184070`. The 24-hour report on portal `50850427` is still not created.
 
 Do not treat `review_and_update_code` as the code line. Its only runtime commit is `05fbcf6`, which allows an employee create on portal `50850427` when `ALLOW_EMPLOYEE_CREATE` and `PUT_ONLY_MODE` are unset. The same branch still has no date parser, no Yes gate, and the bare BT/RBT `postal_code` request.
 
@@ -50,7 +50,7 @@ Session map:
 
 - [Recovery handoff](bc601bb6-f153-4c86-908b-4e3d7da085ac) kept `main` at `24975b5`, left the align branch in the backup, and named `recovery/reviewed-field-alignment` without creating it. It pushed `e9843dd` and `a7418ed` onto `review_and_update_code` and did not merge that branch.
 - [State chart](1d5f2511-1179-48ac-87a9-48198d708626) opened pull request 4 and committed `05fbcf6`. It said to bring the date parser, the Yes gate, the missing-field stop, and the webhook routing test before a sandbox run, then did not commit them.
-- [Sandbox pause](829721df-efb0-46e5-af9a-162bafe7a4a7) stayed on `review_and_update_code`, pushed only the pause note `8a84889`, and did not deploy. The 24-hour report was not created because the property-type read was killed.
+- [Sandbox pause](829721df-efb0-46e5-af9a-162bafe7a4a7) stayed on `review_and_update_code`, pushed only the pause note `8a84889`, and did not deploy. The 24-hour report was not created. The pause killed the property-type read, and a later read confirmed the type.
 - [Skill deletion](c64c4110-0f53-45e1-b9cd-29028e6ac96d) never entered the sandbox sync. It pushed `cursor/remove-verify-azure-central-reach-skill` at `1c19ac0`, which became pull request 3.
 
 ## Open pull requests
