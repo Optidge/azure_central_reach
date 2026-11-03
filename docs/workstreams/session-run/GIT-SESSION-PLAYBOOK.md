@@ -26,6 +26,28 @@ System of record for *what* to build: [`docs/workstreams/sandbox-integration/STA
 
 Default for this project: **`sandbox-integration`**.
 
+## GitHub CLI (`gh`) — optional
+
+Session start **does not require** `gh`. `git fetch`, `git pull`, commit, and push use HTTPS/SSH credentials and work when `gh` is logged out or has an expired token.
+
+Use `gh` only when you want PR title/state in the terminal or when creating PRs from the CLI. If `gh` fails with an invalid token, **do not treat the session as blocked** — git checks above are enough.
+
+**Restore `gh` (operator, interactive):**
+
+```bash
+gh auth login -h github.com
+gh auth status
+```
+
+**Git-only substitute for “am I on PR #6’s branch?”**
+
+```bash
+git branch --show-current   # expect sandbox-integration
+git status -sb              # expect ...origin/sandbox-integration with no ahead/behind after pull
+git log -1 --oneline
+# PR #6: https://github.com/Optidge/azure_central_reach/pull/6
+```
+
 ---
 
 ## At the start of every session (run this block first)
@@ -42,11 +64,11 @@ git branch --show-current
 git status -sb
 git log -1 --oneline
 
-# Optional: confirm the open PR head matches this branch
-gh pr view 6 --json number,title,state,headRefName,baseRefName,url
+# Optional (needs working `gh auth`): PR metadata in terminal
+# gh pr view 6 --json number,title,state,headRefName,baseRefName,url || true
 ```
 
-**Expect:** branch `sandbox-integration`, tracking `origin/sandbox-integration`. Untracked `.claude/` is OK. No staged secrets.
+**Expect:** branch `sandbox-integration`, tracking `origin/sandbox-integration`. Untracked `.claude/` is OK. No staged secrets. **`gh` failure is not a session failure** — see GitHub CLI section above.
 
 If the task is **docs-only on `main`** (explicitly requested), swap checkout/pull for `main` instead of `sandbox-integration`.
 
@@ -129,7 +151,8 @@ git log -1 --oneline
 cd /Users/zeke/Desktop/projects/client_projects/Optidge/azure_central_reach
 git fetch origin
 git log --oneline origin/main..HEAD
-gh pr view 6 --json url,state,commits
+# Optional:
+# gh pr view 6 --json url,state,commits || true
 ```
 
 Use **PR #6** for work on `sandbox-integration`. Do not reopen PR #2 or PR #3 as carriers.
