@@ -1,0 +1,1919 @@
+﻿CentralReach to HubSpot Integration
+Field map, label rules and open gaps for the Azure build (United Care ABA)
+Prepared for Zeke Swanson by Optidge (Danny Gavin). Version 2, October 22, 2026: updated with Sara Gluck's answers of Oct 22. Every HubSpot name in this document was read from the live portal (50317927).
+Sara’s Metadata Workbook
+11/06 — Updates from Danny
+November 6 feedback is incorporated into sections 2, 3, 5, 7, 10 and 11 below. It supersedes older staffing values and pending Guardian / BCBA identity notes where stated. Original dated feedback is preserved for history; remaining requests are listed in section 10. Source: Change Log tab, “11/06 — Updates from Danny”.
+How to read this
+Zeke, your Client_Metadata_Flow workbook lists HubSpot fields by the names staff see on screen. This document turns every row into the API version: object type ID, internal property name, field type, and the internal option values your code has to send or match. It also covers the label rules behind the CR dashboards and the gaps we found while checking the sheet against the live portal.
+* Rows shaded amber need a decision before you can build them (most are Sara's call; Optidge will collect the answers).
+* Rows shaded red point at a HubSpot field or option that does not exist yet.
+* Unshaded rows are ready to build.
+* Direction follows your sheet: HS to CR means HubSpot is the source, CR to HS means CentralReach writes into HubSpot.
+1. Objects, IDs and pipelines
+Object
+	objectTypeId
+	API path
+	Notes
+	Case (one per client)
+	0-3
+	/crm/v3/objects/deals
+	Cases are HubSpot Deals renamed. Every Case read and write goes through the deals endpoints.
+	BCBA
+	2-48354212
+	/crm/v3/objects/2-48354212
+	Custom object. Pipeline "Pipeline" (Applied through Hired, Paused, Resigned, Terminated).
+	BT/RBT
+	2-48354559
+	/crm/v3/objects/2-48354559
+	Custom object. Pipeline "Hiring Process" (Applied through Hired, Paused, Resigned 1299798139, Terminated 1299798140).
+	Contact
+	0-1
+	/crm/v3/objects/contacts
+	Parents/guardians and staff. contact_category says which (Parent/Guardian, BT/RBT, BCBA, Grad Permit, Team Member, and others).
+	Case History Log
+	2-52798305
+	/crm/v3/objects/2-52798305
+	Our audit log object. Not part of your map, but useful if you want to leave a trail of integration writes.
+	
+
+Case pipeline: "Client Pipeline". Stage IDs are listed in section 7, where they map to CR labels.
+
+
+
+
+
+
+
+
+
+
+2. API rules that will save you debugging time
+1. Use your own private app token. Our 500+ workflows share one token and already brush against HubSpot's 190 requests per 10 seconds limit. A separate app keeps your sync and our automations from throttling each other, and lets you see your own call logs.
+Done 
+   *    2. The child's identity fields are in HubSpot's sensitive-data tier. Child First Name phi_first_name__cloned_, Last Name phi_last_name, Gender phi_gender, Date of Birth phi_date_of_birth, Insurance IDs insurance_id_1 to insurance_id_4, Policy Holder DOB phi__policy_holder_dob, and Diagnosis phi_diagnosis only come back if the app has the sensitive-data scope for deals (crm.objects.deals.sensitive.read, plus .write if you ever write them). Without it they are silently missing from the response.
+See #11
+
+
+   3. Send internal option values, not labels. Several dropdowns have a value that differs from what staff see. Examples: Case Status shows "Active" / "Inactive" but stores Warm / Cold; Entered Client in CR shows "Yes- Completed" but stores Yes; NY Medicaid - Status shows "Credentialed" but stores Credentialing; BT Entered in Central Reach shows "Yes - Active" but stores Yes; LBA Licensure - NY shows "Will Apply" but stores No; Allergies shows "Yes" / "No" but stores Confirmed / Denial. The appendix lists every mismatch on the fields in this map.
+
+
+
+   4. Many fields are read-only to the API. Calculated and synced fields reject writes (the whole PATCH fails). On Case: Location location, the staff name fields (supervising_bcba_name, current_primary_bt, current_primary_bt_2), Referral Source referral_source and the total-hours fields. On BCBA and BT: the home address, home city/state/zip, phone and BT gender fields mirror the linked Contact. Everything you write should go to a field flagged writable in this document.
+
+
+
+   5. Staffing is associations, not fields. Who the Supervising BCBA or Primary BT 1 is lives on the Case to BCBA and Case to BT associations (section 4). Read them with the v4 associations API.
+
+
+
+   6. Care Coordinator is the Case owner. hubspot_owner_id holds an owner ID. Resolve it to a name and email with GET /crm/v3/owners/{id}
+
+.
+   7. One property has a typo in its internal name: Ongoing Auth period end date is ongoing_autrh_period_end_date.
+   8. Ignore the "F" twins. Fields ending in _f (for example ongoing_auth_period_start_date_f) are the upcoming-auth copies staff fill before a new auth starts. Map the plain field unless Sara wants CR to see the next auth early.
+
+
+   9. Date fields come back as YYYY-MM-DD and must be written as midnight UTC.
+
+
+
+   10. HIPAA rule on outbound messages: United Care never puts a child's full name in an email or message; staff use Case Initials case_initials. This only matters if anything you build sends notifications.
+   11. A missing property breaks the whole write. If your code writes to a property that is later renamed or archived, HubSpot rejects the entire call. Tell us which properties your integration writes and we will protect them in future clean-ups.
+11/06 — Danny: the 34 “Prior” fields archived November 3 are not in this map; no mapping action is required for that cleanup.
+3. Client (CentralReach) to Case (HubSpot)
+CR field
+	Direction
+	Object
+	HubSpot internal name and notes
+	Type
+	Trigger: "when enter in central reach is yes"
+	HS to CR
+	Case
+	enter_in_central_reach (checkbox). Start the client sync when it contains Yes (label "Yes- Completed"). Other options are intake checklist items. Danny 10/28: use the CR ID for ongoing updates; the 74 cases that already have a CR Client ID will sync without the box.
+	enumeration
+	Client ID
+	CR to HS
+	Case
+	client_id_number "Central Reach ID number" (429 cases filled today). Your sheet calls it "Client ID number".
+	string
+	Legal Name
+	HS to CR
+	Case
+	First phi_first_name__cloned_ + Last phi_last_name (sensitive tier). dealname is the internal case name; don't use it.
+	string
+	Gender
+	HS to CR
+	Case
+	phi_gender (sensitive). Values male, female.
+	enumeration
+	DOB
+	HS to CR
+	Case
+	phi_date_of_birth (sensitive).
+	date
+	Primary Email
+	HS to CR
+	Contact
+	email on the Parent/Guardian Contact (see Guardian).
+	string
+	Guardian
+	HS to CR
+	Contact
+	firstname + lastname on the Parent/Guardian Contact linked to the Case (association type 3, unlabeled; contact_category = Parent/Guardian). 11/06 — Danny: closed. A Case has only one Contact, so use the Parent/Guardian on the Case; use that Contact’s email for parent communication. This closes the earlier 10/29 production-confirmation note.
+	string
+	Mailing Address
+	HS to CR
+	Case + Contact
+	Case street_address, home_apt, location_city, stateregion, postal_code + guardian Contact phone.
+	string
+	Care coordinator
+	HS to CR
+	Case
+	hubspot_owner_id, resolve with the owners API.
+	owner
+	Initial Assessment BCBA, Reassessment BCBA
+	HS to CR
+	Case to BCBA
+	Associations IA BCBA (86) and RE BCBA (145), see section 4.
+	association
+	Supervising BCBA
+	HS to CR
+	Case
+	Sara (Oct 22): use ongoing_central_reach_provider_supplier "Ongoing Central Reach Provider Supplier", because it feeds billing. It is free text staff type (274 cases filled), not a link to the BCBA record, so match it to the CR provider by name.
+	string
+	Grad Permit Holder
+	HS to CR
+	Case to BCBA
+	Sara (Oct 22): when the Ongoing Central Reach Provider Supplier differs from the Supervising BCBA (association 82), the Supervising BCBA is a grad permit holder. Reliable check on the BCBA record: lba_licensure__ny = Grad Permit. Optidge may add an automatic Grad Permit marker on the case; we will tell you where it lands.
+	enumeration
+	BT #1 Name / BT #2 Name
+	HS to CR
+	Case to BT
+	Associations Primary BT 1 (76) and Primary BT 2 (143), see section 4.
+	association
+	Work Schedule #1
+	HS to CR
+	Case
+	work_schedule_details "BT/RBT Work Schedule 1 Details". If the BT works at Location #2: work_schedule_1_details__for_location_2_other.
+	string
+	Work Schedule #2
+	HS to CR
+	Case
+	btrbt_work_schedule_2_details. Location #2 version: work_schedule_2_details__for_location_2_other.
+	string
+	Client Availability
+	HS to CR
+	Case
+	finalized_client_service_hours_post_assessment (text) + client_service_hours_total (weekly hours, number).
+	string + number
+	Total Assigned Hours (97153)
+	HS to CR
+	Case
+	Use total_hours_bt1bt2_work_schedule (calculated, filled on 2,617 cases). Two older totals exist (total_hours_bt_12_work_schedule 59 cases, total_hours_btrbt_12 20 cases); ignore them. Per-BT hours: hours_bt_work_schedule_1 and hours_bt_work_schedule_2.
+	number
+	Approved Auth Hours
+	HS to CR
+	Case
+	Sara (Oct 22), by initial_auth_tracks: Prior Authorization Required uses n97153_approved_assessment_hours_auth_req "97153 Hrs Insurance Approved- Prior Auth Req" (text, filled automatically from the approved hours/units; 445 cases). No Prior Authorization Required uses ia_hours_from_the_ia "97153 Hrs From IA - No Auth Req" (number, entered at QA review; 298 cases).
+	string / number
+	Auth Period
+	HS to CR
+	Case
+	Start ongoing_auth_period_start_date, end ongoing_autrh_period_end_date (typo is real).
+	date
+	Service Location Address
+	HS to CR
+	Case
+	specific_home_location says where (Child's House, Other Location, More Than One Location). Home: full_home_address. Other: service__street_address, service__apt, service__city, service__postal_code (combined in service_address__other).
+	mixed
+	Service Location Address 2
+	HS to CR
+	Case
+	service_address__other (Location #2-Other).
+	string
+	Known Allergies
+	HS to CR
+	Case
+	allergies (Yes/No) + allergies__yes__explain.
+	enum + string
+	Comorbid Diagnosis
+	HS to CR
+	Case
+	Main Comorbid Diagnosis field, listed here as does_your_child_have_any_other_comorbid_diagnoses_. Danny’s feedback continuation, under “10/29 — TO CONFIRM IN PROD TESTING”: Comorbid and Maladaptive use only the main fields; the clinical versions are being merged in and deleted. This note reports the plan, not completion.
+	string
+	Maladaptive Behaviors
+	HS to CR
+	Case
+	Use maladaptive_behaviors__parentguardian, the main “Maladaptive Behaviors” field. Danny’s feedback continuation, under “10/29 — TO CONFIRM IN PROD TESTING”: only the main fields; the clinical versions are being merged in and deleted. Completion is not confirmed by that note.
+	checkbox
+	Severity Level
+	HS to CR
+	Case
+	severity_level_clinical (Level 1, 2, 3).
+	enumeration
+	Important information - Parent
+	HS to CR
+	Case
+	important_information "Important Information Re Home".
+	string
+	Current Primary Insurance
+	HS to CR
+	Case
+	insurance_primary, or insurance_1__other__summary when it is Other.
+	enumeration
+	Primary Insurance ID
+	HS to CR
+	Case
+	insurance_id_1 (sensitive).
+	string
+	Referring Physician, Credentials and NPI
+	HS to CR
+	Case
+	Medicaid: physician_name + npi_number. Commercial: physician_name__commercial + npi_number__commercial. Pick by insurance type.
+	string
+	Diagnosis
+	HS to CR
+	Case
+	phi_diagnosis (sensitive) + diagnosis_other.
+	enum + string
+	Referring Physician Medicaid ID
+	HS to CR
+	Case
+	referring_provider_medicaid_id.
+	string
+	Date of Most Recent ASD Diagnosis
+	HS to CR
+	Case
+	most_recent_asd_diagnosis_date_1.
+	date
+	... Medicaid FFS NY
+	HS to CR
+	Case
+	most_recent_asd_diagnosis_date_medicaid.
+	date
+	Policyholder Name
+	HS to CR
+	Case
+	policy_holder_name.
+	string
+	Policyholder Date of Birth
+	HS to CR
+	Case
+	phi__policy_holder_dob (sensitive).
+	date
+	Secondary Insurance
+	HS to CR
+	Case
+	Sara confirmed (Oct 22): the carrier, insurance_2 (or insurance_2__other__summary when it is Other). Not n2_what_type_of_insurance. The row appears twice in the sheet (rows 45 and 78); use one.
+	enumeration
+	Secondary Insurance ID
+	HS to CR
+	Case
+	insurance_id_2 (sensitive).
+	string
+	Referral Source
+	HS to CR
+	Case
+	referral_source (read-only in HubSpot, fine to read).
+	enumeration
+	
+
+4. Staffing: read associations, not fields
+Danny 10/28 — Change signals: workflows cannot trigger on association labels. They can trigger on supervising_bcba_name, ia_bcba_name, reassessment_bcba_name, current_primary_bt and current_primary_bt_2; Danny says these are used as production triggers.
+Danny 10/30 — BCBA-to-BCBA labels are now “Grad Permit Supervisor (supervises this BCBA)” and “Grad Permit Supervisee (this BCBA supervises them)”. Their association type IDs did not change.
+Call GET /crm/v4/objects/deals/{caseId}/associations/{toObjectType} and filter on the associationTypes[].typeId. The type IDs below were read live on Oct 21, 2026. Each labeled association also carries a plain unlabeled one (BCBA 20, BT 64); ignore those.
+Role
+	To object
+	typeId (Case to X)
+	Notes
+	Supervising BCBA
+	BCBA 2-48354212
+	82
+	The ongoing BCBA. For the CR Supervising BCBA field itself, Sara wants the typed Ongoing Central Reach Provider Supplier (section 3); use this association to spot grad permit cases. A BCBA marked Outgoing with no removal date is still active (Sara's rule).
+	IA BCBA (Initial Assessment)
+	BCBA
+	86
+	
+
+	RE BCBA (Reassessment)
+	BCBA
+	145
+	Renamed from "Reassessment BCBA" in Sep 2026.
+	SUB BCBA
+	BCBA
+	234
+	Covers for a Supervising BCBA on leave (On Leave BCBA = 236). Does CR need the substitute?
+[a]	
+Outgoing Supervising BCBA
+	BCBA
+	135
+	Leaving; not the active BCBA.
+	Previous IA BCBA
+	BCBA
+	286
+	History only.
+	Potential IA / Potential Supervising BCBA
+	BCBA
+	153 / 80
+	Candidates only. Never sync to CR.
+	Primary BT 1
+	BT/RBT 2-48354559
+	76
+	Reverse direction (BT to Case) is 75.
+	Primary BT 2
+	BT/RBT
+	143
+	Reverse is 144.
+	Outgoing BT 1 / Outgoing BT 2
+	BT/RBT
+	131 / 166
+	Leaving. Still active until a removal date passes.
+	Potential BT 1 / Potential BT 2
+	BT/RBT
+	74 / 164
+	Candidates only.
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+5. BCBA
+CR field
+	Direction
+	Object
+	HubSpot internal name and notes
+	Type
+	Trigger
+	HS to CR
+	BCBA
+	entered_in_centralreach "Enter BCBA in CentralReach" (only option Yes; 99 BCBAs). Confirm this is the BCBA start signal.
+	enumeration
+	Employee ID
+	CR to HS
+	BCBA
+	11/06 — Danny: employee_id “Employee ID (from CR)” and external_system_id “External System ID” now exist on BCBA (2-48354212); both are empty. employee_id is the CR Employee ID writeback field. The 10/28 note places them on the “CentralReach IDs” card in BCBA Overview.
+10/27 - Zeke Optidge Note 
+Created employee_id
+	string
+	External System ID
+	HS to CR
+	BCBA
+	11/06 — Danny: CR External System ID = Workday ID; send BCBA workday_id as the CR External System ID. The HubSpot external_system_id field exists and is empty. This supersedes the earlier HubSpot record ID note and closes the identity-mapping question; it does not assert that IDs have been populated.
+	string
+	Legal Name
+	HS to CR
+	BCBA
+	first_name + last_name (also full_name). Danny 10/30: full_name now refreshes automatically whenever first or last name changes; five mismatched BCBA names were corrected. If full_name is sent to CR, expect updates.
+	string
+	Gender
+	HS to CR
+	BCBA
+	gender_new (Male/Female, 251 filled). The old gender is archived-in-place; don't use it.
+	enumeration
+	Primary Email (Work Email)
+	HS to CR
+	BCBA
+	Sara confirmed (Oct 22): ucaba_email_address "UCABA Email Address" (104 filled). No new field.
+	string
+	Mailing Address
+	HS to CR
+	BCBA
+	address, apartment__home, city_home, state_home, postal_code_home, phone employee_phone. All read-only mirrors of the BCBA's Contact.
+	string
+	Credentialed with NY Medicaid / Aetna / CO Medicaid / Cigna
+	HS to CR
+	BCBA
+	Use the per-state label fields: ny_insurance_labels (MCD FFS-NY, Aetna-NY, Cigna-NY, Carelon-NY), nj_insurance_labels, co_insurance_labels. A live workflow keeps them in step with the payor statuses. Don't use credentialed_insurances__ny (1 BCBA filled). This also answers the three TBD rows and the "not built for NY" note: NY is built.
+	checkbox
+	Medicaid ID # NY / NJ / CO
+	HS to CR
+	BCBA
+	medicaid_id__ny, medicaid_id__nj, medicaid_id__co.
+	string
+	Personal Email
+	HS to CR
+	Contact
+	email on the BCBA's Contact (BCBA to Contact association 17).
+	string
+	Salaried
+	HS to CR
+	BCBA
+	work_status "Hourly or Salary?" = Salaried.
+	enumeration
+	Care Coordinator
+	HS to CR
+	BCBA
+	hubspot_owner_id, resolve with the owners API.
+	owner
+	
+
+6. BT/RBT
+CR field
+	Direction
+	Object
+	HubSpot internal name and notes
+	Type
+	Trigger / status
+	HS to CR
+	BT/RBT
+	entered_in_centralreach "Entered in Central Reach": "Yes - Active" (value Yes), Yes - Generic, No- Made Inactive. Our deactivation alerts watch for staff setting No- Made Inactive after a BT leaves every case; if your sync deactivates BTs in CR, it should set this value so those alerts stop.
+	enumeration
+	Employee ID
+	CR to HS
+	BT/RBT
+	employee_id "Employee ID (from CR)" (6 filled).
+	string
+	External System ID
+	CR to HS
+	BT/RBT
+	external_system_id (79 filled).
+	string
+	Legal Name
+	HS to CR
+	BT/RBT
+	first_name + last_name (also bt_name).
+	string
+	Gender
+	HS to CR
+	BT/RBT
+	gender (read-only mirror of the Contact).
+	enumeration
+	Primary Email
+	HS to CR
+	BT/RBT
+	email on the BT/RBT record.
+	string
+	Mailing Address
+	HS to CR
+	BT/RBT
+	street_home, location_city, state_home, postal_code_home, employee_phone. Read-only mirrors of the Contact.
+	string
+	Work Address
+	HS to CR
+	BT/RBT
+	street_address__work_, apartment__work, city__work_, state__work_, postal_code__work_ (only 15 filled).
+	string
+	Active Staffed
+	HS to CR
+	BT/RBT
+	The sheet maps this to "Case Count"; the HubSpot field is active_cases_count "# of Active Cases". Question for you, Zeke: what is "Active Staffed" on the CR side (a yes/no field, a number, or a label)? Once we know, we can tell you the exact rule. 
+
+Answer https://docs.google.com/document/d/1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk/edit?disco=doco.wQP_CoURDmlo2JupDNPEsg
+	number
+	
+
+7. Client dashboard labels (HubSpot to CR)
+Current update — Danny 11/06: read staffing_status directly; do not derive staffing labels from stages, because HubSpot workflows keep the property current. Staffed / X Staffed no longer exist. Sara corrected 97155 to 97151 on November 6. Send the matching staffing label and remove the previous one when the value changes. Pessy still needs to confirm that the six labels exist in CR; hold label go-live pending confirmation.
+CR label
+	HubSpot property
+	Rule
+	Active / Inactive
+	case_status "Case Status"
+	Stored values are Warm (shown as Active) and Cold (shown as Inactive). Updates on every stage change.
+	Staffing-status labels — Danny 11/06
+	staffing_status "Staffing Status"
+	From Intake Complete onward, the six CR staffing values are: Pending 97151 Services; 97151 Services; Pending 97153 Services; Starting 97153 Services; Staffed 97153; X 97153. Match the staffing_status value to its CR label and remove the previous staffing label on change. A blank value means no staffing label; remove the prior staffing label if it becomes blank. Pessy’s CR-label confirmation is pending; no numeric CR label IDs are supplied.
+	
+
+Stage context from 10/30, corrected by 11/06 — reference only; sync reads staffing_status
+      * Contact Client: Hot Lead (0 to 30 days), Warm Lead (31 to 90), Cold Lead (91+).
+      * Established Contact, Sent Application, Intake In Process: Processing Leads.
+      * Intake Complete: Pending 97151 Services (97155 corrected to 97151 on 11/06).
+      * Initial Assessment, Pending IA Auth, IA in Process, Pending Ongoing Auth: 97151 Services (97155 corrected to 97151 on 11/06).
+      * IA Complete, Service Ready w/Start Date: Starting 97153 Services.
+      * Service Ready: Pending 97153 Services.
+      * Restaffing Service Ready: Staffed 97153 if the case has a Primary BT 1, otherwise X 97153.
+      * 11/06 — Danny / Sara: Restaffing-BCBA AND BT Needed = X 97153. staffing_status is blank on Paused, Disqualified, Discharged, Closed Lost and the Cleanup stages; send no staffing label for those. Read the property rather than using these stage descriptions as integration logic.
+11/06 — Danny: Hot Lead, Warm Lead, Cold Lead and Processing Leads stay in HubSpot before Intake Complete; do not send these lead values as CR staffing labels.
+Scheduled updates — Danny 10/30, clarified 11/06: daily refreshes run at 5 AM and 1 PM Eastern for every state, including Colorado. The 10/30 note describes Service Ready w/Start Date and Restaffing SR w/Start Date switching to Staffed 97153 at 1 PM the day after the BT 1 start date. Consume the resulting staffing_status changes even without a manual Case edit; do not reproduce the schedule or stage rules in the integration.
+11/06 — Danny: Active / Inactive is unchanged and separate from staffing labels: case_status Warm = Active; Cold = Inactive. A blank staffing_status does not mean suppressing the Active / Inactive label.
+11/06 — Remaining confirmations: Pessy still needs to confirm that the six CR staffing labels exist. Sara confirmed Paused has no staffing label, Restaffing-BCBA AND BT Needed = X 97153, and Eastern-time daily refreshes apply to every state. The 10/30 questions about the lead-age timing basis and Restaffing SR w/Start Date are not explicitly closed by the 11/06 note; they do not change the instruction to read staffing_status. Hold label go-live pending CR-label confirmation.
+Feedback continuation, under “10/29 — TO CONFIRM IN PROD TESTING”: Reassessment uses staffing_status; leave cleanup stages out of CR while they are moved to Inactive in HubSpot. This does not confirm completion of that move.
+Historical reference — October 22 stage table below. Danny’s November 6 staffing_status instructions above supersede its Staffed / X Staffed entries, Paused staffing label, and pending staffing questions answered on 11/06. Preserve this table as history; do not use it to derive current staffing labels.
+Stage ID(s)
+	HubSpot stage
+	Sara's CR labels
+	case_status
+	staffing_status
+	Notes
+	1136629064, 1284038324, 1136629065, 1136629066
+	Contact Client, Established Contact, Sent Application, Intake In Process
+	not in CR yet
+	Active
+	
+
+	The client is entered in CR at Intake Complete. Don't create them before enter_in_central_reach contains Yes.
+	1213733979
+	Intake Complete
+	Active
+	Active
+	
+
+	
+
+	1213681739, 1348616086, 1216864594, 1348616087, 1263094171
+	Initial Assessment, Pending IA Auth, IA - in Process, Pending Ongoing Auth, IA Complete
+	Active
+	Active
+	
+
+	
+
+	1136629068, 1342613895
+	Service Ready, Service Ready w/Start Date
+	Active
+	Active
+	
+
+	
+
+	1278121498, 1310034488, 1341412767
+	First Three Days, Ongoing, Ongoing-2nd BT Needed
+	Active + Staffed
+	Active
+	Staffed
+	
+
+	1341412154
+	Restaffing- Paused-No BT
+	Active
+	Active
+	X Staffed
+	
+
+	1341581913, 1350979584
+	Restaffing-BT to be Replaced, Restaffing-BCBA Needed
+	Active + Staffed
+	Active
+	Staffed
+	
+
+	1350979585
+	Restaffing-BCBA AND BT Needed
+	not in Sara's list
+	Active
+	X Staffed
+	No BT is billing, so we expect Active only. Confirming with Sara.
+	1348616088
+	Reassessment
+	not in Sara's list
+	Active
+	Staffed or X Staffed
+	HubSpot works out Staffed from the case's staffing during Reassessment (48 Staffed, 21 X Staffed today). Confirming with Sara.
+	1410598808, 1438735105
+	Restaffing-Service Ready, Restaffing- Service Ready w/Start Date
+	Active (+ Staffed when BT 2 is starting and BT 1 is still billing)
+	Active
+	X Staffed, or Staffed for a second-BT start
+	HubSpot already handles the BT 2 case.
+	1438735107, 1438735106
+	Restaffing-New BCBA Service Ready, Restaffing- First Three Days
+	Active + Staffed
+	Active
+	Staffed
+	
+
+	1344955718, 1136629070, 1315313037
+	Paused, Disqualified, Discharged
+	Inactive
+	Inactive
+	X Staffed (Paused) or blank
+	
+
+	closedlost
+	Closed Lost
+	not in Sara's list (she wrote "Resigned", which is not a case stage)
+	Inactive
+	
+
+	Confirming with Sara.
+	1383894301, 1383894303, 1383894302, 1332962645
+	Prior Service Cleanup, Prior In Process Cleanup, Contact Only Cleanup, Lost in the Shuffle
+	not in Sara's list
+	Active
+	
+
+	127 cases sit in the cleanup stages today and show as Active. Confirming with Sara whether CR should treat them as active.
+	
+
+Client state and service location
+CR label
+	HubSpot source
+	Notes
+	CO Client / NJ Client / NY Client
+	location (New York, New Jersey, Colorado; read-only, calculated)
+	
+
+	Home
+	specific_home_location = Child's House (or More Than One Location)
+	
+
+	School / Clinic
+	No HubSpot option yet
+	Sheet marks these as future. Options to add to specific_home_location when needed.
+	
+
+Funding source
+CR label
+	HubSpot rule
+	Aetna NY
+	insurance_primary = Aetna and Case location = New York
+	Cigna NY / Cigna Colorado
+	insurance_primary = Cigna and location = New York / Colorado
+	Medicaid NY / NJ / Colorado
+	insurance_primary = Medicaid FFS and location. (Also n1_what_type_of_insurance, but its "Medicaid FFS - NY" option stores Medicaid FFS, so the state is not in the value.)
+	Carelon
+	Any of the nine "-Carelon" options (Beacon, NY State Empire, Emblem HMO, Emblem non HMO, Unicare Commercial, Providence, Anthem NY Commercial, Child Health Plan, Independence Health Association).
+	Anthem BCBS
+	No matching HubSpot option. Is it "Anthem NY Commercial-Carelon" (which would otherwise go to Carelon)?
+	UHC
+	No UHC option in insurance_primary. Needs to be added if United Care takes UHC.
+	(no CR label)
+	HubSpot values with no CR label: Aetna or Cigna in NJ, Aetna in CO, Other. What should CR show?
+	
+
+8. BCBA dashboard labels
+CR label
+	HubSpot source
+	Notes
+	CO / NY / NJ Employee
+	location "Work State(s)" (checkbox, multi-value)
+	A BCBA can hold several states, so add one label per state. Feedback continuation, under “10/29 — TO CONFIRM IN PROD TESTING”: New Mexico / Virginia — skip for now.
+	BCBA (header)
+	every BCBA record
+	
+
+	BCBA Colorado / BCBA LBA NJ
+	assign_states contains Assign CO / Assign NJ
+	
+
+	BCBA LBA NY
+	lba_licensure__ny = Yes
+	
+
+	GRAD Student- LBA NY
+	lba_licensure__ny = Grad Permit
+	
+
+	Aetna / Cigna / Carelon / NY Medicaid / CO Medicaid
+	ny_insurance_labels and co_insurance_labels
+	Easier than reading five status fields: these are kept in sync by a live workflow. If you read the statuses instead, NY Medicaid's "Credentialed" is stored as Credentialing.
+	(no CR label)
+	nj_insurance_labels (MCD-NJ, Horizon-NJ), Aetna-CO, Cigna-CO, Carelon-CO
+	Credentialed in HubSpot but no CR label in the sheet. The sheet's Aetna and Cigna labels also don't say which state.
+	Billing Hold Medicaid affiliation
+	cr_billing_hold_label = Yes
+	Remove the label when it goes back to No.
+	
+
+9. BT dashboard labels
+CR label
+	HubSpot source
+	Notes
+	CO / NY / NJ Employee
+	location on BT/RBT (checkbox, multi-value)
+	Feedback continuation, under “10/29 — TO CONFIRM IN PROD TESTING”: New Mexico / Virginia — skip for now.
+	Behavior Technician CO / NY / NJ, RBT CO / NY / NJ
+	bt_rbt_type x location
+	Sara (Oct 22): bt_rbt_type is now only BT or RBT. BTs working toward RBT moved to a separate field (bt_to_rbt_path), which doesn't affect the label. A BT with two states gets two labels.
+	
+
+Small fix in the sheet: the header on that tab reads "CR < Hubspot", which reads as CR to HubSpot; the rows themselves are HubSpot to CR.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+10. Open items
+Optidge will do
+      1. 11/06 — Danny: BCBA employee_id and external_system_id exist on object 2-48354212, and both are empty. Field creation is closed; CR ID writeback and Workday-based External System ID mapping are described in section 5. This feedback does not confirm integration implementation.
+      * 
+-For Cases the Client ID number stores the Central reach Client ID 
+      * For BCBA and BT/RBT, Employee ID stores the CentralReach Employee ID. 11/06 — Danny confirms CR External System ID = Workday ID and BCBA workday_id can supply it. The earlier statement that CR External System ID stores the HubSpot record ID, and that the HubSpot field is unnecessary, is superseded for the BCBA mapping. BCBA external_system_id exists and is empty; see section 5.
+      *       *          2. 11/06 — Zeke - Follow Up: confirm whether these five Case properties are still needed: updated_by_integration, integration_last_write, employee_id, supervising_bcba, create_record. Danny renewed this request on November 6. The earlier note says they were empty and retained during the October cleanup; no removal or requirement decision is confirmed.
+         3. Feedback continuation, under “10/29 — TO CONFIRM IN PROD TESTING”: Comorbid and Maladaptive use only the main fields. Merge clinical data into the main fields and delete the clinical versions; the feedback does not confirm completion.
+         4. Decide how the Grad Permit marker travels with the BCBA on a case (Sara's request) and tell you where it lands.
+
+         5. Collect the remaining answers and send you an updated copy of this document.
+
+
+
+Still open with United Care
+            1. Funding source labels: Anthem BCBS, UHC, and payors with no CR label (Pessy is answering).
+            2. 11/06 — Danny / Sara: use staffing_status for staffing labels; Paused and the other listed inactive / Cleanup stages have no staffing label, and Restaffing-BCBA AND BT Needed = X 97153. Daily refreshes use Eastern time for every state. Cleanup stages remain excluded from CR per the earlier instruction; completion of their HubSpot move to Inactive is not confirmed. See section 7 for current values and remaining questions.
+            3. 11/06 — Guardian: closed. A Case has only one Contact; use the Parent/Guardian on the Case. This replaces the earlier pending production-confirmation status. See section 3.
+            4. Comorbid / Maladaptive answer recorded in the feedback continuation under “10/29 — TO CONFIRM IN PROD TESTING”: only the main fields; clinical merge/deletion is planned, not confirmed complete.
+            5. New Mexico / Virginia: skip for now, per the feedback continuation under “10/29 — TO CONFIRM IN PROD TESTING”.
+For you to confirm
+
+
+11/06 — Zeke - Follow Up: Danny still requests what “Active Staffed” represents in CR, the integration private app’s actual scopes (including the sensitive deals scope), the complete list of HubSpot properties the integration writes, and a keep/remove decision for the five Case properties above. Existing draft answers and earlier reported scope status below do not constitute final confirmation of these requests.
+1 What "Active Staffed" is on the CR side (section 6).[b]
+For the MVP, we could store HubSpot’s active case count in a CentralReach employee metadata field.
+The blocker is that CentralReach’s public API has no documented Employee Case Load endpoint, while the assignment data is documented in Data Warehouse 2.0, which I don’t believe we currently have access to.
+We could manually create an employee metadata field called “HubSpot Active Case Count” and have the integration update it from HubSpot’s # of Active Cases property. This would display the count in CentralReach; it would not create or update native caseload assignments.
+Next: Confirm HubSpot should own this count, then create the field and test one employee update.
+
+Active case load location in Central Reach
+
+In Central Reach - Active Case Load
+
+Profile -> Employee Case Load
+
+
+  
+
+
+
+
+
+
+
+
+
+
+Private-app scopes — 11/06: Danny still requests the integration private app’s scopes, including the sensitive deals scope. The earlier 10/29 continuation reported that the Central Reach Integration app had all scopes listed below; treat that as historical reported status until the actual integration app’s current scope list is confirmed. Zeke - Follow Up.
+Production - Private App Link
+	Current Scopes
+	Additional scopes to add to Private App
+
+
+crm.objects.custom.read
+crm.objects.custom.write
+crm.objects.appointments.read
+crm.objects.appointments.write
+tickets
+	crm.objects.appointments.sensitive.readcrm.objects.appointments.sensitive.writecrm.objects.contacts.sensitive.readcrm.objects.contacts.sensitive.writecrm.objects.companies.sensitive.readcrm.objects.companies.sensitive.writecrm.objects.deals.sensitive.readcrm.objects.deals.sensitive.writecrm.objects.custom.sensitive.readcrm.objects.custom.sensitive.writecrm.objects.contacts.writetickets.sensitivecrm.objects.contacts.highly_sensitive.readcrm.objects.contacts.highly_sensitive.writecrm.objects.companies.highly_sensitive.readcrm.objects.companies.highly_sensitive.writecrm.objects.deals.highly_sensitive.readcrm.objects.deals.highly_sensitive.writetickets.highly_sensitivecrm.objects.custom.highly_sensitive.readcrm.objects.custom.highly_sensitive.writecrm.objects.deals.readcrm.objects.deals.writecrm.objects.contacts.read
+
+
+	
+
+
+
+
+3 Every HubSpot property your integration writes to, so we never archive or rename one under you.
+
+4 How you want to be told about changes (next section)
+
+
+
+
+
+
+Dated feedback follow-ups
+            * 10/29 — Diff Review Pending / Leave For Now / Final Confirm: replicate the sandbox Guardian first-name, last-name and email sync fields in production; BCBA personal email sync is planned, not confirmed complete; staff phone sync needs the exact destination internal name; alternate service-address workflow source internal name is unspecified; current_primary_bt workflow/custom-code handling remains a consideration, not confirmed implementation.
+            * 10/28 — Danny requested a fourth ongoing workflow for Contacts, covering Guardian name/email and BCBA personal email. Keep the CR ID fields written back by the integration out of the triggers. These are requests, not a statement that the workflow is implemented.
+            * 11/06 — Staffing follow-up: Sara answered the blank-stage / Paused rule, Restaffing-BCBA AND BT Needed = X 97153, and Eastern-time daily refreshes for every state. Pessy’s confirmation that the six CR labels exist remains pending. Earlier 10/30 context is retained in section 7; sync reads staffing_status rather than mapping stages.
+11. What we can set up for you
+            * A change signal, so you don't have to poll. We can build HubSpot workflows that calls a webhook on your Azure endpoint (or stamp a "CR sync needed" date you watch) when "Entered Client in CR" turns Yes.
+            * when the Case stage changes
+            * when staffing associations change
+            * and when any mapped field changes
+
+
+
+
+
+
+
+
+Triggers follow up 
+
+
+Yes, the gate is only “Entered in CR,” with no pipeline or stage restriction. Once a record passes the gate, push the full mapped set, then push every mapped field change after that, in any stage. That includes cases going Inactive (Paused, Discharged and so on), since that’s how the Inactive label reaches CR. Treat it as a one-way latch: if someone unticks the box later, keep syncing.
+Gate per object:
+            1. Case: enter_in_central_reach contains Yes. It’s a multi-checkbox, so use “contains,” not “equals.”
+            2. BCBA: entered_in_centralreach = Yes.
+            3. BT/RBT: entered_in_centralreach = Yes (shown as “Yes - Active”). We’re confirming with Sara how to handle “Yes - Generic” and “No- Made Inactive.”
+Two more things:
+            1. It’s actually 4 objects, not 3. Guardian name and email, and the BCBA personal email, live on Contacts, so watch Contact changes for contacts linked to a gated record.
+            2. Some mapped values change without anyone editing the field: Case Status, Staffing Status, the BCBA/BT name rollups, and association changes (IA BCBA, RE BCBA, BTs). Make sure your change detection catches those. If it can’t, we can have a HubSpot workflow call your endpoint whenever they change.
+One gap we’re fixing on our side: some records already in CR were never ticked (for example, 74 active cases with a CR Client ID). We’re asking Sara whether to backfill the box on those or to also treat “has a CR Client ID” as passing the gate. I’ll let you know which.
+
+
+
+
+
+            * 11/06 — Test records: test_record (true/false) exists on Case, BCBA, BT/RBT and Contact. Danny says to skip records where test_record = true, or deliberately use them for end-to-end tests. Exclude flagged records from normal live processing; include them only in a deliberate end-to-end test run. The earlier ZZ TEST naming convention does not establish that the integration already enforces this flag.
+            * A sandbox pass on the label logic. Validate the property-to-label mapping using the six current staffing_status values and blank-value removal behavior in section 7. Pessy’s confirmation that the six labels exist in CR is still pending. The October 22 stage table is historical; do not use it as the integration mapping.
+            * Monitoring. A small HubSpot report of records your integration wrote in the last 24 hours (using integration_last_write), so both teams can see the sync is alive.
+
+
+
+
+
+
+
+
+
+
+
+
+Appendix: dropdown options whose stored value differs from the label
+Every other option on the fields in this document stores exactly what it shows.
+Object
+	Property
+	Label shown to staff and the value the API stores
+	Case
+	case_status
+	"Active" stores Warm; "Inactive" stores Cold
+	Case
+	enter_in_central_reach
+	"Yes- Completed" stores Yes
+	Case
+	n1_what_type_of_insurance
+	"Medicaid FFS - NY" stores Medicaid FFS
+	Case
+	n2_what_type_of_insurance
+	"Medicaid FFS - NY" stores Medicaid FFS
+	Case
+	phi_diagnosis
+	"Yes-F84.0" stores Yes
+	Case
+	allergies
+	"Yes" stores Confirmed; "No" stores Denial
+	Case
+	maladaptive_behaviors__parentguardian
+	"Aggression-Uses Physical Force on Themselves or Others" stores Aggression; "Self-Injurious-Hurts Themselves On Purpose Repeatedly" stores Self-Injury; "Tantrums/Meltdowns-Emotional Outburst with Crying/Screaming" stores Tantrums/Meltdowns; "Property Destruction-Breaks, Throws, or Damages Items" stores Property Destruction; "Elopement Risk-Wanders/Leaves Room or Area Without Permission" stores Elopement; "Mouthing Non Food Items-Frequently Puts Objects In Mouth" stores Mouthing Non Food Itemsth; "Repetitive Behaviors-Repeats The Same Movements, Sounds, Or Actions" stores Repetitive Behaviors
+	BCBA
+	ny_medicaid__status
+	"Credentialed" stores Credentialing
+	BCBA
+	lba_licensure__ny
+	"Will Apply" stores No
+	BT/RBT
+	entered_in_centralreach
+	"Yes - Active" stores Yes
+	
+10/28 DANNY’S Feedback! 
+
+
+Design: looks right. Using the CR ID for ongoing updates also solves the backfill gap (the 74 cases that already have a CR Client ID will sync without the box). A few notes:
+            1. Staffing changes: workflows can’t trigger on association labels, but they can on the name fields that update with them (supervising_bcba_name, ia_bcba_name, reassessment_bcba_name, current_primary_bt, current_primary_bt_2). We use those as triggers in production today.
+            2. Add a 4th ongoing workflow for Contacts (guardian name/email, BCBA personal email).
+            3. Keep the CR ID fields you write back out of the triggers too.
+            4. BCBAs now have employee_id “Employee ID (from CR)” and external_system_id “External System ID”, same names as on BTs, on a “CentralReach IDs” card at the top of 
+
+
+10/29 - TO CONFIRM IN PROD TESTING
+BCBA Overview. FYI, CR’s External System ID is the Workday ID: on BTs, 77 of 79 match workday_id exactly, so for BCBAs you can send workday_id.
+
+
+
+
+Sara’s latest answers (I’ll fold these into the guide):
+               1. Guardian: the Parent/Guardian contact whose email is used for parent communication.
+               2. Reassessment: Staffed comes from staffing_status, which already works out the underlying stage.
+               3. Cleanup stages: leave them out of CR. We’re moving them to Inactive in HubSpot.
+               4. New Mexico / Virginia: skip for now.
+               5. Comorbid and Maladaptive: only the main fields. We’re merging the clinical versions in and deleting them before Thursday.
+               6. d
+
+
+
+
+Thursday EOD: works on our side. Still open with United Care: Pessy confirming the Active / Staffed labels exist in CR, and Sara on BT “Yes - Generic” and “No- Made Inactive”.
+
+
+Prod access: the Central Reach Integration app already has all the scopes on your list. Token and client secret are here (one-time link): https://password.link/ps2ZGLQo/#WjpWcXNxcDlPVFReTDdsOSou. Until Thursday, please keep prod testing to ZZ TEST records only, so nothing real gets created in CR early.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+10/29  - Diff Review Pending Leave For Now -  Final confirm
+Object
+	Property
+	What you marked
+	Case / Deal
+	Guardian first name, last name, and email
+	You wrote that you created these as property sync fields in sandbox, allowing the integration to read them directly from the Case. Replicate that configuration in production.
+	BCBA
+	Personal email
+	Immediately below the guardian note: “Will need to do the same for the BCBA personal email.” This is a planned sync-property addition; the note does not confirm completion.
+	Staff record — BT/RBT explicitly referenced
+	Contact phone / home phone
+	You wrote “In prod Create phone sync field that reads contact home and phone field.” The main page also says to switch to the new phone sync property. The exact destination internal name is not recorded in those reminders.
+	Your Central Reach Integration page also contains these workflow and field-creation items:
+Field or area
+	Recorded follow-up
+	Alternate service address — Case
+	Explicitly says to create a workflow copying the additional service-address field into if_services_will_be_in_more_than_one_location__list_the_other_addres. The source field’s internal name is not specified.
+	Current Primary BT — current_primary_bt
+	Your mapping table says the property sync value may need a workflow or custom code action for the integration mapping. This was a consideration, not a confirmed implementation.
+	The clearest production checklist is: guardian names/email on Case, BCBA personal email, staff phone sync, and the alternate-service-address workflow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+10/30 Updates - From Danny
+
+
+
+1._Staffing Status (staffing_status) has new values, and the stored values changed.“Staffed” and “X Staffed” no longer exist. Every option now stores exactly what it shows, so anything in your code matching “Staffed” or “X Staffed” won’t match anymore. The new values by stage:
+
+
+
+
+• Contact Client: Hot Lead (0 to 30 days), Warm Lead (31 to 90), Cold Lead (91+).
+• Established Contact, Sent Application, Intake In Process: Processing Leads.
+• Intake Complete: Pending 97155 Services.
+• Initial Assessment, Pending IA Auth, IA in Process, Pending Ongoing Auth: 97155 Services.
+• IA Complete, Service Ready w/Start Date: Starting 97153 Services.
+• Service Ready: Pending 97153 Services.
+• Restaffing Service Ready: Staffed 97153 if the case has a Primary BT 1, otherwise X 97153.
+• Everything that used to be Staffed is now Staffed 97153, and everything that was X Staffed is now X 97153.
+• Paused: blank.
+
+
+CR clients start at Intake Complete, so the lead values never reach CR. The ones you’ll see are:
+
+
+
+
+• Pending 97155 Services.
+• 97155 Services.
+• Pending 97153 Services.
+• Starting 97153 Services.
+• Staffed 97153.
+• X 97153.
+
+
+Please map by value instead of hard-coding two labels.
+
+
+2. Staffing Status now also changes on a schedule, not only on stage or staffing changes.There’s a daily run at 5 AM and another at 1 PM Eastern. The 1 PM run flips Service Ready w/Start Date and Restaffing SR w/Start Date to Staffed 97153 at 1 PM the day after the BT 1 start date. So your ongoing-update workflow will see changes at those times even when no one touches the case. That’s expected.
+
+
+3. Case Status (case_status) is unchanged for you. It’s still stored as Warm / Cold (shown as Active / Inactive). We only changed how it displays on the board, and removed the Active and Inactive case tags.
+
+
+4. BCBA names. full_name now refreshes automatically whenever first or last name changes, and we corrected 5 BCBAs whose full name didn’t match. If you send full_name to CR, expect a few updates.
+
+
+5. Grad permit. The BCBA to BCBA labels were renamed to “Grad Permit Supervisor (supervises this BCBA)” and “Grad Permit Supervisee (this BCBA supervises them)“. The association type IDs didn’t change, so nothing breaks if you read them.
+
+
+Waiting on United Care. We’ve asked Sara to confirm a few label choices we made with our own defaults:
+
+
+
+
+• Whether Hot/Warm/Cold counts from case creation.
+• The 1 PM switch for Colorado.
+• Restaffing SR w/Start Date.
+• Which stages stay blank.
+
+
+We’ve also asked Pessy whether the six CR labels exist in CentralReach yet. Build the mapping by value now, but hold off on going live with the label part until they answer. The values themselves won’t change, only possibly which stage gets which one.
+
+
+And no stress on timing. Better to get it right than fast.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Sandbox Assets
+
+
+Sandbox Workflows 
+
+CentralReach — Six Sandbox Workflow Definitions
+Verified snapshot: October 27, 2026. Sandbox account: 50850427.
+Markdown with consistent CSV-style row/column tables for inclusion in a Google Doc. These are readable saved workflow definitions, not an executable import file. All six definitions were freshly retrieved; no workflow or record was changed.
+Workflow register
+Ref
+	Workflow
+	Revision
+	Object type
+	Enabled
+	Re-enrollment
+	Event groups
+	Actions
+	W1
+	Sandbox – CentralReach – Case Ongoing Refresh
+	7
+	Deal / Case 0-3
+	Yes
+	Yes
+	26
+	2
+	W2
+	Sandbox – CentralReach – BT-RBT Ongoing Refresh
+	6
+	BT/RBT 2-55656309
+	Yes
+	Yes
+	32
+	2
+	W3
+	Sandbox – CentralReach – BCBA Ongoing Refresh
+	7
+	BCBA 2-55656302
+	Yes
+	Yes
+	24
+	2
+	W4
+	[Sandbox][CR sync] Case to CR client
+	9
+	Deal / Case 0-3
+	Yes
+	Yes
+	2
+	1
+	W5
+	[Sandbox][CR sync] BT-RBT to CR employee
+	8
+	BT/RBT 2-55656309
+	Yes
+	Yes
+	2
+	1
+	W6
+	[Sandbox][CR sync] BCBA to CR employee
+	10
+	BCBA 2-55656302
+	Yes
+	Yes
+	2
+	1
+	How to read the enrollment columns
+All six workflows allow manual and automatic enrollment and re-enrollment. Every property row below represents two separate Property value changed event groups:
+               1. Property name matches the specified internal name AND new value is known.
+               2. Property name matches the same internal name AND new value is unknown.
+The groups are alternatives (OR), not a requirement that known and unknown happen together. Properties are grouped for readability rather than editor display order. No additional record filter groups were returned for these triggers. No validation errors or unreachable actions were returned for any of the six workflows. Configuration validity does not prove runtime or destination success.
+W1 — Sandbox – CentralReach – Case Ongoing Refresh
+Open Case Ongoing Refresh
+Purpose: Notify Azure of supported Case changes when an existing CentralReach Client ID is present. 13 properties; 26 event groups.
+Property
+	Internal property name
+	Event
+	First group: new value
+	Second group: new value
+	City
+	location_city
+	Property value changed
+	Known
+	Unknown
+	Home Address
+	street_address
+	Property value changed
+	Known
+	Unknown
+	Home Apt #
+	home_apt
+	Property value changed
+	Known
+	Unknown
+	Postal Code
+	postal_code
+	Property value changed
+	Known
+	Unknown
+	Service - Street Address
+	service__street_address
+	Property value changed
+	Known
+	Unknown
+	Service - Postal Code
+	service__postal_code
+	Property value changed
+	Known
+	Unknown
+	Guardian First Name
+	guardian_first_name
+	Property value changed
+	Known
+	Unknown
+	Guardian Last Name
+	guardian_last_name
+	Property value changed
+	Known
+	Unknown
+	Insurance Primary
+	insurance_primary
+	Property value changed
+	Known
+	Unknown
+	Case Status
+	case_status
+	Property value changed
+	Known
+	Unknown
+	Deal Stage
+	dealstage
+	Property value changed
+	Known
+	Unknown
+	Deal owner
+	hubspot_owner_id
+	Property value changed
+	Known
+	Unknown
+	Staffing status
+	staffing_status
+	Property value changed
+	Known
+	Unknown
+	
+
+Order
+	Action
+	Condition / configuration
+	Outcome
+	1
+	Branch — Has Client Id
+	Client ID number (client_id_number) is known
+	Matching path → webhook; non-matching path ends, no default downstream action
+	2
+	Send a webhook
+	POST to shared endpoint; recordId = enrolled Record ID; objectTypeId = 0-3
+	End after webhook
+	No original-checkbox, stage, pipeline or active-status eligibility condition appears in the returned enrollment filters or branch. Watching a status/stage as a signal is not the same as using it as an eligibility gate.
+W2 — Sandbox – CentralReach – BT-RBT Ongoing Refresh
+Open BT-RBT Ongoing Refresh
+Purpose: Notify Azure of supported BT/RBT changes when an existing CentralReach Employee ID is present. 16 properties; 32 event groups.
+Property
+	Internal property name
+	Event
+	First group: new value
+	Second group: new value
+	First Name
+	first_name
+	Property value changed
+	Known
+	Unknown
+	Last Name
+	last_name
+	Property value changed
+	Known
+	Unknown
+	Email
+	email
+	Property value changed
+	Known
+	Unknown
+	Phone Number
+	employee_phone
+	Property value changed
+	Known
+	Unknown
+	Street (Home)
+	street_home
+	Property value changed
+	Known
+	Unknown
+	Location City
+	location_city
+	Property value changed
+	Known
+	Unknown
+	Postal Code (Home)
+	postal_code_home
+	Property value changed
+	Known
+	Unknown
+	Street Address (Work)
+	street_address__work_
+	Property value changed
+	Known
+	Unknown
+	Apartment # (Work)
+	apartment__work
+	Property value changed
+	Known
+	Unknown
+	City (Work)
+	city__work_
+	Property value changed
+	Known
+	Unknown
+	State (Work)
+	state__work_
+	Property value changed
+	Known
+	Unknown
+	Postal Code (Work)
+	postal_code__work_
+	Property value changed
+	Known
+	Unknown
+	BT/RBT Type
+	bt_rbt_type
+	Property value changed
+	Known
+	Unknown
+	BT/RBT pipeline stage
+	hs_pipeline_stage
+	Property value changed
+	Known
+	Unknown
+	Entered in Central Reach
+	entered_in_centralreach
+	Property value changed
+	Known
+	Unknown
+	Work State(s)
+	location
+	Property value changed
+	Known
+	Unknown
+	
+
+Order
+	Action
+	Condition / configuration
+	Outcome
+	1
+	Branch — Has Employee ID
+	Employee ID (employee_id) is known
+	Matching path → webhook; non-matching path ends, no default downstream action
+	2
+	Send a webhook
+	POST to shared endpoint; recordId = enrolled Record ID; objectTypeId = 2-55656309
+	End after webhook
+	Entered in Central Reach is watched as a change signal, not required to equal a specific option. The branch checks Employee ID only.
+W3 — Sandbox – CentralReach – BCBA Ongoing Refresh
+Open BCBA Ongoing Refresh
+Purpose: Notify Azure of supported BCBA changes when an existing CentralReach Employee ID is present. 12 properties; 24 event groups.
+Property
+	Internal property name
+	Event
+	First group: new value
+	Second group: new value
+	Home Address
+	address
+	Property value changed
+	Known
+	Unknown
+	Phone Number
+	employee_phone
+	Property value changed
+	Known
+	Unknown
+	Gender New
+	gender_new
+	Property value changed
+	Known
+	Unknown
+	Medicaid ID # NY
+	medicaid_id__ny
+	Property value changed
+	Known
+	Unknown
+	Medicaid ID # NJ
+	medicaid_id__nj
+	Property value changed
+	Known
+	Unknown
+	Medicaid ID # CO
+	medicaid_id__co
+	Property value changed
+	Known
+	Unknown
+	BCBA pipeline stage
+	hs_pipeline_stage
+	Property value changed
+	Known
+	Unknown
+	Owner
+	hubspot_owner_id
+	Property value changed
+	Known
+	Unknown
+	NY insurance labels
+	ny_insurance_labels
+	Property value changed
+	Known
+	Unknown
+	NJ insurance labels
+	nj_insurance_labels
+	Property value changed
+	Known
+	Unknown
+	Work State(s)
+	location
+	Property value changed
+	Known
+	Unknown
+	CentralReach billing hold label
+	cr_billing_hold_label
+	Property value changed
+	Known
+	Unknown
+	
+
+Order
+	Action
+	Condition / configuration
+	Outcome
+	1
+	Branch — Has Employee ID
+	Employee ID (employee_id) is known
+	Matching path → webhook; non-matching path ends, no default downstream action
+	2
+	Send a webhook
+	POST to shared endpoint; recordId = enrolled Record ID; objectTypeId = 2-55656302
+	End after webhook
+	The saved staff phone trigger is employee_phone, not a similarly named phone property.
+W4 — [Sandbox][CR sync] Case to CR client
+Open Case to CR client
+Role: Original entry-property signal workflow. Its name is not a guarantee that Azure always creates a new client. The saved HubSpot definition sends a webhook directly after the property-change event.
+Property
+	Internal property name
+	Event
+	First group: new value
+	Second group: new value
+	Entered Client in CR
+	enter_in_central_reach
+	Property value changed
+	Known
+	Unknown
+	
+
+Property type
+	Display option
+	Stored value
+	Multiple checkboxes
+	IEP’s & Evals
+	IEP's & Evals
+	Multiple checkboxes
+	CDE
+	CDE
+	Multiple checkboxes
+	Insurance Card(s)
+	Insurance Card(s)
+	Multiple checkboxes
+	Payment Plan
+	Payment Plan
+	Multiple checkboxes
+	Yes- Completed
+	Yes
+	
+
+Order
+	Action
+	Condition / configuration
+	Outcome
+	1
+	Send a webhook
+	POST to shared endpoint; recordId = enrolled Record ID; objectTypeId = 0-3; no preceding linked-ID branch
+	End after webhook
+	The saved trigger does not require Yes or any specific option. It watches known/unknown changes. Receiver-side eligibility and create-versus-update behavior are not established by this definition.
+W5 — [Sandbox][CR sync] BT-RBT to CR employee
+Open BT-RBT to CR employee
+Role: Original BT/RBT entry-property signal workflow; direct webhook, not a verified guarantee of employee creation.
+Property
+	Internal property name
+	Event
+	First group: new value
+	Second group: new value
+	Entered in Central Reach
+	entered_in_centralreach
+	Property value changed
+	Known
+	Unknown
+	
+
+Property type
+	Display option
+	Stored value
+	Single-select
+	Yes - Active
+	Yes
+	Single-select
+	Yes - Generic
+	Yes - Generic
+	Single-select
+	No- Made Inactive
+	No- Made Inactive
+	
+
+Order
+	Action
+	Condition / configuration
+	Outcome
+	1
+	Send a webhook
+	POST to shared endpoint; recordId = enrolled Record ID; objectTypeId = 2-55656309; no preceding linked-ID branch
+	End after webhook
+	The saved trigger does not filter to a particular option.
+Overlap to test: W2 and W5 both watch entered_in_centralreach. On a linked BT/RBT record, one qualifying change may generate notifications from both. Verify Azure duplicate-safe processing and latest-state preservation; neither is proven by configuration. No workflow was changed to address this overlap.
+W6 — [Sandbox][CR sync] BCBA to CR employee
+Open BCBA to CR employee
+Role: Original BCBA entry-property signal workflow; direct webhook, not a verified guarantee of employee creation.
+Property
+	Internal property name
+	Event
+	First group: new value
+	Second group: new value
+	Enter BCBA in CentralReach
+	entered_in_centralreach
+	Property value changed
+	Known
+	Unknown
+	The decorative icon in the source property label is omitted for clean document formatting; its internal name is preserved.
+Property type
+	Display option
+	Stored value
+	Single-select
+	Yes
+	Yes
+	
+
+Order
+	Action
+	Condition / configuration
+	Outcome
+	1
+	Send a webhook
+	POST to shared endpoint; recordId = enrolled Record ID; objectTypeId = 2-55656302; no preceding linked-ID branch
+	End after webhook
+	The trigger checks known/unknown changes, not equality to Yes.
+Shared webhook definition — all six workflows
+Setting
+	Saved value
+	HTTP method
+	POST
+	Endpoint
+	https://centralreachserverless-hffge8hxdxh6apd9.eastus2-01.azurewebsites.net/api/hubspot-webhook
+	Query parameters
+	None configured
+	Request-body key 1
+	recordId
+	Request-body value 1
+	Dynamic enrolled record’s Record ID (hs_object_id)
+	Request-body key 2
+	objectTypeId
+	Request-body value 2
+	Static sandbox object type, as specified per workflow
+	Body scope
+	ID-only; no mapped patient/staff field values in configured body
+	Available outputs
+	Execution state; server response; HTTP status code
+	Authentication/signature settings
+	Not exposed by the returned action definitions; not verified here
+	
+
+Workflow ref
+	Static request objectTypeId
+	Dynamic request recordId
+	W1
+	0-3
+	Enrolled Case Record ID
+	W2
+	2-55656309
+	Enrolled BT/RBT Record ID
+	W3
+	2-55656302
+	Enrolled BCBA Record ID
+	W4
+	0-3
+	Enrolled Case Record ID
+	W5
+	2-55656309
+	Enrolled BT/RBT Record ID
+	W6
+	2-55656302
+	Enrolled BCBA Record ID
+	There is no workflow-specific discriminator in the configured body beyond object type and record ID. For the same object/record, the original and ongoing workflows send the same body shape. These definitions do not establish how Azure differentiates creation, ongoing refreshes, retries or duplicates.
+Review notes and implementation boundaries
+Topic
+	Verified configuration / limitation
+	Six added object/property pairs
+	Case staffing_status; BCBA ny_insurance_labels, nj_insurance_labels, location, cr_billing_hold_label; BT/RBT location are saved in ongoing triggers with known and unknown groups
+	Ongoing linked-ID requirement
+	Present in W1–W3 only
+	Original entry-property workflows
+	W4–W6 have no preceding linked-ID branch; do not impose an existing-ID requirement on the initial-create path without reviewing the intended architecture
+	Entry-property filtering
+	W4–W6 watch known/unknown changes, not positive entry-option equality; inspect receiver eligibility separately
+	Sandbox test segments
+	Test segments appear in W4–W6 resource lists, but no segment-membership condition appears in their returned enrollment event filters. A resource reference is not proof of a test-record-only enrollment restriction
+	Scope
+	Do not assume the enabled workflows are limited to the three designated test records; returned enrollment definitions contain object-level property events
+	Mapping
+	Azure destination mapping is not specified by an ID-only body; inspect current receiver code and the approved mapping guide separately
+	Guardian helpers
+	Case helper triggers do not prove associated Guardian Contact propagation
+	Clears
+	Unknown-value events are configured; destination clear semantics still need runtime verification
+	Validation
+	No returned errors is configuration evidence, not proof of webhook delivery, Azure processing or destination success
+	Production
+	No production workflows were inspected or changed; sandbox identifiers must not be assumed portable
+	Unexposed settings
+	Execution windows, suppression/unenrollment details, retries and authentication settings not exposed by the responses are not asserted
+	Document boundary: Read-only saved-configuration snapshot. No activation, deactivation, enrollment, webhook test, record edit, code change or production deployment was performed.
+
+
+
+
+
+
+Change log — Dated Danny feedback consolidated into sections 1–10
+Updated November 2, 2026. Original dated feedback above is preserved. The 10/29 TO CONFIRM IN PROD TESTING continuation is identified separately; pending items remain pending.
+               * Section 3 — Added the CR-ID ongoing-update confirmation. Source: 10/28 Danny’s Feedback.
+               * Section 3 — Added the Guardian answer, explicitly retaining its “10/29 — TO CONFIRM IN PROD TESTING” source status.
+               * Section 3 — Recorded main Comorbid/Maladaptive fields and planned clinical merge/deletion; no completion asserted. Source: feedback continuation under 10/29 TO CONFIRM.
+               * Section 4 — Added Danny’s five staff-name workflow signals. Source: 10/28.
+               * Sections 4–5 — Added Grad Permit label renames with unchanged IDs and automatic full_name refresh. Source: 10/30.
+               * Section 5 — Recorded BCBA ID-field existence from 10/28; left identity mapping pending production confirmation.
+               * Section 7 — Added exact current staffing values and Danny’s stage mapping; marked the old October 22 table historical. Source: 10/30.
+               * Section 7 — Added 5 AM / 1 PM Eastern updates, unchanged Warm / Cold values and pending label go-live. Source: 10/30.
+               * Sections 8–10 — Recorded dated answers and remaining questions; scopes remain Danny-reported, clinical merge and cleanup move are not marked completed. Source: feedback continuation under 10/29 TO CONFIRM and 10/30.
+               * Section 10 — Listed the production sync-field/workflow checklist as pending final confirmation. Source: 10/29 Diff Review Pending / Leave For Now / Final Confirm.
+               * Section 10 — Recorded the requested fourth Contact workflow and exclusion of CR ID writeback fields from triggers. Source: 10/28. No implementation asserted.
+11/06 feedback incorporated — reviewed November 7, 2026.
+Sections 2 and 11 — Recorded the 34 archived “Prior” fields as no action and added test_record on all four objects, distinguishing normal processing from deliberate end-to-end tests.
+Sections 3 and 10 — Closed the Guardian question: use the Case’s single Parent/Guardian Contact.
+Sections 5 and 10 — Confirmed BCBA employee_id / external_system_id exist and are empty; CR External System ID uses workday_id, superseding the earlier HubSpot record ID note for BCBA.
+Section 7 — Corrected 97155 to 97151; documented all six CR staffing values, lead-only values, blank staffing labels, previous-label removal and direct staffing_status reads. Recorded Sara’s Restaffing-BCBA AND BT Needed answer, Eastern time for every state, unchanged Warm / Cold Active / Inactive values, and Pessy’s pending CR-label confirmation.
+Section 10 — Renewed Zeke follow-ups for Active Staffed, the actual private-app scope list, all integration-written properties and the five Case property keep/remove decisions. No implementation or production validation is asserted.
+
+
+Meta description
+Consolidated place where all of the feedback from Danny, Sarah, or the UnitedCare ABA client lives. Most recent updates are appended to the top of this document.
+All New information goes here for storage and then is added in Tab 1 where needed. 
+
+
+
+
+
+
+Change-log entries from Tab 1 — recorded November 2, 2026
+               * Sections 4–5 — Added Grad Permit label renames with unchanged IDs and automatic full_name refresh. Source: 10/30.
+               * Section 7 — Added exact current staffing values and Danny’s stage mapping; marked the old October 22 table historical. Source: 10/30.
+               * Section 7 — Added 5 AM / 1 PM Eastern updates, unchanged Warm / Cold values and pending label go-live. Source: 10/30.
+               * Sections 8–10 — Recorded dated answers and remaining questions; scopes remain Danny-reported, clinical merge and cleanup move are not marked completed. Source: feedback continuation under 10/29 TO CONFIRM and 10/30.
+               * 11/06 added to the top of the doc
+
+
+
+
+
+
+11/06 — Updates from Danny
+
+
+Hey @Zeke Swanson, a few United Care HubSpot changes since the Oct 22 guide. The first one breaks the Staffed label in section 7, so please check it before you build the labels.
+
+
+               1. Staffing Status has new valuesStaffed / X Staffed no longer exist. staffing_status now holds budget labels (Sara corrected 97155 to 97151 today).
+
+
+
+
+These go to CR, from Intake Complete on: Pending 97151 Services, 97151 Services, Pending 97153 Services, Starting 97153 Services, Staffed 97153, X 97153
+These stay in HubSpot (before Intake Complete): Hot Lead, Warm Lead, Cold Lead, Processing Leads
+It’s blank on Paused, Disqualified, Discharged, Closed Lost and the Cleanup stages, so send no staffing label for those
+Send the matching label and remove the old one when the value changes. Read the property, don’t map stages, since our workflows keep it current. Active/Inactive is unchanged (case_status: Warm = Active, Cold = Inactive). Pessy still has to confirm whether the six labels exist in CR.
+
+
+               1. Guardian: closed. A case has only one contact, so use the Parent/Guardian on the case.
+               2. BCBA IDs: employee_id and external_system_id now exist on BCBA (2-48354212), both empty. External System ID = Workday ID, so you can fill it from workday_id.
+               3. Test records: test_record (true/false) is on Case, BCBA, BT/RBT and Contact. Skip records where it’s true, or use them for your end to end tests.
+               4. From Sara: Paused has no staffing label, Restaffing-BCBA AND BT Needed is X 97153, and the daily refresh runs on Eastern time for every state.
+               5. No action: the 34 “Prior” fields we archived Nov 3 aren’t in your map.
+
+
+
+
+Still need from you: what “Active Staffed” is on the CR side, your private app’s scopes (including the sensitive deals scope), the list of properties you write to, and whether your five Case properties (updated_by_integration, integration_last_write, employee_id, supervising_bcba, create_record) are still needed.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+10/30 — Updates from Danny
+
+
+1._Staffing Status (staffing_status) has new values, and the stored values changed.“Staffed” and “X Staffed” no longer exist. Every option now stores exactly what it shows, so anything in your code matching “Staffed” or “X Staffed” won’t match anymore. The new values by stage:
+
+
+• Contact Client: Hot Lead (0 to 30 days), Warm Lead (31 to 90), Cold Lead (91+).
+• Established Contact, Sent Application, Intake In Process: Processing Leads.
+• Intake Complete: Pending 97155 Services.
+• Initial Assessment, Pending IA Auth, IA in Process, Pending Ongoing Auth: 97155 Services.
+• IA Complete, Service Ready w/Start Date: Starting 97153 Services.
+• Service Ready: Pending 97153 Services.
+• Restaffing Service Ready: Staffed 97153 if the case has a Primary BT 1, otherwise X 97153.
+• Everything that used to be Staffed is now Staffed 97153, and everything that was X Staffed is now X 97153.
+• Paused: blank.
+
+
+CR clients start at Intake Complete, so the lead values never reach CR. The ones you’ll see are:
+
+
+• Pending 97155 Services.
+• 97155 Services.
+• Pending 97153 Services.
+• Starting 97153 Services.
+• Staffed 97153.
+• X 97153.
+
+
+Please map by value instead of hard-coding two labels.
+
+
+2. Staffing Status now also changes on a schedule, not only on stage or staffing changes.There’s a daily run at 5 AM and another at 1 PM Eastern. The 1 PM run flips Service Ready w/Start Date and Restaffing SR w/Start Date to Staffed 97153 at 1 PM the day after the BT 1 start date. So your ongoing-update workflow will see changes at those times even when no one touches the case. That’s expected.
+
+
+3. Case Status (case_status) is unchanged for you. It’s still stored as Warm / Cold (shown as Active / Inactive). We only changed how it displays on the board, and removed the Active and Inactive case tags.
+
+
+4. BCBA names. full_name now refreshes automatically whenever first or last name changes, and we corrected 5 BCBAs whose full name didn’t match. If you send full_name to CR, expect a few updates.
+
+
+5. Grad permit. The BCBA to BCBA labels were renamed to “Grad Permit Supervisor (supervises this BCBA)” and “Grad Permit Supervisee (this BCBA supervises them)“. The association type IDs didn’t change, so nothing breaks if you read them.
+
+
+Waiting on United Care. We’ve asked Sara to confirm a few label choices we made with our own defaults:
+
+
+• Whether Hot/Warm/Cold counts from case creation.
+• The 1 PM switch for Colorado.
+• Restaffing SR w/Start Date.
+• Which stages stay blank.
+
+
+We’ve also asked Pessy whether the six CR labels exist in CentralReach yet. Build the mapping by value now, but hold off on going live with the label part until they answer. The values themselves won’t change, only possibly which stage gets which one.
+
+
+And no stress on timing. Better to get it right than fast.
+
+
+
+
+
+
+
+10/29 - TO CONFIRM IN PROD TESTING
+BCBA Overview. FYI, CR’s External System ID is the Workday ID: on BTs, 77 of 79 match workday_id exactly, so for BCBAs you can send workday_id.
+
+
+Sara’s latest answers (I’ll fold these into the guide):
+Guardian: the Parent/Guardian contact whose email is used for parent communication.
+Reassessment: Staffed comes from staffing_status, which already works out the underlying stage.
+Cleanup stages: leave them out of CR. We’re moving them to Inactive in HubSpot.
+New Mexico / Virginia: skip for now.
+Comorbid and Maladaptive: only the main fields. We’re merging the clinical versions in and deleting them before Thursday.
+d
+
+
+Thursday EOD: works on our side. Still open with United Care: Pessy confirming the Active / Staffed labels exist in CR, and Sara on BT “Yes - Generic” and “No- Made Inactive”.
+
+
+Prod access: the Central Reach Integration app already has all the scopes on your list. Token and client secret are here (one-time link): https://password.link/ps2ZGLQo/#WjpWcXNxcDlPVFReTDdsOSou. Until Thursday, please keep prod testing to ZZ TEST records only, so nothing real gets created in CR early.
+
+
+
+
+Change-log entries from Tab 1 — recorded November 2, 2026
+               * Section 3 — Added the CR-ID ongoing-update confirmation. Source: 10/28 Danny’s Feedback.
+               * Section 4 — Added Danny’s five staff-name workflow signals. Source: 10/28.
+               * Section 5 — Recorded BCBA ID-field existence from 10/28; left identity mapping pending production confirmation.
+               * Section 10 — Recorded the requested fourth Contact workflow and exclusion of CR ID writeback fields from triggers. Source: 10/28. No implementation asserted.
+
+
+
+
+10/28 — Danny’s Feedback
+
+
+Design: looks right. Using the CR ID for ongoing updates also solves the backfill gap (the 74 cases that already have a CR Client ID will sync without the box). A few notes:
+Staffing changes: workflows can’t trigger on association labels, but they can on the name fields that update with them (supervising_bcba_name, ia_bcba_name, reassessment_bcba_name, current_primary_bt, current_primary_bt_2). We use those as triggers in production today.
+Add a 4th ongoing workflow for Contacts (guardian name/email, BCBA personal email).
+Keep the CR ID fields you write back out of the triggers too.
+BCBAs now have employee_id “Employee ID (from CR)” and external_system_id “External System ID”, same names as on BTs, on a “CentralReach IDs” card at the top of 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+11/01 UPDATE TO THE CURRENT VERSION OF THE INTEGRATION
+
+Hybrid Change Detection — MVP
+One Azure comparison process, two ways to start it. Agreed design direction for Cases, BCBAs, and BT/RBTs; implementation and coverage remain to be tested.
+
+
++-----------------------------------------------+       +-----------------------------------------------+
+|                   FAST PATH                   |       |                  BACKUP PATH                  |
+| Supported HubSpot workflow change signals     |       | Scheduled polling of linked records           |
+| ID-only webhook                               |       | CentralReach ID exists                        |
+|                                               |       | Any stage; original checkbox not required     |
++-----------------------------------------------+       +-----------------------------------------------+
+                        |                                                       |
+                        +---------------------------+---------------------------+
+                                                    |
+                                                    v
+                        +-------------------------------------------------------+
+                        |                 SHARED AZURE PROCESS                  |
+                        | Fetch current mapped data                             |
+                        | Read tested Case sync properties                      |
+                        | + required relationship IDs and labels                |
+                        +-------------------------------------------------------+
+                                                    |
+                                                    v
+                        +-------------------------------------------------------+
+                        | Compare complete mapped state                         |
+                        | with last successfully synced state                   |
+                        | Include blanks, metadata, statuses and relationships  |
+                        +-------------------------------------------------------+
+                                                    |
+                                +-------------------+-------------------+
+                                |                                       |
+                            [Changed]                               [Unchanged]
+                                |                                       |
+                                v                                       v
+                        +-------------------------------+       +--------------------------------+
+                        | Update CentralReach           |       | Skip unnecessary               |
+                        | Save synced state only after  |       | CentralReach writes            |
+                        | required updates succeed      |       +--------------------------------+
+                        +-------------------------------+      
+                                |
+                                v
+                        +-------------------------------+       
+                        | Sanitized outcome log         |       
+                        | Azure diagnostics; optional   |       
+                        | Case History Log              |       
+                        +-------------------------------+       
+
+
+
+
+Simple explanation
+               * Webhooks provide speed. One ongoing-update workflow per entity sends record ID and object type when supported source properties change. Keep the three initial enrollment workflows separate.
+               * Polling provides backup coverage. Recheck linked records and dependencies without stage or original-checkbox restrictions. Test coverage before enabling or reducing polling frequency.
+               * Azure owns the complete comparison. Centralize mapped values, metadata, labels, explicit blanks, and required relationships in the mapping/comparison configuration. Workflow signals wake that process; they do not duplicate the entire comparison.
+               * Use workflow triggers, not segment membership, for repeated change signals. A record can remain in a segment through multiple edits without another entry event.
+
+
+Latest decisions and boundaries
+               * Sandbox first. Create three ongoing-update workflows as inactive drafts, then test. No production rollout is authorized.
+               * User-provided receiver: https://centralreachserverless-hffge8hxdxh6apd9.eastus2-01.azurewebsites.net/api/hubspot-webhook. Verify sandbox routing and signing configuration before testing; never paste secrets into chat.
+               * Eligibility: CentralReach ID is known; no pipeline, stage, active-status, or original-gate restriction. ID availability is not proof of complete prior sync.
+               * Contact-derived data: intended end state is Guardian and BCBA personal-contact values exposed through Case Property sync fields. Their existence, source associations, and event behavior still need verification. Read them only; do not write synced destinations. Retain direct related-record retrieval where those fields do not supply the required data.
+               * Staffing: compare record IDs and association role labels, not just names or emails. Test association removals, replacements, and relabeling separately.
+               * Audit: production Case History Log exists and can associate to all three entities. Reuse it for meaningful updates/failures only after verifying its sandbox equivalent and category choices. Do not use it as a detector or store raw patient/staff values in notes.
+
+
+Minimum changes and tests before production
+Extend existing hashes/comparisons to cover the complete mapped state; address poller stage restrictions, employee timestamp shortcuts, skipped blank metadata, and rapid-notification loss. Distinguish an intentional blank from a failed or unauthorized read. A Sensitive Data request without required scope can return 403; never convert that failure into destination clears. Test repeated edits, clears, inactive transitions, calculated and sync-property updates, related Contact edits, staffing changes, duplicate/reordered notices, concurrent webhook/poller runs, and partial failures. Save the successful comparison baseline only after the required writes succeed, preserving retries without duplicate record creation.
+
+
+Benefit: faster updates with one maintainable comparison process.
+
+
+Trade-off: comparison requires HubSpot reads; fewer CentralReach writes does not automatically mean fewer HubSpot API calls.
+
+
+Only documentation has been updated. These workflows and Azure changes have not been created or deployed by Breeze.
+ 11/01 UPDATE TO THE CURRENT VERSION OF THE INTEGRATION
+  
+
+https://github.com/Optidge/azure_central_reach
+
+
+
+
+https://portal.azure.com/
+
+
+
+
+Optidge for United Care ABA   |   Page 
+[a]10/27 - REVIEW ZEKE
+[b]@danny@optidge.com  Confirmed no endpoint to update active case count. We would need to create a meta field for this.
+_Assigned to danny@optidge.com_
