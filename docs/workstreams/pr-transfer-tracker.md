@@ -131,6 +131,8 @@ Label numbers in `src/constants/centralReach.mjs` changed on the archive branch.
 - CO_CLIENT `1132648`
 - Old BCBA `1052629` is now BCBA_LBA_NY on the archive
 
+Copied to `sandbox-integration` on 2026-11-09: those three ids plus `BCBA_LBA_NY`. They were verified against a live catalog pull, `all_labels_v4.json`. The other new constants from pull request 2 were not copied.
+
 ### 4. Guardian name and email
 
 Take this from commit `c0e3390`, not from the pull request 2 tip.

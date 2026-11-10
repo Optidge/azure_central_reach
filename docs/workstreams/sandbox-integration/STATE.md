@@ -136,7 +136,11 @@ Closed earlier, and not repeated below. Items 1, 3, 4, 7, 8, 11, 13, and 15 are 
 
 The Staffed label, and the payor rows in item 8. Pessy is confirming that the Active and Staffed labels exist. They are not in `all_labels_v3.json`. Active Client `1125427` and In-Active Client `1121488` already match catalog names.
 
-The three stale ids in `src/constants/centralReach.mjs`. CO Client is `1082500` in code and `1132648` in the catalog. NY Employee is `1107685` in code and `1132655` in the catalog. `BCBA` is `1052629` in code, which the catalog names BCBA LBA NY. The header BCBA id in the catalog is `1130668`. Neither tree proves the code numbers.
+The three stale ids in `src/constants/centralReach.mjs`. Closed 2026-11-09. A live `GET /contacts/labels` (`central_reach_test_integration/output_files/all_labels_v4.json`, 95 labels, identical to v3) confirmed CO Client `1132648`, NY Employee `1132655`, and header BCBA `1130668`. `1082500` and `1107685` are not in the catalog. The constants now use those ids, and `BCBA_LBA_NY` keeps `1052629`. This was copied as named behavior per `pr-transfer-tracker.md` item 3, not merged from pull request 2.
+
+The same catalog has none of the six `staffing_status` labels. It has no state-specific Aetna, Cigna, or Carelon credentialing label. It has no Aetna NJ, Cigna NJ, or Aetna CO funding label. Anthem BCBS `1052620`, UHC `1052534`, School `1052688`, and Clinic `1052655` exist. On 2026-11-09 Zeke added `UHC` and `Anthem BCBS` (value = label) to the production Case `insurance_primary`, which now has 15 options. The code has no funding-label mapping yet; `insurance_primary` only feeds the Current Insurance metadata field.
+
+Production Case `updated_by_integration` (portal `50317927`) is a checkbox with options `Yes` and `No`. `clientSyncWorkflow.mjs` writes `true`. Production BT/RBT and BCBA have a boolean `updated_by_integration`, so `true` is valid there. Zeke 2026-11-09: leave the property as is for now. Resolve this before the first production Case write.
 
 ### Sandbox integration test
 
@@ -186,7 +190,9 @@ The tree still matches the write-up on the points that decide those items. No fi
 
 Sara. BT/RBT option labels "Yes - Generic" and "No- Made Inactive."
 
-United Care. The Staffed label and the payor names in item 8. The three stale ids in `src/constants/centralReach.mjs`.
+United Care. The six staffing labels, and the payor names in item 8. The three stale ids were closed 2026-11-09 (see Still with United Care).
+
+Zeke, production. The Case `updated_by_integration` checkbox versus the code writing `true`.
 
 Sandbox writes, not run. The date string Central Reach accepts. Whether a blank core value clears the stored field. Whether metadata DELETE clears work address `133819` or a BCBA Medicaid id. Whether writeback leaves `hs_lastmodifieddate` later than `integration_last_write`.
 
