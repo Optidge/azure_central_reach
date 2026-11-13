@@ -11,9 +11,9 @@ Done when.
 
 Current status. Env restore worked. `.env` and `local.settings.json` are local, gitignored, and pointed at sandbox portal `50850427`. The three `AzureWebJobs.*.Disabled` flags are `true`. The notes merge is on `main` at `028d087`. The sandbox integration workstream is branch `sandbox-integration`. PR 2 and PR 3 stay open. No deploy.
 
-Last step. Pointed the next thread at `docs/workstreams/sandbox-integration/STATE.md`.
+Last step. 2026-11-09 session-start via `GIT-SESSION-PLAYBOOK.md`. On `sandbox-integration`, ff-pull clean vs `origin/sandbox-integration` at `fdd6676` (*Clarify that gh is optional in the git session playbook.*). Local dirty: this STATE.md only. Untracked `.claude/` OK. `gh` not required. Hard stops hold: never merge PR #2/#3; portal `50850427`; no secrets; no deploy unless asked. Carrier is PR #6.
 
-Next action. Continue sandbox work only on `sandbox-integration`. Agent git commands: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. The start prompt is `docs/workstreams/sandbox-integration/START.md`. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
+Next action. Continue sandbox work only on `sandbox-integration` / PR #6. Agent git commands: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. Before every commit, run the playbook pre-commit block. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
 
 ## Handoff
 
