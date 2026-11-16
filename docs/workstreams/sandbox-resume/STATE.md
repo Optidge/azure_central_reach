@@ -8,6 +8,6 @@ Current status. `main` is merge commit `f665fd5`. Pull request 4 is merged. Pull
 
 Last step. The three `hs api` reads on account `UnitedCare_Test_Integration` returned `type` `datetime` and `fieldType` `date`.
 
-Next action. Create that report in portal `50850427` only. Do not create it on portal `246184070`.
+Next action. Create that report in the portal `50850427` UI. The CLI key on account `UnitedCare_Test_Integration` cannot save a report. Do not create it on portal `246184070`.
 
 The test record is `docs/workstreams/integration-state-chart/STATE.md`. The review that led to the merge is `docs/workstreams/pr-transfer-tracker.md`. The session notes are `docs/session-logs/`.
