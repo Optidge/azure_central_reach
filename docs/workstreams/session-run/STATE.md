@@ -9,11 +9,11 @@ Done when.
 - `docs/workstreams/session-run/PR-AND-BRANCH.md` names which PRs stay open, which branch to create for sync code, and what `main` is for.
 - This file stays current after each meaningful step.
 
-Current status. Env restore worked. `.env` and `local.settings.json` are local, gitignored, and pointed at sandbox portal `50850427`. The three `AzureWebJobs.*.Disabled` flags are `true`. This notes branch is the merge. PR 2 and PR 3 stay open. No deploy. No sync code in this pass.
+Current status. Env restore worked. `.env` and `local.settings.json` are local, gitignored, and pointed at sandbox portal id `52311591`. The three `AzureWebJobs.*.Disabled` flags are `true`. The notes merge is on `main` at `028d087`. PR 2 and PR 3 stay open. No deploy. The git session playbook now asks which worktree or branch to use before checkout.
 
-Last step. A review chat confirmed the env files must stay off git. The only remote work to merge is `docs/session-run-notes`.
+Last step. 2026-11-16 updated `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md` on local `sandbox-integration`. Session start confirms the worktree or branch, then fast-forwards that branch and continues from its latest commit. Sandbox portal id is `52311591`. Hard stops hold: never merge PR #2/#3, no secrets, no deploy unless asked.
 
-Next action. After this branch is on `main`, create the 24-hour report on portal `50850427` for deals, BT/RBT `2-55656309`, and BCBA `2-55656302`, filtered on `integration_last_write` after 1 day ago. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070`.
+Next action. Ask Zeke which worktree or branch to use. Do not assume `sandbox-integration`. After he names one, fast-forward it and continue from that branch's latest commit and its `STATE.md`. Agent git commands: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. Before every commit, run the playbook pre-commit block. Do not push `.env` or `local.settings.json`. Do not merge PR 2 or PR 3. Do not recreate `recovery/reviewed-field-alignment`. Do not use portal `246184070` for sandbox work.
 
 ## Handoff
 
@@ -24,12 +24,12 @@ Read this file before the next edit. The env files already work for local `func 
 - Fresh repo. `/Users/zeke/Desktop/projects/client_projects/Optidge/azure_central_reach`
 - Backup, reference only. `/Users/zeke/Desktop/projects/client_projects/Optidge/azure_central_reach_backup_2026-10-30`
 - Tracker. `docs/workstreams/pr-transfer-tracker.md`
-- Sandbox portal. `50850427` with HubSpot CLI account `UnitedCare_Test_Integration`
+- Sandbox portal id. `52311591` with HubSpot CLI account `UnitedCare_Test_Integration`
 - Do not use portal. `246184070`
 - PR 2 cannot be merged for this work. Hard stop.
 - Azure Functions reads `local.settings.json`. Root `.env` alone does not feed `func start`.
 
 ## Open
 
-- Wait for Zeke on which branch to create next, if any.
-- Sandbox 24-hour report on portal `50850427` still not created (separate from branch work).
+- Sandbox integration continues on branch `sandbox-integration`. Record is `docs/workstreams/sandbox-integration/STATE.md`.
+- Sandbox portal id for new work is `52311591`. The 24-hour report was never created on the previous portal `50850427`. Do not create it on `246184070`.
