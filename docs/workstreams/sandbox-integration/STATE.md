@@ -140,7 +140,7 @@ The three stale ids in `src/constants/centralReach.mjs`. Closed 2026-11-09. A li
 
 The same catalog has none of the six `staffing_status` labels. It has no state-specific Aetna, Cigna, or Carelon credentialing label. It has no Aetna NJ, Cigna NJ, or Aetna CO funding label. Anthem BCBS `1052620`, UHC `1052534`, School `1052688`, and Clinic `1052655` exist. On 2026-11-09 Zeke added `UHC` and `Anthem BCBS` (value = label) to the production Case `insurance_primary`, which now has 15 options. The code has no funding-label mapping yet; `insurance_primary` only feeds the Current Insurance metadata field.
 
-Production Case `updated_by_integration` (portal `50317927`) is a checkbox with options `Yes` and `No`. `clientSyncWorkflow.mjs` writes `true`. Production BT/RBT and BCBA have a boolean `updated_by_integration`, so `true` is valid there. Zeke 2026-11-09: leave the property as is for now. Resolve this before the first production Case write.
+Production Case `updated_by_integration` (portal `50317927`) is a checkbox with options `Yes` and `No`. `clientSyncWorkflow.mjs` writes `true`. Production BT/RBT and BCBA have a boolean `updated_by_integration`, so `true` is valid there. Zeke 2026-11-09: leave the property as is for now. Zeke 2026-11-13: still leave it; the Case write will be tested to see whether HubSpot accepts `true`. Do not change the property or the code before that test.
 
 ### Sandbox integration test
 
@@ -164,11 +164,11 @@ Reviewed 2026-10-30 against the Google Doc, Azure, this tree, and HubSpot portal
 
 Published commit. Still open. Active deployment `3abcd7d8-78ed-49a7-b095-477091840f30` finished 2026-10-29 05:51:26 UTC with an empty message, a null author, deployer `core_tools`, and no git SHA. `037ea72` is on `align-sandbox-hubspot-field-sync` and is not recorded on that deployment. Azure does not prove the package bytes differ from `037ea72`. The allowlisted flags still match. `ALLOW_EMPLOYEE_CREATE` is `true`, `PUT_ONLY_MODE` is `false`, and `HUBSPOT_PORTAL_ID` is `50850427`. `037ea72` is not an ancestor of this branch `ee8b279`.
 
-BT Active Staffed. Still open. Section 6 asks what that row is on the Central Reach side. Section 10 still says confirm HubSpot owns the count, create a metadata field, and test one employee update. The unresolved comment from 2026-10-28 says there is no endpoint and a meta field would be needed. `active_cases_count` does not appear under `src`. There is no case-load route in `centralReachClient.mjs`. This is separate from the missing Staffed label. It does not block the four sandbox checks.
+BT Active Staffed. Still open. Section 6 asks what that row is on the Central Reach side. Section 10 still says confirm HubSpot owns the count, create a metadata field, and test one employee update. The unresolved comment from 2026-10-28 says there is no endpoint and a meta field would be needed. `active_cases_count` does not appear under `src`. There is no case-load route in `centralReachClient.mjs`. This is separate from the missing Staffed label. It does not block the four sandbox checks. Answered 2026-11-13: Zeke created an Active Case Load employee metadata field in Central Reach. The integration will fill it from BT/RBT `active_cases_count`. It only displays the number and does not change Central Reach's native case load. Code to-do: get the field's metadata id (discovery scripts), add it to `CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS`, and map `active_cases_count` in the BT/RBT sync.
 
 SUB BCBA. Still open. Section 4, association type 234. The unresolved comment is "10/27 - REVIEW ZEKE". No file under `src` contains `234` or `236`. Deal sync keeps association type ids outside the exclude set, and those rows change the client hash only. Nothing writes a substitute to Central Reach.
 
-Five Case integration properties. The empty Case copies stay open. The doc asks which of `updated_by_integration`, `integration_last_write`, `employee_id`, `supervising_bcba`, and `create_record` are still needed, and it says all five are empty. This session cannot read those properties on portal `50850427`. On this tree the names are not all unused. `updated_by_integration` and `integration_last_write` are read and written on BT/RBT, BCBA, and Deal. `employee_id` is the Central Reach contact id on the staff object. `supervising_bcba` is read from the Deal and written to client metadata `131308`. `create_record` has no reader or writer in `src`.
+Five Case integration properties. The empty Case copies stay open. The doc asks which of `updated_by_integration`, `integration_last_write`, `employee_id`, `supervising_bcba`, and `create_record` are still needed, and it says all five are empty. This session cannot read those properties on portal `50850427`. On this tree the names are not all unused. `updated_by_integration` and `integration_last_write` are read and written on BT/RBT, BCBA, and Deal. `employee_id` is the Central Reach contact id on the staff object. `supervising_bcba` is read from the Deal and written to client metadata `131308`. `create_record` has no reader or writer in `src`. Answered 2026-11-13: Zeke told Danny to keep all five. Code to-do: per guide section 3, Central Reach Supervising BCBA should come from Ongoing Central Reach Provider Supplier, not the Case `supervising_bcba` that `buildClientMetadata.mjs` reads today. Find the provider-supplier internal name before switching.
 
 Production private-app scopes. Answered on the doc. Danny's 10/28 note says the Central Reach Integration app already has every scope on the section 10 list. This session did not read that app. The token here is portal `246184070`. That token includes custom-object and tickets scopes. Appointments and users calls returned 403.
 
@@ -192,11 +192,13 @@ Sara. BT/RBT option labels "Yes - Generic" and "No- Made Inactive."
 
 United Care. The six staffing labels, and the payor names in item 8. The three stale ids were closed 2026-11-09 (see Still with United Care).
 
-Zeke, production. The Case `updated_by_integration` checkbox versus the code writing `true`.
+Zeke, production. The Case `updated_by_integration` checkbox versus the code writing `true`. Left as is 2026-11-13; to be tested.
+
+Code to-dos from 2026-11-13. Map `active_cases_count` to the new Central Reach Active Case Load field (id still needed). Switch Supervising BCBA metadata `131308` to Ongoing Central Reach Provider Supplier.
 
 Sandbox writes, not run. The date string Central Reach accepts. Whether a blank core value clears the stored field. Whether metadata DELETE clears work address `133819` or a BCBA Medicaid id. Whether writeback leaves `hs_lastmodifieddate` later than `integration_last_write`.
 
-Zeke. The published commit. BT Active Staffed. SUB BCBA. Which of the five Case integration properties are still needed on portal `50850427`. Production private-app scopes, because Danny's note was not re-read against that app. BCBA external system id, HubSpot record id in this tree versus the Workday note. The 10/29 production checklist. Rapid-notification loss, which a sandbox can show and this read cannot. Whether the BT/RBT fetch keeps `postal_code`.
+Zeke. The published commit. SUB BCBA. Production private-app scopes, because Danny's note was not re-read against that app. BCBA external system id, HubSpot record id in this tree versus the Workday note. The 10/29 production checklist. Rapid-notification loss, which a sandbox can show and this read cannot. Whether the BT/RBT fetch keeps `postal_code`.
 
 ## Open
 
