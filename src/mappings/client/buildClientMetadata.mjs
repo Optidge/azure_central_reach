@@ -2,6 +2,7 @@ import {
   CENTRAL_REACH_CLIENT_LABELS,
   CENTRAL_REACH_CLIENT_METADATA_FIELDS
 } from "../../constants/centralReach.mjs";
+import { hubspotPortalId } from "../../lib/config.mjs";
 
 function toTrimmedOrNull(value) {
   if (value === undefined || value === null) {
@@ -142,7 +143,7 @@ function buildHubspotDealUrl(hsObjectId) {
   if (!dealId) {
     return null;
   }
-  const portalId = process.env.HUBSPOT_PORTAL_ID_TEST || "50850427";
+  const portalId = process.env.HUBSPOT_PORTAL_ID_TEST || hubspotPortalId();
   const dealObjectTypeId = process.env.HUBSPOT_DEAL_OBJECT_TYPE_ID || "0-3";
   return `https://app.hubspot.com/contacts/${portalId}/record/${dealObjectTypeId}/${dealId}`;
 }

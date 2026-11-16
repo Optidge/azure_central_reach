@@ -39,7 +39,8 @@ function buildDeps(overrides = {}) {
         hs_object_id: "2",
         hs_lastmodifieddate: "2026-05-06T10:00:00.000Z",
         integration_last_write: "2026-05-06T09:00:00.000Z",
-        bcba_name: "Pat Morgan"
+        bcba_name: "Pat Morgan",
+        entered_in_centralreach: "Yes"
       }
     }),
     buildEmployeePayload: () => ({
@@ -120,7 +121,8 @@ test("hash match does not noop when employee_id is missing", async () => {
         integration_last_write: "2026-05-06T09:00:00.000Z",
         bt_name: "Alex Rivera",
         last_sync_hash: "hash-2",
-        employee_id: ""
+        employee_id: "",
+        entered_in_centralreach: "Yes"
       }
     }),
     createOrUpdateEmployee: async () => {
@@ -142,7 +144,8 @@ test("workflow returns blocked when creation is disabled", async () => {
       properties: {
         hs_object_id: "1",
         hs_lastmodifieddate: "2026-05-06T10:00:00.000Z",
-        bt_name: "Alex Rivera"
+        bt_name: "Alex Rivera",
+        entered_in_centralreach: "Yes"
       }
     }),
     createOrUpdateEmployee: async () => ({ operation: "blocked", reason: "disabled" })
@@ -296,4 +299,68 @@ test("workflow writes fail state and rethrows errors", async () => {
     /PayloadValidationError/
   );
   assert.equal(calls.stateWrites[0].type, "fail");
+});
+
+function unlinkedBtRbt(extra = {}) {
+  return async () => ({
+    id: "1",
+    properties: {
+      hs_object_id: "1",
+      hs_lastmodifieddate: "2026-05-06T10:00:00.000Z",
+      bt_name: "Alex Rivera",
+      employee_id: "",
+      ...extra
+    }
+  });
+}
+
+for (const entry of ["", "Yes - Generic", "No- Made Inactive"]) {
+  test(`gate skips an unlinked BT/RBT when entered_in_centralreach is "${entry}"`, async () => {
+    let upsertCalled = false;
+    const { deps, calls } = buildDeps({
+      getBtRbtRecordById: unlinkedBtRbt({ entered_in_centralreach: entry }),
+      createOrUpdateEmployee: async () => {
+        upsertCalled = true;
+        return { operation: "create", crContactId: "300" };
+      }
+    });
+    const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+    assert.equal(result.status, "skipped");
+    assert.equal(result.reason, "entry_not_yes");
+    assert.equal(upsertCalled, false);
+    assert.equal(calls.writebacks.length, 0);
+  });
+}
+
+test("gate keeps syncing a linked BT/RBT in No- Made Inactive", async () => {
+  let upsertCalled = false;
+  const { deps } = buildDeps({
+    getBtRbtRecordById: unlinkedBtRbt({
+      employee_id: "100",
+      entered_in_centralreach: "No- Made Inactive"
+    }),
+    createOrUpdateEmployee: async () => {
+      upsertCalled = true;
+      return { operation: "update", crContactId: "100" };
+    }
+  });
+  const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+  assert.equal(upsertCalled, true);
+  assert.equal(result.status, "success");
+});
+
+test("gate skips test_record = true unless test records are included", async () => {
+  const { deps } = buildDeps({
+    getBtRbtRecordById: unlinkedBtRbt({ entered_in_centralreach: "Yes", test_record: "true" })
+  });
+  const skipped = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+  assert.equal(skipped.status, "skipped");
+  assert.equal(skipped.reason, "test_record");
+
+  const baseConfig = deps.getConfig();
+  const included = await runEmployeeSyncWorkflow(
+    { recordId: "1", employeeType: "bt_rbt" },
+    { ...deps, getConfig: () => ({ ...baseConfig, sync: { includeTestRecords: true } }) }
+  );
+  assert.notEqual(included.status, "skipped");
 });

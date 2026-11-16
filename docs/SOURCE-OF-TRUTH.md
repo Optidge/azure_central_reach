@@ -19,7 +19,7 @@ These files run the live sandbox-integration chat start. They stay current. Use 
 
 New-chat opener:
 
-> New chat: run `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md` session-start block first. Before every commit: run its pre-commit block. `sandbox-integration` / PR #6; never merge PR #2/#3; no secrets; no deploy unless I ask; portal `50850427`; `gh` optional.
+> New chat: run `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md` session-start block first. Before every commit: run its pre-commit block. `sandbox-integration` / PR #6; never merge PR #2/#3; no secrets; no deploy unless I ask; sandbox portal `52311591` (`50850427` is the retired sandbox); `gh` optional.
 
 | Path | Role |
 | --- | --- |

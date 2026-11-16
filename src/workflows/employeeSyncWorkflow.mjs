@@ -32,6 +32,7 @@ import { buildEmployeePayload } from "../mappings/employees/buildEmployeePayload
 import { validateEmployeePayload } from "../mappings/employees/validateEmployeePayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+import { employeeSyncEligibility } from "../lib/syncEligibility.mjs";
 
 const EMPLOYEE_STATE_PK = "sync:employee";
 
@@ -45,6 +46,8 @@ const BT_RBT_PROPERTIES = [
   "last_sync_at",
   "last_sync_status",
   "last_sync_error",
+  "entered_in_centralreach",
+  "test_record",
   "bt_name",
   "date_of_birth",
   "gender",
@@ -74,6 +77,8 @@ const BCBA_PROPERTIES = [
   "last_sync_at",
   "last_sync_status",
   "last_sync_error",
+  "entered_in_centralreach",
+  "test_record",
   "bcba_name",
   "date_of_birth",
   "email",
@@ -293,6 +298,36 @@ export async function runEmployeeSyncWorkflow(
     hubspotRecord = (await fetchRecord()) || hubspotRecord;
     const hubspotProps = hubspotRecord?.properties || {};
 
+    const prior = await readPriorSyncState(readState, EMPLOYEE_STATE_PK, stateId);
+    const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
+    const existingContactId =
+      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
+
+    const eligibility = employeeSyncEligibility({
+      properties: hubspotProps,
+      linked: Boolean(existingContactId),
+      includeTestRecords: Boolean(config.sync?.includeTestRecords)
+    });
+    if (!eligibility.eligible) {
+      // No Central Reach call and no HubSpot writeback for a skipped employee.
+      logger("info", "Employee sync skipped by eligibility gate.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        source: source || null,
+        reason: eligibility.reason,
+        linked: Boolean(existingContactId),
+        invocationId: context?.invocationId || null
+      });
+      return {
+        ok: true,
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        status: "skipped",
+        reason: eligibility.reason
+      };
+    }
+
     const mapped = mapPayload({
       record: hubspotRecord,
       employeeType: normalizedEmployeeType,
@@ -313,10 +348,6 @@ export async function runEmployeeSyncWorkflow(
       throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
     }
 
-    const prior = await readPriorSyncState(readState, EMPLOYEE_STATE_PK, stateId);
-    const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
-    const existingContactId =
-      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
     let outboundPayload = mapped.employeePayload;
 
     if (existingContactId) {

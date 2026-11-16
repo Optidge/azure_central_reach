@@ -15,8 +15,6 @@ const REQUIRED_ENV_NAMES = [
   "CR_BASE_URL",
   "CR_TOKEN_URL",
   "HUBSPOT_BASE_URL",
-  "HS_DEAL_PIPELINE_ID",
-  "HS_STAGE_ALLOWLIST_JSON",
   "HUBSPOT_CR_CONTACT_ID_PROPERTY",
   "MAX_DEALS_PER_RUN",
   "MAX_BT_RBT_PER_RUN",
@@ -33,20 +31,12 @@ const REQUIRED_ENV_NAMES = [
   "STATE_TTL_ATTR",
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
-  "EMPLOYEE_SYNC_QUEUE_NAME",
-  "HS_BT_RBT_OBJECT_TYPE_ID",
-  "HS_BT_RBT_PIPELINE_ID",
-  "HS_BT_RBT_STAGE_ALLOWLIST_JSON",
-  "HS_BCBA_OBJECT_TYPE_ID",
-  "HS_BCBA_PIPELINE_ID",
-  "HS_BCBA_STAGE_ALLOWLIST_JSON"
+  "EMPLOYEE_SYNC_QUEUE_NAME"
 ];
 
 const REQUIRED_INTAKE_ENV_NAMES = [
   "HUBSPOT_PRIVATE_APP_TOKEN",
   "HUBSPOT_BASE_URL",
-  "HS_DEAL_PIPELINE_ID",
-  "HS_STAGE_ALLOWLIST_JSON",
   "MAX_BT_RBT_PER_RUN",
   "MAX_BCBA_PER_RUN",
   "MAX_DEALS_PER_RUN",
@@ -58,13 +48,7 @@ const REQUIRED_INTAKE_ENV_NAMES = [
   "COSMOS_CONTAINER_ID",
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
-  "EMPLOYEE_SYNC_QUEUE_NAME",
-  "HS_BT_RBT_OBJECT_TYPE_ID",
-  "HS_BT_RBT_PIPELINE_ID",
-  "HS_BT_RBT_STAGE_ALLOWLIST_JSON",
-  "HS_BCBA_OBJECT_TYPE_ID",
-  "HS_BCBA_PIPELINE_ID",
-  "HS_BCBA_STAGE_ALLOWLIST_JSON"
+  "EMPLOYEE_SYNC_QUEUE_NAME"
 ];
 
 export function getRequiredEnv(name) {
@@ -83,7 +67,59 @@ export function getOptionalEnv(name, defaultValue = "") {
   return value.trim();
 }
 
-export const SANDBOX_HUBSPOT_PORTAL_ID = "50850427";
+/**
+ * HubSpot portal values. One block is active at a time.
+ *
+ * ACTIVE: SANDBOX 52311591 (HubSpot CLI account central-reach-integration-sandbox).
+ * After sandbox testing, comment out the SANDBOX block and uncomment the PRODUCTION block.
+ * An app setting with the same name (HUBSPOT_PORTAL_ID, HS_BCBA_OBJECT_TYPE_ID,
+ * HS_BT_RBT_OBJECT_TYPE_ID) wins over the value here, so switch local.settings.json and the
+ * Azure app settings at the same time.
+ *
+ * Source: integration guide [SCURRENT] crosswalk, sandbox values read 2026-11-16.
+ * No pipeline id or stage allowlist is needed. The guide syncs every pipeline and stage and
+ * only skips CASE_EXCLUDED_STAGE_IDS (src/constants/hubspot.mjs), which match in both portals.
+ */
+export const HUBSPOT_PORTAL = Object.freeze({
+  // --- SANDBOX 52311591 (active) ---
+  portalId: "52311591",
+  bcbaObjectTypeId: "2-72890322",
+  btRbtObjectTypeId: "2-72890325",
+  // Case -> BCBA / BT/RBT association types that must not sync: unlabeled BCBA 164,
+  // unlabeled BT/RBT 187, Potential IA 251, Potential Supervising 249, Potential BT 1 242,
+  // Potential BT 2 218, Previous IA 235.
+  excludedStaffingAssociationTypeIds: Object.freeze([164, 187, 251, 249, 242, 218, 235])
+
+  // --- PRODUCTION 50317927 (swap in after sandbox testing) ---
+  // portalId: "50317927",
+  // bcbaObjectTypeId: "2-48354212",
+  // btRbtObjectTypeId: "2-48354559",
+  // // Unlabeled BCBA 20, unlabeled BT/RBT 64, Potential IA 153, Potential Supervising 80,
+  // // Potential BT 1 74, Potential BT 2 164, Previous IA 286.
+  // excludedStaffingAssociationTypeIds: Object.freeze([20, 64, 153, 80, 74, 164, 286])
+});
+
+// Always the sandbox portal, whichever block above is active. A missing ALLOW_EMPLOYEE_CREATE /
+// PUT_ONLY_MODE allows employee create only on this portal.
+export const SANDBOX_HUBSPOT_PORTAL_ID = "52311591";
+
+export function hubspotPortalId() {
+  return getOptionalEnv("HUBSPOT_PORTAL_ID", HUBSPOT_PORTAL.portalId);
+}
+
+export function hubspotBcbaObjectTypeId() {
+  return getOptionalEnv("HS_BCBA_OBJECT_TYPE_ID", HUBSPOT_PORTAL.bcbaObjectTypeId);
+}
+
+export function hubspotBtRbtObjectTypeId() {
+  return getOptionalEnv("HS_BT_RBT_OBJECT_TYPE_ID", HUBSPOT_PORTAL.btRbtObjectTypeId);
+}
+
+// Guide: skip test_record = true in normal processing. Set INCLUDE_TEST_RECORDS=true only for a
+// deliberate end-to-end test run.
+export function includeTestRecords() {
+  return getOptionalEnv("INCLUDE_TEST_RECORDS", "false").toLowerCase() === "true";
+}
 
 export function employeeCreateFeatures({
   portalId = "",
@@ -163,23 +199,6 @@ function validateEnvNames(requiredNames) {
   };
 }
 
-function parseRequiredJsonArray(name) {
-  const rawValue = getRequiredEnv(name);
-  let parsed;
-
-  try {
-    parsed = JSON.parse(rawValue);
-  } catch {
-    throw new Error(`Configuration validation failed. ${name} must be valid JSON array`);
-  }
-
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error(`Configuration validation failed. ${name} must be a non-empty JSON array`);
-  }
-
-  return parsed.map((value) => String(value));
-}
-
 export function validateIntakePollerConfig() {
   return validateEnvNames(REQUIRED_INTAKE_ENV_NAMES);
 }
@@ -203,14 +222,8 @@ export function getIntakePollerConfig() {
     hubspot: {
       privateAppToken: getRequiredEnv("HUBSPOT_PRIVATE_APP_TOKEN"),
       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
-      dealPipelineId: getRequiredEnv("HS_DEAL_PIPELINE_ID"),
-      stageAllowlist: parseRequiredJsonArray("HS_STAGE_ALLOWLIST_JSON"),
-      btRbtObjectTypeId: getRequiredEnv("HS_BT_RBT_OBJECT_TYPE_ID"),
-      btRbtPipelineId: getRequiredEnv("HS_BT_RBT_PIPELINE_ID"),
-      btRbtStageAllowlist: parseRequiredJsonArray("HS_BT_RBT_STAGE_ALLOWLIST_JSON"),
-      bcbaObjectTypeId: getRequiredEnv("HS_BCBA_OBJECT_TYPE_ID"),
-      bcbaPipelineId: getRequiredEnv("HS_BCBA_PIPELINE_ID"),
-      bcbaStageAllowlist: parseRequiredJsonArray("HS_BCBA_STAGE_ALLOWLIST_JSON")
+      btRbtObjectTypeId: hubspotBtRbtObjectTypeId(),
+      bcbaObjectTypeId: hubspotBcbaObjectTypeId()
     },
     limits: {
       maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
@@ -267,17 +280,14 @@ export function getConfig() {
     hubspot: {
       privateAppToken: getRequiredEnv("HUBSPOT_PRIVATE_APP_TOKEN"),
       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
-      dealPipelineId: getRequiredEnv("HS_DEAL_PIPELINE_ID"),
-      stageAllowlistJson: getRequiredEnv("HS_STAGE_ALLOWLIST_JSON"),
       crContactIdProperty: getRequiredEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY"),
-      btRbtObjectTypeId: getRequiredEnv("HS_BT_RBT_OBJECT_TYPE_ID"),
-      btRbtPipelineId: getRequiredEnv("HS_BT_RBT_PIPELINE_ID"),
-      btRbtStageAllowlist: parseRequiredJsonArray("HS_BT_RBT_STAGE_ALLOWLIST_JSON"),
-      bcbaObjectTypeId: getRequiredEnv("HS_BCBA_OBJECT_TYPE_ID"),
-      bcbaPipelineId: getRequiredEnv("HS_BCBA_PIPELINE_ID"),
-      bcbaStageAllowlist: parseRequiredJsonArray("HS_BCBA_STAGE_ALLOWLIST_JSON"),
-      hubspotPortalId: getOptionalEnv("HUBSPOT_PORTAL_ID", ""),
+      btRbtObjectTypeId: hubspotBtRbtObjectTypeId(),
+      bcbaObjectTypeId: hubspotBcbaObjectTypeId(),
+      hubspotPortalId: hubspotPortalId(),
       employeeIdProperty: getOptionalEnv("HUBSPOT_EMPLOYEE_ID_PROPERTY", "employee_id")
+    },
+    sync: {
+      includeTestRecords: includeTestRecords()
     },
     limits: {
       maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
@@ -304,7 +314,7 @@ export function getConfig() {
       employeeSyncQueueName: getRequiredEnv("EMPLOYEE_SYNC_QUEUE_NAME")
     },
     features: employeeCreateFeatures({
-      portalId: getOptionalEnv("HUBSPOT_PORTAL_ID", ""),
+      portalId: hubspotPortalId(),
       allowEmployeeCreate: process.env.ALLOW_EMPLOYEE_CREATE,
       putOnlyMode: process.env.PUT_ONLY_MODE
     })

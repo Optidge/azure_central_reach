@@ -80,15 +80,14 @@ Implemented in `searchIntakeCompleteDeals` → `searchCustomObjectRecords` (`src
 
 | HubSpot property | Operator | Source | Purpose |
 | --- | --- | --- | --- |
-| `pipeline` | `EQ` | Env `HS_DEAL_PIPELINE_ID` | Limit to the case/deal pipeline |
-| `dealstage` | `IN` | Env `HS_STAGE_ALLOWLIST_JSON` (JSON array of stage **internal IDs**) | Stages that count as eligible (e.g. Intake Complete and any other configured stages) |
+| `dealstage` | `NOT_IN` | `CASE_EXCLUDED_STAGE_IDS` in `src/constants/hubspot.mjs` | Skip the four Cleanup stages (guide Requirement 2). Every other pipeline and stage is searched. |
 | `hs_lastmodifieddate` | `GTE` | Rolling window: `LOOKBACK_MINUTES` (default **15**) | Optional time window; if HubSpot rejects this filter, search retries **without** lookback |
 
 Search returns these deal properties only: `hs_object_id`, `hs_lastmodifieddate`, `integration_last_write`.
 
 Sort: `hs_lastmodifieddate` descending. Pagination capped by `MAX_DEALS_PER_RUN` and `MAX_SEARCH_REQUESTS_PER_SECTION` (config).
 
-> **Note:** The function name `searchIntakeCompleteDeals` describes the **business intent**. The code keys off **`dealstage` IDs** in `HS_STAGE_ALLOWLIST_JSON`, not a custom deal property whose label is “Intake Complete.” Map your HubSpot stage(s) to those IDs in Function App / `local.settings.json`.
+> **Note (2026-11-16):** The stage allowlist and pipeline filter were removed. The guide syncs every pipeline and stage. The sync workers apply the eligibility gate (`src/lib/syncEligibility.mjs`) on both the webhook and poller paths: skip `test_record` = true, skip the four Case Cleanup stages, create only when the entry property is Yes and the record is unlinked, and keep updating linked records whatever the entry value.
 
 ### Per-deal gates after search (`shouldSyncDeal`)
 
@@ -118,14 +117,14 @@ After a successful client sync, the workflow sets `integration_last_write` and `
 
 | Variable | Role |
 | --- | --- |
-| `HS_DEAL_PIPELINE_ID` | Deal pipeline for intake search |
-| `HS_STAGE_ALLOWLIST_JSON` | JSON array of eligible `dealstage` internal IDs |
+| `HUBSPOT_PORTAL_ID`, `HS_BCBA_OBJECT_TYPE_ID`, `HS_BT_RBT_OBJECT_TYPE_ID` | Optional. Override `HUBSPOT_PORTAL` in `src/lib/config.mjs` (sandbox 52311591 active, production 50317927 commented). |
+| `INCLUDE_TEST_RECORDS` | Optional, default `false`. `true` only for a deliberate end-to-end test run. |
 | `LOOKBACK_MINUTES` | Modified-since window for search (optional) |
 | `MAX_DEALS_PER_RUN` | Max deals returned per poller run |
 | `CLIENT_SYNC_QUEUE_NAME` | Service Bus queue for client sync messages |
 | `DEDUPE_TTL_SECONDS` / `LEASE_TTL_SECONDS` | Cosmos dedupe and poller lease TTL |
 
-*(The same poller also searches BT/RBT and BCBA custom objects by `hs_pipeline` / `hs_pipeline_stage` allowlists; that path is separate from deal intake complete.)*
+*(The same poller also searches BT/RBT and BCBA custom objects by modified time only, with no pipeline or stage filter.)*
 
 ---
 

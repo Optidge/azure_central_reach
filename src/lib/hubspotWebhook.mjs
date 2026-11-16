@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { HUBSPOT_PORTAL } from "./config.mjs";
 
 const DEAL_OBJECT_TYPES = new Set(["0-3", "deal", "deals"]);
 const PLACEHOLDER_VALUES = new Set(["", "CHANGE_ME"]);
@@ -24,8 +25,10 @@ function isConfigured(value) {
 export function readWebhookSettings(env = process.env) {
   const clientSecret = readFrom(env, "HUBSPOT_WEBHOOK_CLIENT_SECRET");
   const webhookUri = readFrom(env, "HUBSPOT_WEBHOOK_URI");
-  const btRbtObjectTypeId = readFrom(env, "HS_BT_RBT_OBJECT_TYPE_ID");
-  const bcbaObjectTypeId = readFrom(env, "HS_BCBA_OBJECT_TYPE_ID");
+  const btRbtObjectTypeId =
+    readFrom(env, "HS_BT_RBT_OBJECT_TYPE_ID") || HUBSPOT_PORTAL.btRbtObjectTypeId;
+  const bcbaObjectTypeId =
+    readFrom(env, "HS_BCBA_OBJECT_TYPE_ID") || HUBSPOT_PORTAL.bcbaObjectTypeId;
   const serviceBusConnectionString = readFrom(env, "SERVICE_BUS_CONNECTION_STRING");
   const parsedCoalesce = Number(readFrom(env, "HUBSPOT_WEBHOOK_COALESCE_SECONDS") || "30");
   const coalesceSeconds = Number.isFinite(parsedCoalesce) && parsedCoalesce > 0

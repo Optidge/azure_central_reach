@@ -9,7 +9,7 @@ New task. You are the one coordinator for the sandbox integration workstream.
 
 Goal. Finish sandbox testing on sandbox portal id 52311591. Confirm the worktree or branch before any checkout, then keep sync code on the branch Zeke names, one proven slice at a time.
 
-Done when. The 24-hour report exists on sandbox portal id 52311591 for deals, BT/RBT 2-55656309, and BCBA 2-55656302, filtered on integration_last_write after 1 day ago. Any code slice on the confirmed branch has a check you ran, then a pull request I can merge with a merge commit.
+Done when. The 24-hour report exists on sandbox portal id 52311591 for deals, BT/RBT 2-72890325, and BCBA 2-72890322 (sandbox 52311591 ids), filtered on integration_last_write after 1 day ago. Any code slice on the confirmed branch has a check you ran, then a pull request I can merge with a merge commit.
 
 At session start, run the confirm-first block in docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md. Do not checkout a branch until Zeke names the worktree or branch. Then fast-forward that branch and continue from its latest commit. Before any commit, run that file's pre-commit block.
 

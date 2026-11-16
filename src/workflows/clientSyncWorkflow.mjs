@@ -24,6 +24,7 @@ import { buildClientPayload } from "../mappings/client/buildClientPayload.mjs";
 import { buildClientMetadata } from "../mappings/client/buildClientMetadata.mjs";
 import { validateClientPayload } from "../mappings/client/validateClientPayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
+import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
 
 const CLIENT_STATE_PK = "sync:client";
 const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
@@ -31,6 +32,9 @@ const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
 const REQUIRED_DEAL_PROPERTIES = [
   "hs_object_id",
   "hs_lastmodifieddate",
+  "dealstage",
+  "enter_in_central_reach",
+  "test_record",
   "integration_last_write",
   "updated_by_integration",
   "last_sync_hash",
@@ -204,6 +208,34 @@ export async function runClientSyncWorkflow(
       throw error;
     }
 
+    const prior = await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId);
+    const hubspotContactId = String(deal?.properties?.[crContactIdProperty] || "").trim();
+    const existingContactId =
+      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
+
+    const eligibility = caseSyncEligibility({
+      properties: deal?.properties,
+      linked: Boolean(existingContactId),
+      includeTestRecords: Boolean(config.sync?.includeTestRecords)
+    });
+    if (!eligibility.eligible) {
+      // No Central Reach call and no HubSpot writeback for a skipped Case.
+      logger("info", "Client sync skipped by eligibility gate.", {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source: source || null,
+        reason: eligibility.reason,
+        linked: Boolean(existingContactId),
+        invocationId: context?.invocationId || null
+      });
+      return {
+        ok: true,
+        dealId: normalizedDealId,
+        status: "skipped",
+        reason: eligibility.reason
+      };
+    }
+
     const payload = mapPayload({ deal, config });
     const validation = validatePayload(payload);
     if (!validation.isValid) {
@@ -254,12 +286,8 @@ export async function runClientSyncWorkflow(
     });
     const payloadHash = digestPayload(comparable);
     const nextFieldHashes = fieldHashes(comparable);
-    const prior = await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId);
     const previousFieldHashes = prior?.data?.fieldHashes || null;
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
-    const hubspotContactId = String(deal?.properties?.[crContactIdProperty] || "").trim();
-    const existingContactId =
-      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
     const existingHash = deal?.properties?.last_sync_hash || null;
 
     let syncResult;

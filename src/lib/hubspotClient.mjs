@@ -1,6 +1,7 @@
 import axios from "axios";
 import { withRetry } from "./retry.mjs";
 import { HubSpotReadError } from "./mappedState.mjs";
+import { CASE_EXCLUDED_STAGE_IDS } from "../constants/hubspot.mjs";
 
 let hubSpotHttpClient = null;
 const SEARCH_LIMIT = 50;
@@ -66,29 +67,25 @@ function isLookbackFilterError(error) {
   );
 }
 
+// Guide Requirements 1-2: every pipeline and stage is in scope. The only stage filter is an
+// optional exclusion (Case Cleanup stages). The sync workers apply the full eligibility gate.
 function buildObjectSearchPayload({
-  pipelineProperty,
   stageProperty,
-  pipelineId,
-  stageAllowlist,
+  excludedStageIds,
   properties,
   limit,
   after,
   sinceIso,
   includeLookback
 }) {
-  const filters = [
-    {
-      propertyName: pipelineProperty,
-      operator: "EQ",
-      value: pipelineId
-    },
-    {
+  const filters = [];
+  if (stageProperty && Array.isArray(excludedStageIds) && excludedStageIds.length > 0) {
+    filters.push({
       propertyName: stageProperty,
-      operator: "IN",
-      values: stageAllowlist
-    }
-  ];
+      operator: "NOT_IN",
+      values: excludedStageIds
+    });
+  }
 
   if (includeLookback && sinceIso) {
     filters.push({
@@ -99,7 +96,7 @@ function buildObjectSearchPayload({
   }
 
   return {
-    filterGroups: [{ filters }],
+    filterGroups: filters.length > 0 ? [{ filters }] : [],
     properties,
     sorts: [
       {
@@ -145,16 +142,12 @@ export function createHubSpotClient(config) {
 export async function searchIntakeCompleteDeals({
   limit,
   maxSearchRequestsPerRun,
-  lookbackMinutes,
-  pipelineId,
-  stageAllowlist
+  lookbackMinutes
 }) {
   return searchCustomObjectRecords({
     objectTypeId: "deals",
-    pipelineProperty: "pipeline",
     stageProperty: "dealstage",
-    pipelineId,
-    stageAllowlist,
+    excludedStageIds: CASE_EXCLUDED_STAGE_IDS,
     limit,
     maxSearchRequestsPerRun,
     lookbackMinutes,
@@ -164,10 +157,8 @@ export async function searchIntakeCompleteDeals({
 
 export async function searchCustomObjectRecords({
   objectTypeId,
-  pipelineProperty = "hs_pipeline",
   stageProperty = "hs_pipeline_stage",
-  pipelineId,
-  stageAllowlist,
+  excludedStageIds = [],
   limit,
   maxSearchRequestsPerRun,
   lookbackMinutes,
@@ -181,9 +172,6 @@ export async function searchCustomObjectRecords({
   const cappedLimit = Math.max(Number(limit) || 0, 0);
   if (cappedLimit === 0) {
     return [];
-  }
-  if (!pipelineId || !Array.isArray(stageAllowlist) || stageAllowlist.length === 0) {
-    throw new Error("Missing required HubSpot intake search filters");
   }
 
   const perRequestLimit = Math.min(SEARCH_LIMIT, cappedLimit);
@@ -199,10 +187,8 @@ export async function searchCustomObjectRecords({
 
   while (deals.length < cappedLimit && requests < maxSearchRequests) {
     const payload = buildObjectSearchPayload({
-      pipelineProperty,
       stageProperty,
-      pipelineId,
-      stageAllowlist,
+      excludedStageIds,
       properties,
       limit: perRequestLimit,
       after,
@@ -217,10 +203,8 @@ export async function searchCustomObjectRecords({
       if (includeLookback && isLookbackFilterError(error)) {
         includeLookback = false;
         const fallbackPayload = buildObjectSearchPayload({
-          pipelineProperty,
           stageProperty,
-          pipelineId,
-          stageAllowlist,
+          excludedStageIds,
           properties,
           limit: perRequestLimit,
           after,
@@ -408,18 +392,12 @@ export async function updateObjectProperties(objectTypeId, objectId, properties)
 
 export async function searchEligibleBtRbtRecords({
   objectTypeId,
-  pipelineId,
-  stageAllowlist,
   limit,
   maxSearchRequestsPerRun,
   lookbackMinutes
 }) {
   return searchCustomObjectRecords({
     objectTypeId,
-    pipelineProperty: "hs_pipeline",
-    stageProperty: "hs_pipeline_stage",
-    pipelineId,
-    stageAllowlist,
     limit,
     maxSearchRequestsPerRun,
     lookbackMinutes,
@@ -429,18 +407,12 @@ export async function searchEligibleBtRbtRecords({
 
 export async function searchEligibleBcbaRecords({
   objectTypeId,
-  pipelineId,
-  stageAllowlist,
   limit,
   maxSearchRequestsPerRun,
   lookbackMinutes
 }) {
   return searchCustomObjectRecords({
     objectTypeId,
-    pipelineProperty: "hs_pipeline",
-    stageProperty: "hs_pipeline_stage",
-    pipelineId,
-    stageAllowlist,
     limit,
     maxSearchRequestsPerRun,
     lookbackMinutes,

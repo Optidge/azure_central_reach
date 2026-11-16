@@ -146,9 +146,7 @@ export async function runIntakePollerWorkflow(context) {
       candidates = await searchIntakeCompleteDeals({
         limit: config.limits.maxDealsPerRun,
         maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes,
-        pipelineId: config.hubspot.dealPipelineId,
-        stageAllowlist: config.hubspot.stageAllowlist
+        lookbackMinutes: config.limits.lookbackMinutes
       });
     } catch (error) {
       safeLog(
@@ -220,8 +218,6 @@ export async function runIntakePollerWorkflow(context) {
     try {
       const btRbtCandidates = await searchEligibleBtRbtRecords({
         objectTypeId: config.hubspot.btRbtObjectTypeId,
-        pipelineId: config.hubspot.btRbtPipelineId,
-        stageAllowlist: config.hubspot.btRbtStageAllowlist,
         limit: config.limits.maxBtRbtPerRun,
         maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
         lookbackMinutes: config.limits.lookbackMinutes
@@ -303,8 +299,6 @@ export async function runIntakePollerWorkflow(context) {
     try {
       const bcbaCandidates = await searchEligibleBcbaRecords({
         objectTypeId: config.hubspot.bcbaObjectTypeId,
-        pipelineId: config.hubspot.bcbaPipelineId,
-        stageAllowlist: config.hubspot.bcbaStageAllowlist,
         limit: config.limits.maxBcbaPerRun,
         maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
         lookbackMinutes: config.limits.lookbackMinutes
