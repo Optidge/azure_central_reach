@@ -11,13 +11,13 @@ Keep `main` as the merged notes and safe baseline. Put sync code on one new bran
 | Branch or PR | Role | What you do |
 | --- | --- | --- |
 | `main` | Baseline. Merged docs and the employee-create default from PR 4. | Checkout for reading or rare docs-only baseline edits. Do not pile sync fixes here unless you mean to ship on `main` immediately. |
-| `sandbox-integration` | Active sandbox integration line. Head of **PR 6**. | Default branch for sync code and sandbox work. Agent git blocks: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. |
+| `sandbox-integration` | Active sandbox integration line. Head of **PR 6**. | Check it out only after Zeke names it. Agent git blocks: `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`. |
 | `review_and_update_code` | Notes and sandbox pause trail. System of record for those notes is `docs/workstreams/integration-state-chart/STATE.md`. | Read it. Do not treat it as the sync code line. |
 | Next code branch | Not needed if you stay on `sandbox-integration`. | Do not create `recovery/reviewed-field-alignment`. |
 | PR 2 `align-sandbox-hubspot-field-sync` | Archive-shaped sync attempt. Would replace baseline HubSpot search helpers. | Hard stop. Do not merge. It is not a vehicle for this work. Copy named behaviors only, per the tracker. |
 | PR 3 `cursor/remove-verify-azure-central-reach-skill` | Skill deletion only. | **Never merge.** Same deletion is on `sandbox-integration` / PR 6. Close as duplicate later if you want. |
 | PR 4 `review_and_update_code` | Merged. Notes plus sandbox employee-create default. | Already on `main`. Stop treating it as an open vehicle. |
-| PR 6 `sandbox-integration` | Sandbox integration setup and ongoing sandbox branch. | **Open.** Default target for commits. Do not merge to `main` until Zeke asks and sandbox STATE allows. |
+| PR 6 `sandbox-integration` | Sandbox integration setup and ongoing sandbox branch. | **Open.** Use it after Zeke confirms this branch. Do not merge to `main` until Zeke asks and sandbox STATE allows. |
 
 ## How this operator works
 
@@ -33,7 +33,7 @@ These habits come from the prior session trail. Keep them so chat switches do no
 
 Copy-paste git blocks: **`docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md`**.
 
-1. At session start: fetch, checkout `sandbox-integration`, pull `--ff-only`, then `git status -sb`.
+1. At session start: list worktrees and the current branch, confirm the worktree or branch with Zeke, then fetch and `git pull --ff-only` that branch. Do not checkout `sandbox-integration` unless he names it.
 2. Before any commit: confirm branch, staged files, and no `.env` / `local.settings.json` / `.claude/`.
 3. Sync runtime code and sandbox tests stay on `sandbox-integration` (PR 6). Do not create `recovery/reviewed-field-alignment`.
 4. Do not reopen PR 2 or PR 3 as carriers. Do not merge them.
@@ -69,7 +69,7 @@ Exact files and order. `docs/workstreams/pr-transfer-tracker.md`.
 - Do not merge PR 2 to get date parsing, Yes gate, missing-field stop, or webhook routing. Those pieces are not a clean PR 2 merge.
 - Do not merge PR 3 to unblock sync. It only deletes a local skill and fights PR 2 on that path.
 - Do not keep coding on `review_and_update_code` and expect `main` or the live Function App to move with you.
-- Do not create the report or run HubSpot property work against portal `246184070`. Sandbox is `50850427`.
+- Do not create the report or run HubSpot property work against portal `246184070`. The sandbox portal id is `52311591`.
 
 ## Related systems of record
 
