@@ -128,13 +128,17 @@ Answered, and not repeated in the remaining list.
 
 Closed earlier, and not repeated below. Items 1, 3, 4, 7, 8, 11, 13, and 15 are settled above. Comorbid, staff phone, and the alternate address read are settled above. Label removal is a known code gap and stays off this chart. The first deploy waits on this list.
 
+Danny 2026-11-14, production sweep of portal `50317927` (recorded in the guide's Change Log tab and Tab 1). Every guide property and all 13 write-back fields exist, nothing is archived or renamed, option values match the appendix, and `staffing_status` options are unchanged since 11/06. Decisions: create the six staffing labels in Central Reach with the exact names (Pending 97151 Services, 97151 Services, Pending 97153 Services, Starting 97153 Services, Staffed 97153, X 97153) and turn the label sync on without waiting on Pessy; skip Cases in Cleanup stages `1383894301`, `1383894303`, `1383894302`, `1332962645` entirely (124 still Active, 2 with a CR ID); keep sending field updates for linked BTs in Yes - Generic and No- Made Inactive, but never deactivate anyone in Central Reach; map only the main Comorbid and Maladaptive fields. First-run counts: 475 Cases with a CR Client ID (122 without the Entered in CR box), 109 BCBAs with Enter in CR = Yes (4 without `workday_id`), BT/RBT 415 Yes - Active / 13 Yes - Generic / 198 No- Made Inactive, `test_record` true on 35 Cases, 5 BCBAs, 17 BT/RBTs, 34 Contacts.
+
+Code to-dos from 2026-11-14. A 2026-11-16 read of `src` finds none of these yet. Skip the four Cleanup stage ids (no `src` file filters on them). Read `staffing_status` and send or remove the six labels once their Central Reach ids exist. Confirm nothing deactivates an employee in Central Reach (no deactivation call found in `src`). Skip `test_record` = true outside deliberate tests (`src` does not read it). Care Coordinator via `GET /crm/v3/owners` needs `crm.objects.owners.read`; `src` does not call owners yet.
+
 ### Still with Sara
 
-2. BT/RBT "Yes - Generic" and "No- Made Inactive." No confirmation is in the guide note, the judge files, or the prior chat. The token rule above is separate from these option labels.
+2. BT/RBT "Yes - Generic" and "No- Made Inactive." Closed 2026-11-14 by Danny: keep sending field updates for linked BTs, never deactivate anyone in Central Reach.
 
 ### Still with United Care
 
-The Staffed label, and the payor rows in item 8. Pessy is confirming that the Active and Staffed labels exist. They are not in `all_labels_v3.json`. Active Client `1125427` and In-Active Client `1121488` already match catalog names.
+The payor rows in item 8. Staffing labels closed 2026-11-14: Danny says create the six labels in Central Reach and turn the label sync on; no need to wait on Pessy. They are not in `all_labels_v3.json`. Active Client `1125427` and In-Active Client `1121488` already match catalog names.
 
 The three stale ids in `src/constants/centralReach.mjs`. Closed 2026-11-09. A live `GET /contacts/labels` (`central_reach_test_integration/output_files/all_labels_v4.json`, 95 labels, identical to v3) confirmed CO Client `1132648`, NY Employee `1132655`, and header BCBA `1130668`. `1082500` and `1107685` are not in the catalog. The constants now use those ids, and `BCBA_LBA_NY` keeps `1052629`. This was copied as named behavior per `pr-transfer-tracker.md` item 3, not merged from pull request 2.
 
@@ -170,7 +174,7 @@ SUB BCBA. Still open. Section 4, association type 234. The unresolved comment is
 
 Five Case integration properties. The empty Case copies stay open. The doc asks which of `updated_by_integration`, `integration_last_write`, `employee_id`, `supervising_bcba`, and `create_record` are still needed, and it says all five are empty. This session cannot read those properties on portal `50850427`. On this tree the names are not all unused. `updated_by_integration` and `integration_last_write` are read and written on BT/RBT, BCBA, and Deal. `employee_id` is the Central Reach contact id on the staff object. `supervising_bcba` is read from the Deal and written to client metadata `131308`. `create_record` has no reader or writer in `src`. Answered 2026-11-13: Zeke told Danny to keep all five. Code to-do: per guide section 3, Central Reach Supervising BCBA should come from Ongoing Central Reach Provider Supplier, not the Case `supervising_bcba` that `buildClientMetadata.mjs` reads today. Find the provider-supplier internal name before switching.
 
-Production private-app scopes. Answered on the doc. Danny's 10/28 note says the Central Reach Integration app already has every scope on the section 10 list. This session did not read that app. The token here is portal `246184070`. That token includes custom-object and tickets scopes. Appointments and users calls returned 403.
+Production private-app scopes. Answered on the doc. Danny's 10/28 note says the Central Reach Integration app already has every scope on the section 10 list. This session did not read that app. Danny 2026-11-14 read it: read and write on deals, contacts and custom objects including sensitive and highly sensitive. He is adding `crm.objects.owners.read`. The `crm.schemas.*` read scopes are needed only if code reads property definitions or pipelines; a 2026-11-16 read of `src` finds HubSpot calls only to `/crm/v3/objects` (get, search) and `/crm/v4` associations, so they are not needed. He will mirror the scopes on the sandbox app once Zeke sends the sandbox links. The app overview shows calls to API versions HubSpot retires in September 2027; `src` makes no v1/v2 calls, so they likely come from the deployed package. The token here is portal `246184070`. That token includes custom-object and tickets scopes. Appointments and users calls returned 403.
 
 BCBA External System ID. Still open for the production confirm. This tree sets `externalSystemId` to the HubSpot record id on create. An update by an existing contact id keeps the `externalSystemId` already stored in Central Reach. No source file reads `workday_id`. Section 5 says the External System ID stores the HubSpot record id. Danny's 10/28 note says it is the Workday ID. The doc does not reconcile those two sentences.
 
@@ -188,17 +192,19 @@ The tree still matches the write-up on the points that decide those items. No fi
 
 ### Still open
 
-Sara. BT/RBT option labels "Yes - Generic" and "No- Made Inactive."
+Sara. None. "Yes - Generic" and "No- Made Inactive" closed 2026-11-14.
 
-United Care. The six staffing labels, and the payor names in item 8. The three stale ids were closed 2026-11-09 (see Still with United Care).
+United Care. The payor names in item 8. Staffing labels closed 2026-11-14; creating the six labels in Central Reach is now Zeke's. The three stale ids were closed 2026-11-09 (see Still with United Care).
 
 Zeke, production. The Case `updated_by_integration` checkbox versus the code writing `true`. Left as is 2026-11-13; to be tested.
 
 Code to-dos from 2026-11-13. Map `active_cases_count` to the new Central Reach Active Case Load field (id still needed). Switch Supervising BCBA metadata `131308` to Ongoing Central Reach Provider Supplier.
 
+Code and setup to-dos from 2026-11-14. Create the six staffing labels in Central Reach, then map `staffing_status` to them. Skip the four Cleanup stage ids. Never deactivate employees. Skip `test_record` = true. Send Danny the sandbox links for the sandbox app scopes.
+
 Sandbox writes, not run. The date string Central Reach accepts. Whether a blank core value clears the stored field. Whether metadata DELETE clears work address `133819` or a BCBA Medicaid id. Whether writeback leaves `hs_lastmodifieddate` later than `integration_last_write`.
 
-Zeke. The published commit. SUB BCBA. Production private-app scopes, because Danny's note was not re-read against that app. BCBA external system id, HubSpot record id in this tree versus the Workday note. The 10/29 production checklist. Rapid-notification loss, which a sandbox can show and this read cannot. Whether the BT/RBT fetch keeps `postal_code`.
+Zeke. The published commit. SUB BCBA. BCBA external system id, HubSpot record id in this tree versus the Workday note. The 10/29 production checklist. Rapid-notification loss, which a sandbox can show and this read cannot. Whether the BT/RBT fetch keeps `postal_code`.
 
 ## Open
 
