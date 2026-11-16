@@ -99,10 +99,6 @@ export const HUBSPOT_PORTAL = Object.freeze({
   // excludedStaffingAssociationTypeIds: Object.freeze([20, 64, 153, 80, 74, 164, 286])
 });
 
-// Always the sandbox portal, whichever block above is active. A missing ALLOW_EMPLOYEE_CREATE /
-// PUT_ONLY_MODE allows employee create only on this portal.
-export const SANDBOX_HUBSPOT_PORTAL_ID = "52311591";
-
 export function hubspotPortalId() {
   return getOptionalEnv("HUBSPOT_PORTAL_ID", HUBSPOT_PORTAL.portalId);
 }
@@ -121,17 +117,15 @@ export function includeTestRecords() {
   return getOptionalEnv("INCLUDE_TEST_RECORDS", "false").toLowerCase() === "true";
 }
 
-export function employeeCreateFeatures({
-  portalId = "",
-  allowEmployeeCreate = "",
-  putOnlyMode = ""
-} = {}) {
-  const sandbox = String(portalId).trim() === SANDBOX_HUBSPOT_PORTAL_ID;
+// Central Reach has no sandbox, so an employee create is always a production write. It needs both
+// settings stated on purpose: ALLOW_EMPLOYEE_CREATE=true and PUT_ONLY_MODE=false. A missing
+// setting blocks the create on every portal.
+export function employeeCreateFeatures({ allowEmployeeCreate = "", putOnlyMode = "" } = {}) {
   const allowRaw = String(allowEmployeeCreate ?? "").trim();
   const putRaw = String(putOnlyMode ?? "").trim();
   return {
-    allowEmployeeCreate: allowRaw === "" ? sandbox : allowRaw.toLowerCase() === "true",
-    putOnlyMode: putRaw === "" ? !sandbox : putRaw.toLowerCase() !== "false"
+    allowEmployeeCreate: allowRaw.toLowerCase() === "true",
+    putOnlyMode: putRaw.toLowerCase() !== "false"
   };
 }
 
@@ -314,7 +308,6 @@ export function getConfig() {
       employeeSyncQueueName: getRequiredEnv("EMPLOYEE_SYNC_QUEUE_NAME")
     },
     features: employeeCreateFeatures({
-      portalId: hubspotPortalId(),
       allowEmployeeCreate: process.env.ALLOW_EMPLOYEE_CREATE,
       putOnlyMode: process.env.PUT_ONLY_MODE
     })

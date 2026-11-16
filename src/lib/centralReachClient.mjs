@@ -139,6 +139,43 @@ function responseLooksNotFound(data) {
   return /not\s*found|no\s*match|unable\s*to\s*find/.test(text);
 }
 
+// Requirement 9 (no duplicate creates): a create is allowed only when Central Reach clearly says
+// the external id has no match. Anything else is an unknown outcome and must not lead to a create.
+// - 404, or a 400 whose message says "not found": no match.
+// - Any other error status (429, 5xx, ...) is rethrown, whatever its message says.
+export function externalIdLookupMissed(error) {
+  const status = error?.response?.status;
+  if (status === 404) {
+    return true;
+  }
+  return status === 400 && responseLooksNotFound(error?.response?.data || {});
+}
+
+// A 2xx answer: an id means found, explicit "not found" text means no match, and a body with
+// neither is unknown.
+export function readExternalIdLookup(response, entity) {
+  const crContactId = extractCrContactId(response);
+  if (responseLooksNotFound(response)) {
+    return { found: false, crContactId: null };
+  }
+  if (crContactId) {
+    return { found: true, crContactId, operation: "update" };
+  }
+  const unknown = new Error(`CentralReach ${entity} lookup returned no contactId`);
+  unknown.code = "CR_LOOKUP_UNKNOWN";
+  throw unknown;
+}
+
+// A create is sent once. A timeout or 5xx leaves the outcome unknown: Central Reach may have
+// created the record. The next run finds it through the external-id lookup instead of posting again.
+function markCreateOutcome(error) {
+  const status = error?.response?.status;
+  if (!status || status >= 500) {
+    error.code = "CR_CREATE_OUTCOME_UNKNOWN";
+  }
+  return error;
+}
+
 async function crRequest(path, { method = "GET", body, suppressRetry = false } = {}) {
   if (!centralReachHttpClient || !centralReachConfig) {
     throw new Error("CentralReach client is not initialized");
@@ -173,19 +210,13 @@ async function updateClientByExternalSystemId(payload) {
       body: payload
     });
   } catch (error) {
-    const status = error?.response?.status;
-    const errorBody = error?.response?.data || {};
-    if (status === 404 || responseLooksNotFound(errorBody)) {
+    if (externalIdLookupMissed(error)) {
       return { found: false, crContactId: null };
     }
     throw error;
   }
 
-  const crContactId = extractCrContactId(response);
-  if (!crContactId || responseLooksNotFound(response)) {
-    return { found: false, crContactId: null };
-  }
-  return { found: true, crContactId, operation: "update" };
+  return readExternalIdLookup(response, "client");
 }
 
 export async function createOrUpdateClient(payloadOrOptions) {
@@ -223,10 +254,16 @@ export async function createOrUpdateClient(payloadOrOptions) {
     };
   }
 
-  const created = await crRequest("/contacts/client", {
-    method: "POST",
-    body: payload
-  });
+  let created;
+  try {
+    created = await crRequest("/contacts/client", {
+      method: "POST",
+      body: payload,
+      suppressRetry: true
+    });
+  } catch (error) {
+    throw markCreateOutcome(error);
+  }
 
   const crContactId = extractCrContactId(created);
   if (!crContactId) {
@@ -293,27 +330,15 @@ async function updateEmployeeByExternalSystemId(payload) {
       body: payload
     });
   } catch (error) {
-    const status = error?.response?.status;
-    const errorBody = error?.response?.data || {};
-
     // AWS behavior treats not-found by external id as "no match", not a hard failure.
-    if (status === 404 || responseLooksNotFound(errorBody)) {
+    if (externalIdLookupMissed(error)) {
       return { found: false, crContactId: null };
     }
 
     throw error;
   }
 
-  const crContactId = extractCrContactId(response);
-  if (!crContactId || responseLooksNotFound(response)) {
-    return { found: false, crContactId: null };
-  }
-
-  return {
-    found: true,
-    crContactId,
-    operation: "update"
-  };
+  return readExternalIdLookup(response, "employee");
 }
 
 async function createEmployee(payload) {
@@ -326,10 +351,16 @@ async function createEmployee(payload) {
     createPayload.ContactForm = contactForm;
   }
 
-  const response = await crRequest("/contacts/employee", {
-    method: "POST",
-    body: createPayload
-  });
+  let response;
+  try {
+    response = await crRequest("/contacts/employee", {
+      method: "POST",
+      body: createPayload,
+      suppressRetry: true
+    });
+  } catch (error) {
+    throw markCreateOutcome(error);
+  }
   const crContactId = extractCrContactId(response);
   if (!crContactId) {
     throw new Error("CentralReach employee create succeeded but returned no contactId");
@@ -341,24 +372,33 @@ async function createEmployee(payload) {
   };
 }
 
-function extractCreateErrorReason(error) {
+// The reason is written to HubSpot last_sync_error, so it carries only the status, error codes and
+// field names. Central Reach's free-text message can repeat submitted values and is left out.
+export function extractCreateErrorReason(error) {
+  const status = error?.response?.status;
   const data = error?.response?.data || {};
-  const parts = [];
+  const items = [
+    ...(Array.isArray(data?.responseStatus?.errors) ? data.responseStatus.errors : []),
+    ...(Array.isArray(data?.errors) ? data.errors : [])
+  ];
+  const safeToken = (value) =>
+    typeof value === "string" && /^[A-Za-z0-9_.\- ]{1,60}$/.test(value.trim()) ? value.trim() : null;
+  const unique = (values) => Array.from(new Set(values.filter(Boolean)));
 
-  if (typeof data?.message === "string") {
-    parts.push(data.message);
-  }
-  if (Array.isArray(data?.errors)) {
-    for (const item of data.errors) {
-      if (typeof item?.message === "string") {
-        parts.push(item.message);
-      }
-    }
-  }
+  const fields = unique(items.map((item) => safeToken(item?.fieldName)));
+  const codes = unique([
+    safeToken(data?.responseStatus?.errorCode),
+    ...items.map((item) => safeToken(item?.errorCode))
+  ]);
 
-  const fallback = String(error?.message || "CentralReach employee create failed");
-  const merged = parts.join("; ").trim() || fallback;
-  return merged.slice(0, 500);
+  const parts = [`CentralReach rejected the employee create (${status || "no status"}).`];
+  if (fields.length) {
+    parts.push(`Fields: ${fields.join(", ")}.`);
+  }
+  if (codes.length) {
+    parts.push(`Codes: ${codes.join(", ")}.`);
+  }
+  return parts.join(" ").slice(0, 500);
 }
 
 function mergeUniqueNumericIds(values) {
@@ -567,7 +607,7 @@ export async function createOrUpdateEmployee(payload) {
     });
   } catch (error) {
     const status = error?.response?.status;
-    if (status === 400) {
+    if (status === 400 || status === 409) {
       return {
         operation: "blocked",
         crContactId: null,

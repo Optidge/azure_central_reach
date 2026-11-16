@@ -1,41 +1,43 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { employeeCreateFeatures, SANDBOX_HUBSPOT_PORTAL_ID } from "../../lib/config.mjs";
+import { employeeCreateFeatures } from "../../lib/config.mjs";
 
+// Guide Requirement 1 and the tracker's slice 1a: Central Reach has no sandbox, so an employee
+// create is a production write on every HubSpot portal. It needs both settings stated on purpose.
 describe("employeeCreateFeatures", () => {
-  it("allows a create on the sandbox portal when both flags are unset", () => {
-    assert.deepEqual(employeeCreateFeatures({ portalId: SANDBOX_HUBSPOT_PORTAL_ID }), {
-      allowEmployeeCreate: true,
-      putOnlyMode: false
+  it("blocks a create when both flags are unset, on any portal", () => {
+    assert.deepEqual(employeeCreateFeatures(), {
+      allowEmployeeCreate: false,
+      putOnlyMode: true
     });
-  });
-
-  it("blocks a create when the portal is not the sandbox and both flags are unset", () => {
-    assert.deepEqual(employeeCreateFeatures({ portalId: "50317927" }), {
+    assert.deepEqual(employeeCreateFeatures({ allowEmployeeCreate: undefined, putOnlyMode: undefined }), {
       allowEmployeeCreate: false,
       putOnlyMode: true
     });
   });
 
-  it("keeps an explicit block on the sandbox portal", () => {
-    assert.deepEqual(
-      employeeCreateFeatures({
-        portalId: SANDBOX_HUBSPOT_PORTAL_ID,
-        allowEmployeeCreate: "false",
-        putOnlyMode: "true"
-      }),
-      { allowEmployeeCreate: false, putOnlyMode: true }
-    );
+  it("blocks a create when only one flag is set", () => {
+    assert.deepEqual(employeeCreateFeatures({ allowEmployeeCreate: "true" }), {
+      allowEmployeeCreate: true,
+      putOnlyMode: true
+    });
+    assert.deepEqual(employeeCreateFeatures({ putOnlyMode: "false" }), {
+      allowEmployeeCreate: false,
+      putOnlyMode: false
+    });
   });
 
-  it("keeps an explicit allow on any other portal", () => {
-    assert.deepEqual(
-      employeeCreateFeatures({
-        portalId: "50317927",
-        allowEmployeeCreate: "true",
-        putOnlyMode: "false"
-      }),
-      { allowEmployeeCreate: true, putOnlyMode: false }
-    );
+  it("allows a create only when both flags say so", () => {
+    assert.deepEqual(employeeCreateFeatures({ allowEmployeeCreate: "true", putOnlyMode: "false" }), {
+      allowEmployeeCreate: true,
+      putOnlyMode: false
+    });
+  });
+
+  it("keeps an explicit block", () => {
+    assert.deepEqual(employeeCreateFeatures({ allowEmployeeCreate: "false", putOnlyMode: "true" }), {
+      allowEmployeeCreate: false,
+      putOnlyMode: true
+    });
   });
 });

@@ -4,9 +4,11 @@ UnitedCare: HubSpot → Azure → CentralReach.
 
 This file is the record of the architecture revamp. It comes from Zeke's *Review-only architecture brief, Revision 3 (2026-11-16)*. Facts that were out of date are corrected against the guide and commit `55e0091`, and each item carries a verdict and a status. Update the status columns and the log at the bottom as work lands.
 
-Nothing in this file authorizes a change by itself. Each slice needs Zeke's approval before code changes.
+Nothing in this file authorizes a change by itself. Each slice needs Zeke's approval before code changes. On 2026-11-16 Zeke approved the recommended architecture and told me to implement it one slice at a time.
 
 ## For reviewing agents (start here)
+
+**The first review round is complete (2026-11-16).** Grok (role A) and GPT Pro (role B) reported, and every claim was checked against the code and the guide; see "Review results" below. This section stays as the brief for any later review round. The code now differs from `55e0091`: slice 1a is committed on this branch.
 
 Several agents review this file in parallel. Read this section first, then the sections your role names.
 
@@ -79,7 +81,10 @@ Either role may report on the other's area if it finds something.
 | HubSpot production | `50317927` |
 | Retired / do not use | `50850427` (retired sandbox), `246184070` (not UnitedCare) |
 | Central Reach | No sandbox. Every CR write, including sandbox tests, lands in **production CR**. |
-| Overall state | Full-read review done. Independent reviews pending: Grok (Azure, role A) and GPT Pro (architecture, role B). Slice approvals and open questions paused by Zeke until those reviews return. |
+| Deployed app | `centralreachserverless` is **Stopped** and still set to retired portal `50850427`. Zeke's decision: it runs sandbox `52311591` next. See "Pre-start gate". |
+| Local settings | `.env` `HUBSPOT_PRIVATE_APP_TOKEN` belongs to sandbox `52311591` (checked 2026-11-16). The token in `local.settings.json`, which `func start` reads, still belongs to retired `50850427`. Q24. |
+| Sandbox data | `52311591` holds 1,553 Cases but **0 BCBA and 0 BT/RBT records** (2026-11-16). Employee tests need test records created there first. |
+| Overall state | Reviews returned and verified (2026-11-16). Zeke approved the webhook-first design with an hourly safety poller. **Slice 1a is implemented and committed on `architecture-update`; `npm test` passes (101).** It has not been run against HubSpot, Central Reach or Azure. Work is paused at Zeke's request; next is slice 1b. |
 
 Status values used below: **Done** (in code at the stated commit), **Proposed** (recommended, not approved), **Approved**, **In progress**, **Blocked** (waiting on a named input), **Deferred**, **Rejected** (mechanism rejected; the business need may remain).
 
@@ -100,14 +105,15 @@ Status values used below: **Done** (in code at the stated commit), **Proposed** 
 |---|---|---|
 | Brief: sandbox HubSpot is `50850427` | The active sandbox is `52311591`; `50850427` is retired. W1–W6 and the workflow register are historical `50850427` evidence. | Guide Agent Context Index, `[GER]` intro; sandbox STATE |
 | Brief: code baseline is `504a084` | Review against `55e0091`. That commit added the Yes gate, the `test_record` skip, the four Cleanup-stage skips and per-portal config (`HUBSPOT_PORTAL`), and removed the poller stage allowlists. | `git log`; `src/lib/syncEligibility.mjs` |
-| Brief item 2 (eligibility) | Done. The gate runs in both workers before any mapping or CR call, on every entry path. No HTTP function reaches CR: `clientSyncHttpTest` returns 501, `intakePollerHttpTest` only enqueues, and `connectivityTest` makes no API calls. | `clientSyncWorkflow.mjs:216`, `employeeSyncWorkflow.mjs:283`, `src/functions/*` |
+| Brief item 2 (eligibility) | Done. The gate runs in both workers before any mapping or CR call, on every entry path. No HTTP function reaches CR: `clientSyncHttpTest` returns 501, `intakePollerHttpTest` only enqueues, and `connectivityTest` makes no API calls. | `clientSyncWorkflow.mjs` (`caseSyncEligibility` call), `employeeSyncWorkflow.mjs` (`employeeSyncEligibility` call; line 306 at `55e0091`, not 283), `src/functions/*` |
 | Brief item 11: remove the stage allowlists | Done. The poller searches every stage; the Case search uses `NOT_IN` the four Cleanup ids. | `hubspotClient.mjs:72-110` |
 | Brief item 3: no sandbox fallback in HubSpot links | Mostly done. The Case link uses `hubspotPortalId()`, but a `HUBSPOT_PORTAL_ID_TEST` env override remains. | `buildClientMetadata.mjs` (`buildHubspotDealUrl`) |
 | Brief: association ids given as production ids only | The sandbox ids differ; see "Sandbox ids" below. The same number means different roles in each portal. | Guide `[SCURRENT]` (lines ~1045–1082) |
 | `docs/SOURCE-OF-TRUTH.md:7,12` points to a "Current Phase of build" tab | No such tab or heading exists anywhere in the guide. | Full guide read |
 | `README.md:118`: sandbox portal `50850427`, BCBA `2-55656302`, BT/RBT `2-55656309` | Sandbox `52311591`, BCBA `2-72890322`, BT/RBT `2-72890325` | `[SCURRENT]`; `config.mjs:83-100` |
 | `README.md:93`: repeat webhook notices are "dropped" inside the coalesce window | Not true. Repeats are still enqueued; the coalesce check only logs. The test asserts the enqueue. | `functions/hubspotWebhook.mjs:153-170`; `hubspotWebhook.test.mjs:114` |
-| Brief open question 1 (latency) | Still open. The guide gives no maximum delay, polling interval or retry policy; the closest is "Better to get it right than fast." | Full guide read |
+| `README.md:57`: deploy example publishes to `centralreachfunction` | The Function App is `centralreachserverless`. | Grok Azure read; GPT Pro |
+| Brief open question 1 (latency) | Answered by Zeke 2026-11-16: hourly safety poller (Q1). The guide itself gives no maximum delay, polling interval or retry policy; the closest is "Better to get it right than fast." | Full guide read |
 
 ### Sandbox ids (`52311591`, production in brackets)
 
@@ -171,35 +177,116 @@ From the guide's Business rules, `[GER-*]`, `[G11]` and the 11/14 decisions. Cit
 11. **Notifications:** any client-facing notification uses `case_initials`, never a child's full name.
 12. **Webhooks Journal and unapproved beta features** stay out.
 
-## Recommended architecture (pending Zeke's approval)
+## Recommended architecture (approved by Zeke, 2026-11-16)
+
+Webhooks do the work. The poller is a safety check that runs once an hour. The aim is the fewest calls that still never lose a change, because the Azure services are billed per use.
 
 ```
 HubSpot workflows (Case / BCBA / BT/RBT, + Contact later)
-        | signed, ID-only webhook
+        | signed, ID-only webhook on any mapped change
         v
-hubspotWebhook --awaited send--> client-sync-queue (incl. contactChange) / employee-sync-queue
+hubspotWebhook --awaited send--> client-sync-queue / employee-sync-queue
                                         ^
-        intakePoller (checkpointed, finds unlinked Yes too) + linked recheck ----+
+        hourly poller (checkpointed; also finds unlinked Yes records) ----+
+        daily sweep of linked records ------------------------------------+
         |
-worker: lock -> one source read -> ELIGIBILITY GATE -> map -> compare
-        -> CR writes (no automatic retry on create) -> HubSpot writeback (ids, status)
+worker: lock -> one HubSpot read -> ELIGIBILITY GATE -> map -> compare with the saved copy
+        -> clean no-op: stop here, write nothing
+        -> changed: CR writes (create sent once; lookup by external id first)
+        -> save the new copy -> HubSpot writeback (CR id, status)
         |
-Cosmos: last good hashes + CR id (a failure never overwrites them), leases, cursors
-App Insights: alerts on dead letters and sync errors
+        failure: temporary -> re-queue with a growing delay; permanent -> mark the record, no retry
+                 retries used up -> dead-letter + email alert + error status on the HubSpot record
+        |
+Cosmos (durable): CR id + last fully synced values per record, no expiry; attempt status kept apart
+HubSpot: failures report (last_sync_status = error) per object; 24-hour activity report
+Azure Monitor: one email alert when a dead letter appears
 ```
 
-- **No new Azure resource is needed.** Existing resources: Function App `centralreachserverless`, plan `ASP-centralreachintegration-86fd`, Service Bus `ucr-hs-cr-sb-prod`, Cosmos `ucr-hs-cr-cosmos-prod`, storage `centralreachintegrab751`, App Insights `centralreachserverless`, Log Analytics `DefaultWorkspace-63ef719f-…-EUS2`. Their deployed settings are not verified yet.
-- **Gate rule:** every entry point (Contact fan-out, retries, audits, catch-up) enqueues to the workers. The gate stays in the workers, so nothing reaches CR without passing it.
-- **Portal:** the resource names end in `-prod`, but that does not say which HubSpot portal the deployment processes. STATE's last record (2026-10-30) has the app on `50850427`.
-- **The guide's own design matches this.** Its Hybrid Change Detection design (11/01) has a webhook fast path, a polling backup, one comparison process in Azure, and a baseline saved only after the writes succeed. Its "minimum changes before production" list:
-  - full-state hashes;
-  - remove stage restrictions (done);
-  - fix employee timestamp shortcuts;
-  - fix skipped blank metadata;
-  - fix rapid-notification loss;
-  - retries without duplicate creates.
+- **Webhooks first.** Coverage depends on the HubSpot workflow trigger lists in `52311591` (and later production) naming every mapped property, including `case_status`, `staffing_status`, the staff-name rollups and the Contact workflow. A change no trigger covers waits up to an hour for the poller.
+- **Missed webhooks, without a faster poller:**
+  - every run compares the whole mapped record, so any webhook for a record also picks up earlier missed changes on it;
+  - a test compares the mapped HubSpot properties in code with the trigger lists and fails when a mapped property has no trigger;
+  - when the poller finds a change no webhook delivered, it logs the changed field names (never values), which shows the trigger to add.
+- **Durable state.** One Cosmos record per HubSpot record holds the CR id and the last fully synced values. It has no expiry and is replaced only after every write succeeds. The CR id is also written to HubSpot right after a create.
+- **Retries.**
+  - Temporary failures (429, 5xx, timeouts on updates): re-queued with delays of 1 min, 5 min, 15 min, 1 h, 4 h. Then dead-letter, error status on the record, and the alert.
+  - Permanent failures (bad data, a CR 400): no retry. The record shows the error and waits for the next edit.
+  - A create with an unknown result is never blindly repeated. The next run looks the record up by external id first.
+- **Poller.** Hourly. One search per entity for records modified since a saved checkpoint, so an outage of any length is caught up. It also finds unlinked Yes records. A once-a-day sweep of linked records replaces the every-five-minutes recheck.
+- **Fewer calls.** A no-op run costs one HubSpot read and one Cosmos read and writes nothing (this answers Q10). Poller runs drop from 288 a day to 24. The linked recheck drops from up to about 14,000 Case runs a day (50 per run x 288, an estimate at production size) to about 475.
+- **No new Azure resource is needed.** Existing resources: Function App `centralreachserverless`, plan `ASP-centralreachintegration-86fd`, Service Bus `ucr-hs-cr-sb-prod`, Cosmos `ucr-hs-cr-cosmos-prod`, storage `centralreachintegrab751`, App Insights `centralreachserverless`, Log Analytics `DefaultWorkspace-63ef719f-…-EUS2`.
+- **Gate rule:** every entry point (webhook, poller, sweep, retries, Contact fan-out) enqueues to the workers. The gate stays in the workers, so nothing reaches CR without passing it.
+- **The guide's own design matches this.** Its Hybrid Change Detection design (11/01) has a webhook fast path, a polling backup, one comparison process in Azure, and a baseline saved only after the writes succeed. It asks that coverage be tested before polling is reduced (line 1835), which is why the hourly poller ships with the coverage test above.
 
-  Items 8, 9, 11 and 12 below carry these.
+## Review results (2026-11-16)
+
+Both reports were checked claim by claim against the code at `55e0091` and the live guide. No code claim was refuted.
+
+### Azure, as Grok read it (reported values; not re-checked here)
+
+| Resource | Reported |
+|---|---|
+| Function App | Stopped. Flex Consumption (FC1), up to 100 instances, Node 22. Managed identity off. Timeout and deployed commit not visible. |
+| App settings | `HUBSPOT_PORTAL_ID` = `50850427`; object types `2-55656302` / `2-55656309` (old); `ALLOW_EMPLOYEE_CREATE` = `true`; `PUT_ONLY_MODE` = `false`; poller and both queue workers enabled; six unused pipeline and allowlist settings remain. |
+| `client-sync-queue` | maxDeliveryCount 10, lock 5 min, TTL 14 days, duplicate detection on (10 min), 406 dead letters |
+| `employee-sync-queue` | maxDeliveryCount 10, lock 1 min, no TTL, duplicate detection **off**, 628 dead letters |
+| Cosmos | Serverless, `hs-cr-sync` / `sync-state`, partition key `/pk`, default TTL 30 days. Item TTLs from the app: success 24 h, fail 1 h. |
+| Monitoring | App Insights linked to Log Analytics. **No alert rules.** The one action group has no email receiver. |
+
+### Findings confirmed from GPT Pro
+
+| Id | Finding | Where it goes |
+|---|---|---|
+| B1 | A by-external-id answer with no id, or "not found" text on any error status, led to a create. | **Fixed in S1a** |
+| B2 | The employee CR id was lost on an early failure and on `SYNC_STALE`. | **Fixed in S1a** |
+| B3 | False no-op: a sync that half-applied B, then a source change back to A, matches the stored hash while CR holds part of B. | S1b (8F) |
+| B4 | Portal overrides switch the portal id and object types but not the association exclusion ids; queue messages and state keys carry no portal. | S1b (8I) |
+| B5 | `listAssociations` drops the association category and target type and reads a missing `results` as empty. Truncation needs 10,000 associations, so it is not a practical risk. | Before S2 maps roles (item 7) |
+| B6 | With no saved baseline, a blank is never cleared; a 404 on the metadata DELETE counts as cleared. | S1b, with Q6 |
+| B7 | A blocked employee create is saved as a success. | S1b (8G) |
+| B8 | Metadata failures lose their status and Retry-After, so retries can't be classified. | S1b (item 12) |
+| B9 | CentralReach's free-text 400 message reached HubSpot `last_sync_error` on the employee blocked path. | **Fixed in S1a** |
+
+### Risks found while verifying
+
+| Id | Risk | Where it goes |
+|---|---|---|
+| N1 | **Cosmos state expires** (success 24 h, fail 1 h). After the app is stopped for a day, every baseline and pending CR id is gone, so the first run cannot clear a blanked metadata field. | S1b (8H). S1a already keeps the id and hashes through failures and stops failures from shortening their life. |
+| N2 | The client error writeback changes `hs_lastmodifieddate` without `integration_last_write`, so the five-minute poller re-queues a failing record every run. Follows from the code; not observed. | Poller slice. Until then the poller stays disabled. S1a adds the same error writeback for employees, so this applies to them too. |
+| N3 | Every success or no-op writeback moves `hs_lastmodifieddate` just past `integration_last_write`, so synced records likely loop every poll and can crowd out real changes (one page of 50, newest first). | Poller slice; a no-op writes nothing. |
+| N4 | Without the sensitive scope, HubSpot returns sensitive fields as missing, with no 403 (guide line 360). Only the name check stops the run; DOB, gender, insurance ID and policyholder DOB would read as blanks. The sandbox has no sensitive-property feature, so this can't be tested there. | Item 7 |
+
+Reviewer slips: GPT Pro wrote that `493a809` added `STATE.md` (it added `grok-review-brief.md`). Grok did not open the live `[GER-*]` tables; its mapping answers were checked against them here and hold.
+
+### CentralReach API, from the public docs and spec (read 2026-11-16)
+
+Sources: the two local doc files in `central_reach_test_integration/central_reach_docs/` and the current public spec linked from centralreach.com/resources/api/requests (`cr-api-list-100826.json`; the local mirror's link is out of date).
+
+- **Read-only lookup exists:** `GET contacts/client/byExternalSystemId` and `GET contacts/employee/byExternalSystemId`. The code uses the PUT (a write) as its lookup today.
+- **Response codes:** 404 "unable to find contact to update"; 409 "importing a record that already exists"; 429 rate limit.
+- **Create response:** the id is at `contact.contactId`.
+- **Required on create:** employee needs `ContactForm`, `ExternalSystemId`, `PrimaryEmail`, `DateOfBirth`, first and last name; client needs `ContactForm`, first and last name, `DateOfBirth`. The code's validators check neither date of birth nor email.
+- **Metadata:** GET all values, PUT one field, and **PATCH many fields in one call** (`PATCH contacts/{ContactId}/metadata`). No DELETE is documented; the code's DELETE-to-clear call is undocumented.
+- **Labels:** GET and POST ("Update Contact Labels") only. No remove endpoint is documented.
+
+### How employees are created today
+
+The code sends the **HubSpot record id** as the CR External System ID for both BCBA and BT/RBT (`buildEmployeePayload.mjs`, both builders). Employees created by earlier tests therefore carry HubSpot record ids, from the retired sandbox `50850427`, as their external id in production CR. The guide wants `workday_id` for BCBA (line 270); BT/RBT is Q2. When slice 3 switches to `workday_id`, a by-external-id lookup will no longer match those earlier test employees; they need the CR id on the HubSpot record or a cleanup in CR.
+
+## Pre-start gate (deployed app)
+
+`centralreachserverless` stays Stopped until all of these are done. Zeke or an agent with Azure access makes the Azure changes; none were made from this session.
+
+| # | Step | Status |
+|---|---|---|
+| 1 | App settings for sandbox `52311591`: `HUBSPOT_PORTAL_ID`, `HS_BCBA_OBJECT_TYPE_ID` = `2-72890322`, `HS_BT_RBT_OBJECT_TYPE_ID` = `2-72890325`, and the sandbox app's token and webhook secret | Open |
+| 2 | Remove the six unused pipeline and stage-allowlist settings | Open |
+| 3 | `AzureWebJobs.intakePoller.Disabled` = `true` until the poller slice lands (N2, N3) | Open |
+| 4 | Purge both dead-letter queues (406 + 628, old-sandbox messages; Zeke 2026-11-16). Never replay them. | Open |
+| 5 | Deploy a build that contains slice 1a; record the package or commit deployed | Open (1a is committed, not deployed) |
+| 6 | One email alert: dead-letter count above zero on either queue, to Zeke | Open |
+| 7 | HubSpot failures report in sandbox `52311591` (one per object, `last_sync_status` = error) | Open |
 
 ## Item tracker
 
@@ -208,17 +295,17 @@ App Insights: alerts on dead letters and sync errors
 | 1 | Requirements traceability | Keep, smaller | Proposed | No guide-row → code → test map. | One traceability table in docs, plus a test that fails if a required source property is missing from a worker request. No shared definition module yet. |
 | 2 | Shared eligibility policy | Keep | **Done** | `syncEligibility.mjs` in both workers. Tests cover all four Cleanup stages, `test_record`, linked-unticked, unlinked-no-Yes, and BT `Yes - Generic`. | Add BCBA-specific gate tests (all current employee gate tests use BT/RBT). |
 | 3 | Case mappings | Keep | Proposed (slice 2) | See "Case field gaps" below. Also: `insurance_id_4` and the misspelled `…_other_addres` are requested; AddressLine1 takes the alternate address first; state comes from `location`, not `stateregion`. | Map every `[GER-CASE]` row. Care Coordinator waits on Q8, Supervising BCBA on Q9, physician and ASD-date selection on Q13. |
-| 4 | Employee identity and fields | Keep | Proposed (slice 3) | See "Employee field gaps" below. `buildEmployeePayloadForContactId` copies CR's stored email and external id over HubSpot's on every linked update. `validateEmployeePayload` requires a non-empty `externalSystemId`, but the guide says a missing `workday_id` sends a blank. | Guide fields. BCBA external id = `workday_id`; relax the validator; never call `PUT /byExternalSystemId` with a blank id. Stop the email and BCBA external-id preservation. BT/RBT external id waits on Q2. Active Case Load waits on Q5. |
-| 5 | Label ownership and removal | Keep | Blocked (Q4, Q5, Q6, Q14, Q17) | See "Label gaps" below. Labels are only added (`POST /contacts/{id}/labels`); empty sets are skipped; nothing is removed. | Add the guide's labels once their CR ids are confirmed. Removal needs a confirmed CR read-and-remove contract. Keep existing ids: BCBA `1130668`, NY Employee `1132655`, CO Client `1132648`, BCBA LBA NY `1052629`. |
+| 4 | Employee identity and fields | Keep | Proposed (slice 3) | See "Employee field gaps" below. The external id sent today is the **HubSpot record id**. `buildEmployeePayloadForContactId` copies CR's stored email and external id over HubSpot's on every linked update. `validateEmployeePayload` requires a non-empty `externalSystemId`; the guide says a missing `workday_id` sends a blank, but the CR spec requires `ExternalSystemId`, `PrimaryEmail` and `DateOfBirth` on an employee create (Q23). | Guide fields. BCBA external id = `workday_id`; never call `PUT /byExternalSystemId` with a blank id. Stop the email and BCBA external-id preservation. Validate date of birth and email before a create. BT/RBT external id waits on Q2. Active Case Load waits on Q5. |
+| 5 | Label ownership and removal | Keep | Blocked (Q4, Q5, Q6, Q14, Q17, Q22) | See "Label gaps" below. Labels are only added (`POST /contacts/{id}/labels`); empty sets are skipped; nothing is removed. The CR API documents GET and POST only, with no remove endpoint. | Read the contact's current labels (GET), then POST the set the guide requires. Whether that POST replaces the whole set or only adds is untested (Q6); that decides whether removal is possible at all. The label rows the guide requires are needed before production; they do not belong in an open-ended "Later". Keep existing ids: BCBA `1130668`, NY Employee `1132655`, CO Client `1132648`, BCBA LBA NY `1052629`. |
 | 6 | Relationships and Contacts | Keep, narrowed | Proposed (slices 2–4) | Association ids change the hash, but the mappers read text rollups (`current_primary_bt`, `supervising_bcba`, `initial_assessment_bcba`). No Contact read. | IA/RE/BT names from associations; Supervising BCBA from `ongoing_central_reach_provider_supplier`; Guardian from the Case sync properties; BCBA personal email from Contact. Outgoing BCBA, SUB/On Leave and the Grad Permit marker wait on Q3. |
-| 7 | Reads, batching, caching | Defer most | Proposed (small) | One record per read. An unparseable date becomes null in `toIsoMidnight` (client), `normalizeDate` (employee) and `hsDateToIsoOrNull` (metadata). No test covers epoch or invalid dates. | A populated date that can't be parsed should fail validation, not become a blank. Add an in-run owner cache once owner lookups exist. No batching until a measured caller exists. |
-| 8 | State, recovery, ownership | Keep, smaller | Proposed (slice 1) | **A.** A failed run's Cosmos write drops `fieldHashes`, so a pending clear is lost. **B.** An employee create saves no CR id before the metadata write; on metadata failure the HubSpot error writeback omits `employee_id`, leaving only the Cosmos fail state, which has a TTL. **C.** `updateEmployeeWritebackWithFallback` silently drops `employee_id` if HubSpot rejects it (and a test accepts that), so the next run sees the record as unlinked. **D.** Locks are released without an ownership check. **E.** The lock is skipped only when the state client is uninitialized; real Cosmos errors throw (corrects the first review, which called it "fails open"). | Failures keep prior hashes and CR id. Save the employee CR id right after create. Put `employee_id` in the error writeback. Treat a dropped `employee_id` as an error, not success. Hold ETag owner tokens until there is evidence they're needed. |
-| 9 | Fewer reads and writes | Keep | Proposed (slice 5) | Client run: 3 deal GETs. Employee: 2 HubSpot GETs plus a CR GET even on a no-op. Both PATCH HubSpot on every no-op. All metadata fields are sent on any change. | Remove the duplicate first read. Drop the CR GET once item 4 lands. Whether to drop the no-op PATCH waits on Q10. |
+| 7 | Reads, batching, caching | Defer most | Proposed (small) | One record per read. An unparseable date becomes null in `toIsoMidnight` (client) and `normalizeDate` (employee); the metadata parser `hsDateToIsoOrNull` also accepts epoch numbers, so the three behave differently. `listAssociations` drops the association category and target type and reads a missing `results` as empty (B5). Sensitive fields can be missing with no 403 (N4). | A populated date that can't be parsed fails validation, not becomes a blank. Validate association responses before slice 2 maps roles (`[SCURRENT]`: match source, target, category and role together). Treat a Case read with missing sensitive identity fields as a failed read. Add an in-run owner cache once owner lookups exist. No batching until a measured caller exists. |
+| 8 | State, recovery, ownership | Keep | **A–C done in S1a**; D, F–I in S1b | **A.** A failed run dropped `fieldHashes`. *Fixed: the fail state keeps the last good hashes and the CR id.* **B.** The employee CR id was not saved before the metadata write, and was lost on an early failure or `SYNC_STALE`; the client error writeback omitted the id. *Fixed: both workers save a new id to Cosmos and to HubSpot right after the CR write, and error writebacks carry it.* **C.** A rejected `employee_id` writeback was dropped silently. *Fixed: the record is marked as an error.* The record reads as unlinked only once the Cosmos state expires. **D.** Leases are released without an ownership check, and the 300 s lease can expire during a slow run. **E.** The lock is skipped only when the state client is uninitialized; real Cosmos errors throw. Low-priority cleanup. **F.** False no-op after a half-applied sync (B3). **G.** A blocked employee create is saved as success (B7). **H.** Cosmos state expires: success 24 h, fail 1 h (N1). **I.** Portal identity: association exclusions don't follow the portal override; messages and state keys carry no portal (B4). | S1b: no expiry on the link and baseline; a no-op requires a clean prior run; blocked is its own state; lease owner check; portal in messages and state. |
+| 9 | Fewer reads and writes | Keep | Approved (poller and call-reduction slice) | Client run: 3 deal GETs. Employee: 2 HubSpot GETs plus a CR GET even on a no-op, 3 GETs when changed. Both PATCH HubSpot on every no-op. All metadata fields are sent one call each on any change. | A no-op reads once and writes nothing (Q10 answered). Remove the duplicate first read. Drop the CR GET once item 4 lands. Send metadata with the one-call PATCH endpoint once it is confirmed in a sandbox run. Only after S1b, so a clean no-op can be told from a half-applied sync. |
 | 10 | Webhook and Contact coverage | Keep receiver; add Contact | Proposed (slice 4) | Signature v2 check, then an awaited queue send before 202. The coalesce check (default 30 s) writes a Cosmos lease and only logs; README is wrong about it. Contact `0-1` returns 400. No create/refresh discriminator; the workers decide. | Remove the log-only coalesce and fix the README. Add a `contactChange` message on the client queue that fans out to linked Cases and BCBAs through the workers. Needs the sandbox Contact workflow. |
-| 11 | Polling and coverage | Keep | Partly done; rest Proposed (slice 6) | Allowlists removed (done). See "Poller gaps" below. | Store a per-entity checkpoint that moves forward only after the queue send. Add discovery of unlinked Yes records. Run each entity's search independently. Keep the five-minute timer until Q1 is answered. |
-| 12 | Delayed recovery and retries | Keep the guarantee; change the mechanism | Proposed (slice 1 for creates) | **A.** `suppressRetry` is never used, so `POST /contacts/client` and `/contacts/employee` retry on 429/5xx and **can duplicate in production CR**. **B.** `Retry-After` is read only as seconds and capped at 5 s. **C.** `SYNC_IN_PROGRESS` and `SYNC_STALE` are rethrown, so Service Bus redelivers at once and uses up the delivery count; under contention a message can be dead-lettered. **D.** `host.json` sets no Service Bus options. | First, no automatic retry on creates. Later, one scheduler: Service Bus scheduled delivery, not a Cosmos table plus timer. Reschedule lock and stale outcomes instead of failing. Waits on Q11. |
-| 13 | Monitoring and verification | Keep alerts; defer audits | Proposed | `host.json` sampling is on (requests excluded). The repo defines no alerts. The guide offers a 24-hour HubSpot report on `integration_last_write`. | Alerts on dead letters and error status. The 24-hour report goes on sandbox `52311591`. Destination audit waits on Q7. Case History Log is optional (Q7). |
-| 14 | Readiness and rollout | Keep; tests rebuilt from the guide | Proposed | 16 smoke test files; 84 pass per STATE. They are not evidence of the guide requirements. See "Tests" below. | Each slice ships tests derived from the guide rows it implements, plus one sandbox check. |
+| 11 | Polling and coverage | Keep, as a safety check | Approved (poller and call-reduction slice) | Allowlists removed (done). See "Poller gaps" below. | Hourly timer (Zeke, Q1). Per-entity checkpoint that moves forward only after the queue send. Discovery of unlinked Yes records. Each entity's search runs independently. A daily sweep of linked records replaces the five-minute recheck. Log webhook misses by field name. The poller stays disabled until this slice lands. |
+| 12 | Delayed recovery and retries | Keep the guarantee; change the mechanism | **A done in S1a**; B–E in S1b | **A.** Creates retried on 429/5xx. *Fixed: each create POST is sent once; an unclear lookup answer never leads to a create.* **B.** `Retry-After` is read only as seconds and capped at 5 s. **C.** `SYNC_IN_PROGRESS` and `SYNC_STALE` are rethrown, so Service Bus redelivers at once; with maxDeliveryCount 10 a contended message is dead-lettered. **D.** `host.json` sets no Service Bus options. **E.** Metadata failures lose their status and Retry-After (B8). | One scheduler: Service Bus scheduled delivery with delays of 1 min, 5 min, 15 min, 1 h, 4 h, then dead-letter. Classify temporary, permanent and unknown-create failures. Reschedule lock and stale outcomes instead of failing. |
+| 13 | Monitoring and verification | Keep, simple | Approved; part done in S1a | `host.json` sampling is on (requests excluded). No alert rules exist in Azure. The guide defines one HubSpot report: records written in the last 24 hours, on `integration_last_write` (line 813). *S1a: every employee failure now writes `last_sync_status` = error, as client failures already did.* | **HubSpot failures report**, one per object (Case, BCBA, BT/RBT): `last_sync_status` = error, showing `last_sync_error`; built in sandbox `52311591` and production. **One Azure email alert**: dead-letter count above zero on either queue, to Zeke; add Danny or a shared inbox for production. Use the Service Bus metric, not logs, because sampling is on. Then record both in the guide (Zeke asked for this). Destination audit waits on Q7. |
+| 14 | Readiness and rollout | Keep; tests rebuilt from the guide | In progress | 17 smoke test files; 101 pass after S1a. `duplicateSafety.test.mjs` is the first file written from guide rows. See "Tests" below. | Each slice ships tests that cite the guide rows it implements. Any sandbox check that writes to CR is a production CR write and needs Zeke's go-ahead and a test record he names. No test-record gate in sandbox (Zeke 2026-11-16); the gate is decided when production testing starts (Q26). |
 | API | Version inventory and migration | Keep as a separate workstream | Proposed | `src` calls HubSpot `/crm/v3/objects` (get, search, patch) and `/crm/v4/objects/{type}/{id}/associations/{type}`. CR uses OAuth plus `/contacts/...`, unversioned. The CLI (not `src`) uses `/crm-pipelines/v1`. The guide says the app overview shows calls to versions retiring September 2027, which likely come from the deployed package. | Name an owner. Target before March 2027 (v4 notice, unverified). Keep this separate from the mapping slices. |
 
 ### Case field gaps (item 3)
@@ -249,6 +336,7 @@ App Insights: alerts on dead letters and sync errors
 | Entity | Guide source | Code today |
 |---|---|---|
 | BCBA name | `first_name` + `last_name` | splits `bcba_name` |
+| BCBA date of birth | Not listed in the guide. CR requires it on an employee create. In sandbox `52311591` the BCBA property is `dob`. | requests `date_of_birth`, which does not exist on BCBA, so it is always blank |
 | BCBA gender | `gender_new` | not mapped |
 | BCBA work email | `ucaba_email_address` | `work_email` |
 | BCBA personal email | Contact `email` (assoc 17 / 191) | `email` on the BCBA record → metadata 138069 |
@@ -283,7 +371,10 @@ App Insights: alerts on dead letters and sync errors
 - **Early return:** a failed Case search returns early and skips the BT/RBT search, the BCBA search and the linked recheck (`intakePollerWorkflow.mjs:151-159`).
 - **Missed unlinked records:** an unlinked Yes record edited outside the 15-minute lookback is never found. The linked recheck covers only records with a HubSpot CR id.
 - **Lookback fallback:** if HubSpot rejects the lookback filter, the search silently runs without it.
-- **Timestamp skip:** `integration_last_write` against `hs_lastmodifieddate` is the only skip check, and equal timestamps skip.
+- **Timestamp skip:** `integration_last_write` against `hs_lastmodifieddate` is the only skip check, and equal timestamps skip. It applies to the modified-record search only; the linked recheck enqueues every linked record.
+- **Self-triggering (N2, N3):** the integration's own writebacks move `hs_lastmodifieddate` past `integration_last_write`, so the poller likely re-queues records it just processed. An error writeback sets no `integration_last_write` at all.
+- **Page cap:** one search request of 50 per entity per run, whatever `MAX_*_PER_RUN` says.
+- **Dead-lettered unlinked records** are not found again: the poller's dedupe entry lasts 24 hours and the record falls out of the lookback.
 
 ### Tests (item 14)
 
@@ -291,7 +382,7 @@ Decision (Zeke, 2026-11-16): the existing tests are not architecture evidence. T
 - Each rebuilt test cites the guide row it proves.
 - The current smoke tests stay only as a regression net until each slice replaces them.
 
-Config finding kept from the test read: `employeeCreateFeatures` turns employee create on whenever the portal id is the sandbox id and the flags are unset. `ALLOW_EMPLOYEE_CREATE` and `PUT_ONLY_MODE` are missing from `local.settings.example.json`. Slice 1 covers this.
+Config finding from the test read, fixed in S1a: `employeeCreateFeatures` no longer turns employee create on for the sandbox portal id. A create needs `ALLOW_EMPLOYEE_CREATE=true` and `PUT_ONLY_MODE=false` stated on purpose; both are now in `local.settings.example.json` with blocking defaults.
 
 ### Conditional mechanisms
 
@@ -307,44 +398,51 @@ Config finding kept from the test read: `employeeCreateFeatures` turns employee 
 | Case History Log | Deferred (optional) | Staff need a HubSpot-visible history (Q7). Never use it for change detection; never store raw PHI in it. |
 | Webhooks Journal, beta features | Excluded | — |
 
-## Proposed slices, in order
+## Slices, in order
 
-Each slice: `npm test` passes, STATE and this file are updated, and Zeke approves before any commit or push. Every sandbox check that writes to CR writes to **production CR**, so it needs a test record Zeke chooses and Zeke's go-ahead.
+Each slice: `npm test` passes, this file is updated, and commit or push happens only when Zeke asks. Every sandbox check that writes to CR writes to **production CR**, so it needs a test record Zeke names and Zeke's go-ahead. Ids S1–S6 are kept from the first review round; the order changed.
 
-| Slice | Scope | Files | Risk | Sandbox `52311591` check | Status |
+| Order | Slice | Scope | Files | Risk | Status |
 |---|---|---|---|---|---|
-| 1 Safety | No automatic retry on create. Save the employee CR id after create. `employee_id` in the error writeback. Failures keep hashes and CR id. A dropped `employee_id` writeback is an error. Employee create requires explicit `ALLOW_EMPLOYEE_CREATE` / `PUT_ONLY_MODE` (no portal-id default). | `src/lib/centralReachClient.mjs`, `src/lib/hubspotClient.mjs`, `src/lib/config.mjs`, both workers, `local.settings.example.json`, tests | Low | Force a metadata failure after create; the next run updates the same CR id and creates nothing new | Proposed |
-| 2 Case mappings | Item 3, item 6 (Case side), Case labels whose ids are known | client mappers, client worker, `src/constants/centralReach.mjs`, tests | Medium | Linked test Case sends the corrected fields; a Cleanup-stage Case sends nothing | Proposed |
-| 3 Employee mappings | Item 4; BT role and state label fixes for known ids | employee mapper and validator, CR client, employee worker, tests | Medium | A linked BCBA's work-email change reaches CR; a blank `workday_id` never calls by-external-id | Proposed |
-| 4 Contact routing | Item 10 | webhook routing, client queue handler, new fan-out workflow, tests | Medium | A Guardian phone change reaches the linked Case | Blocked on the sandbox Contact workflow |
-| 5 Cheaper workers | Item 9; remove the log-only coalesce | both workers, webhook, README, tests | Low | No-op run makes zero CR calls | Proposed |
-| 6 Poller | Item 11 | poller workflow, HubSpot client, config, tests | Medium | Poller catches up after a simulated gap and finds an older unlinked Yes record | Proposed |
-| Later | Label removal and the remaining labels (item 5), Care Coordinator, Active Case Load, retry scheduler (item 12), alerts (item 13), docs fixes (Q12) | — | — | — | Blocked (see questions) |
+| 1 | **S1a Stop duplicates** | Create POSTs sent once. Only a clear no-match (404, or 400 with "not found") allows a create; an unclear answer stops. New CR id saved to Cosmos and HubSpot right after the CR write, both entities. Error writebacks carry the id. Fail state keeps the id and last good hashes. Rejected `employee_id` writeback marks the record as an error. Every employee failure writes error status to HubSpot. Controlled create-rejection text. 409 blocks instead of retrying. Employee create needs both flags set on purpose. | `src/lib/centralReachClient.mjs`, `src/lib/hubspotClient.mjs`, `src/lib/config.mjs`, both workers, `local.settings.example.json`, `src/tests/smoke/duplicateSafety.test.mjs`, `employeeCreateFeatures.test.mjs` | High | **Done 2026-11-16, committed.** 101 tests pass. Not yet run against HubSpot or CR. |
+| 2 | **S1b Durable state and retries** | Items 8D, 8F–8I, 12B–12E. No expiry on the link and baseline. A no-op requires a clean prior run. Blocked is its own state. Lease owner check. Portal in messages and state. Scheduled retries with growing delays; failure classes. Read-only GET lookup before a create. | both workers, `cosmosState.mjs`, `mappedState.mjs`, `serviceBusClient.mjs`, queue handlers, `retry.mjs`, tests | High | Approved; next |
+| 3 | **S5 + S6 Poller and call reduction** | Items 9 and 11. Hourly checkpointed poller, daily linked sweep, no-op writes nothing, one-call metadata PATCH, webhook-miss logging, trigger-coverage test, remove the log-only coalesce. | poller workflow, HubSpot client, config, both workers, webhook, README, tests | Medium | Approved |
+| 4 | **S2 Case mappings** | Item 3, item 6 (Case side), the Case label rows the guide requires whose ids are known | client mappers, client worker, `src/constants/centralReach.mjs`, tests | Medium | Approved; waits on Q8, Q9, Q13, Q15, Q16 for their rows |
+| 5 | **S3 Employee mappings** | Item 4; BT role and state label fixes for known ids | employee mapper and validator, CR client, employee worker, tests | Medium | Approved; waits on Q2, Q5, Q23 for their rows |
+| 6 | **S4 Contact routing** | Item 10 | webhook routing, client queue handler, new fan-out workflow, tests | Medium | Blocked on the sandbox Contact workflow |
+| — | **Required before production** | The guide's remaining label rows and label replacement (item 5), Care Coordinator, Active Case Load, the HubSpot failures report and the alert in production, docs fixes (Q12), the production test-record gate (Q26) | — | — | Blocked (see questions) |
+| — | **Optional** | Destination audit, Case History Log (Q7), managed identity, API version migration | — | — | Deferred |
 
 ## Open questions
 
 | # | Question | Owner | Blocks | Status |
 |---|---|---|---|---|
-| Q1 | Maximum acceptable HubSpot → CR delay, and outage recovery time, for normal vs staffing changes? | United Care via Zeke | Poller cadence (item 11) | Open |
+| Q1 | Maximum acceptable HubSpot → CR delay, and outage recovery time, for normal vs staffing changes? | United Care via Zeke | Poller cadence (item 11) | **Answered by Zeke 2026-11-16:** webhooks carry changes; the poller is an hourly safety check. A change no workflow trigger covers can wait up to an hour. |
 | Q2 | BT/RBT `external_system_id`: Workday id sent HS → CR (Zeke 11/16), or CR → HS as G06 says? How do unlinked staff with missing or ambiguous ids get matched? | Zeke / guide | Item 4 (BT) | Open (Workday pending guide confirmation) |
 | Q3 | Outgoing Supervising BCBA with no removal date (guide lines 453 vs 457 conflict); which property holds the removal date; SUB and On Leave handling; how the Grad Permit marker is carried | Zeke / United Care | Item 6 | Open. Outgoing keeps syncing until the guide settles it. |
 | Q4 | Funding labels for Aetna or Cigna in NJ, Aetna in CO, and Other; removal rules for state, location, funding, role, licensure and credentialing labels; how NY and CO commercial insurer options map to the stateless labels; targets for MCD-NJ and Horizon-NJ | United Care | Item 5 | Open |
 | Q5 | CR ids for the six staffing labels (and whether they go under a new Staffing Status group); the Active Case Load metadata field id | Zeke | Items 4, 5 | Open |
-| Q6 | CR API behavior: does a blank core field clear the stored value? How is a label removed? What does a create that returns no id mean? | Zeke (a sandbox write is a production CR write) | Items 5, 8, 12 | Open |
-| Q7 | Destination verification policy (population, max unchecked age, budget). Is a staff-facing Case History Log or formal audit retention required? | Zeke / United Care | Item 13 | Open |
+| Q6 | CR API behavior | Zeke (a sandbox write is a production CR write) | Items 5, 8, 12 | **Partly answered from the CR docs** (see "CentralReach API" above). Still to test on one throwaway CR record: (a) how a metadata value is cleared, and whether an empty value works; (b) whether the labels POST replaces the whole set or only adds; (c) what the 409 on create matches on (external id, email or name); (d) what the by-external-id GET and PUT return when there is no match. Needs Q25. |
+| Q7 | Destination verification policy (population, max unchecked age, budget). Is a staff-facing Case History Log or formal audit retention required? | Zeke / United Care | Item 13 | Partly answered: failures are tracked by the HubSpot report and one Azure alert (Zeke 2026-11-16). A destination audit and the Case History Log stay optional. |
 | Q8 | `crm.objects.owners.read` on the production and sandbox apps | Danny / Zeke | Care Coordinator | Danny adding (11/14) |
-| Q9 | Supervising BCBA metadata `131308`: is the `ongoing_central_reach_provider_supplier` text enough, or must it match a CR provider exactly? | Zeke | Slice 2 | Open |
-| Q10 | Can the HubSpot PATCH on a no-op run go? It changes what `last_sync_at` and the 24-hour report mean. | Zeke | Slice 5 | Open |
-| Q11 | Deployed settings: plan SKU and timeout; queue `maxDeliveryCount`, `lockDuration`, TTL, duplicate detection; Cosmos partition key and TTL; alerts; deployed package and portal id | Grok review (Azure MCP) | Item 12, rollout | Pending Grok |
-| Q12 | Docs fixes: `docs/SOURCE-OF-TRUTH.md` (missing tab), `README.md:93` (coalesce), `README.md:118` (old sandbox ids) | Zeke | Docs only | Open |
-| Q13 | Which property picks the Medicaid vs commercial physician/NPI pair (code uses `n1_what_type_of_insurance`; the guide doesn't name one)? Should both ASD dates be sent to their own targets, as the guide says, instead of one picked by insurance type? Which metadata ids are the general and Medicaid FFS NY ASD fields? | Zeke | Slice 2 | Open |
+| Q9 | Supervising BCBA metadata `131308`: is the `ongoing_central_reach_provider_supplier` text enough, or must it match a CR provider exactly? | Zeke | Slice 2 | Partly answered: the guide names the source and says to match it to the CR provider by name (lines 224, 409). How that match is made is open. |
+| Q10 | Can the HubSpot PATCH on a no-op run go? | Zeke | Slice 5 | **Answered 2026-11-16: yes.** A no-op writes nothing. `last_sync_at` then means "last time something changed or failed", and the 24-hour report shows records actually written. |
+| Q11 | Deployed settings | Grok review (Azure MCP) | Item 12, rollout | **Closed 2026-11-16** with Grok's read (see "Review results"). The function timeout and deployed commit were not visible: Q21. |
+| Q12 | Docs fixes: `docs/SOURCE-OF-TRUTH.md` (missing tab), `README.md:57` (wrong Function App name), `README.md:93` (coalesce), `README.md:118` (old sandbox ids) | Zeke | Docs only | Open |
+| Q13 | Which property picks the Medicaid vs commercial physician/NPI pair (code uses `n1_what_type_of_insurance`; the guide says "by insurance type" without naming one)? Which metadata ids are the general and Medicaid FFS NY ASD fields? | Zeke | Slice 2 | Partly answered: the guide says to send both ASD dates to their own targets (line 242), so the code's pick-one logic goes. The property and the ids are open. |
 | Q14 | Keep the labels the code adds that the guide doesn't list (ALL_CLIENTS `1052619`, ALL_EMPLOYEES `1052618`, CLINICAL `1052643`)? | Zeke | Slices 2–3 | Open |
 | Q15 | `service_address__other`: the guide calls it both the combined Other Location address (line 418) and Address 2 for More Than One Location (lines 234, 419). What decides "BT works at Location #2" for the schedule fields? | Zeke / Sara | Slice 2 | Open |
-| Q16 | `insurance_id_3` Client mapping; `insurance_id_4` property reference | Zeke / guide | Slice 2 | Open |
+| Q16 | `insurance_id_3` Client mapping; `insurance_id_4` property reference | Zeke / guide | Slice 2 | Partly answered: the guide says to omit `insurance_id_4` from requests (lines 252, 255), so slice 2 removes it. `insurance_id_3` mapping is open. |
 | Q17 | CR label ids not in the guide: NJ Client, NJ Employee, Behavior Technician CO / NY / NJ, RBT NJ, BCBA Colorado, BCBA LBA NJ, the funding labels, Carelon client label, Billing Hold Medicaid affiliation. Look them up in the catalog export (`all_labels_v4.json`). | Zeke | Item 5 | Open |
 | Q18 | **Security:** guide lines ~878 and ~1684 contain a one-time credential-share link for the production token and client secret. Remove it from the doc, and rotate the credentials if the link was ever opened by someone who shouldn't have it. | Zeke | — | **Closed 2026-11-16.** It was a secure one-time link; Zeke removed it from both spots in the guide. |
 | Q19 | Guide conflict: the Hybrid design says "No production rollout is authorized" (line ~1849), while Danny 11/14 says "clear to finish". Which governs production workflow creation? | Zeke | Rollout | Open |
 | Q20 | Case `updated_by_integration` is a Yes/No checkbox in production, but the code writes `true`. To be tested (11/13). | Zeke | Slice 2 | Open |
+| Q21 | Function timeout and the deployed package or commit (not visible to Grok). Record the package at the next publish. | Zeke / Azure | Pre-start gate | Open |
+| Q22 | Labels rule | Zeke | Item 5 | **Answered by Zeke 2026-11-16: add only.** Read the contact's current labels (GET), then post the label the guide maps from HubSpot. No removal, because the CR API documents no remove call. This differs from the guide's replace-and-remove rules for Active/Inactive, staffing and Billing Hold labels (lines 244, 245, 282); note it in the guide. The Q6(b) test may show the POST replaces the whole set, which would make removal possible. |
+| Q23 | External System ID for employees | Zeke / Danny | Slice 3 | `workday_id` is confirmed on both BCBA ("Workday ID#") and BT/RBT in sandbox `52311591`, next to a separate `external_system_id`. Zeke 2026-11-16: if the Workday ID can't be confirmed, keep the HubSpot record id for now and note the conflict. Open: with the property confirmed, follow the guide (`workday_id`)? And for a blank `workday_id`, skip and flag the record, or fall back to the record id? CR requires the field on create. |
+| Q24 | Sandbox HubSpot token | Zeke | Sandbox testing | Partly resolved 2026-11-16: `.env` holds the `52311591` token, and it was used for a read-only property check. `local.settings.json` and the Azure app settings still need the `52311591` token. |
+| Q25 | Which throwaway CR record may be used for the Q6 tests, and may this session run them? An **employee** record is enough: the metadata-clear and label tests work on any contact, and earlier test employees already exist in CR. The no-match lookup test is read-only and needs no record. | Zeke | Q6, S1b | Open |
+| Q26 | Production test-record gate: keep the global `INCLUDE_TEST_RECORDS` switch or use a list of record ids? Not needed for sandbox (Zeke 2026-11-16). | Zeke | Production rollout | Deferred to production testing |
 
 ## Dated sizing evidence (not current eligible counts)
 
@@ -367,3 +465,9 @@ A missing id does not prove the person is absent in CR.
 - 2026-11-16, Zeke's decision: existing tests are not architecture evidence. Tests get rebuilt from the guide's sandbox and production requirements, one slice at a time.
 - 2026-11-16, Zeke closed Q18: the credential link was a secure one-time link and is removed from the guide.
 - 2026-11-16: slice approvals and open questions paused until the reviews return. Added the reviewer section. Committed to `architecture-update`.
+- 2026-11-16, reviews verified: Grok (Azure) and GPT Pro (architecture) reports checked claim by claim against `55e0091` and the live guide. Added "Review results", the pre-start gate, findings B1–B9 and N1–N4, and the CentralReach API notes. Q11 closed.
+- 2026-11-16, Zeke's decisions: webhook-first with an hourly safety poller (Q1); a no-op writes nothing (Q10); the deployed app runs sandbox `52311591`; purge the old dead letters; failures tracked by a HubSpot report plus one email alert, to be recorded in the guide; no test-record gate in sandbox; implement the recommendations slice by slice.
+- 2026-11-16, slice 1a implemented, uncommitted: `centralReachClient.mjs`, `hubspotClient.mjs`, `config.mjs`, both workers, `local.settings.example.json`, new `duplicateSafety.test.mjs`, rewritten `employeeCreateFeatures.test.mjs`. `npm test`: 101 pass. Not run against HubSpot, CR or Azure.
+- 2026-11-16, local token check: the token in `local.settings.json` answers as portal `50850427`. No further HubSpot call was made (Q24).
+- 2026-11-16, sandbox check (read-only, `52311591`, `.env` token): `workday_id`, `external_system_id` and `employee_id` exist on BCBA and BT/RBT; the BCBA date-of-birth property is `dob`; the sandbox has 0 BCBA and 0 BT/RBT records. Zeke: earlier test employees in CR are all test records; labels are add-only (Q22). Poller during sandbox testing: off, run on demand through `intakePollerHttpTest`, then hourly once its slice lands. Work paused at Zeke's request after slice 1a.
+- 2026-11-16: slice 1a and this tracker committed and pushed to `architecture-update` at Zeke's request. Nothing deployed.

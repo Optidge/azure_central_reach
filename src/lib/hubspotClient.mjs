@@ -278,14 +278,17 @@ function hubspotMissingProperty(error, propertyName) {
   );
 }
 
+// If HubSpot rejects the CR id property, the rest of the writeback is still saved, but the record
+// is marked as an error: without the id on the record, HubSpot does not show it as linked.
 export async function updateEmployeeWritebackWithFallback({
   objectTypeId,
   recordId,
   properties,
-  employeeIdProperty = "employee_id"
+  employeeIdProperty = "employee_id",
+  updateProperties = updateObjectProperties
 }) {
   try {
-    await updateObjectProperties(objectTypeId, recordId, properties);
+    await updateProperties(objectTypeId, recordId, properties);
     return { fallbackUsed: false, removedProperties: [] };
   } catch (error) {
     const propertyName = String(employeeIdProperty || "employee_id").trim() || "employee_id";
@@ -293,9 +296,13 @@ export async function updateEmployeeWritebackWithFallback({
       Object.prototype.hasOwnProperty.call(properties || {}, propertyName) &&
       hubspotMissingProperty(error, propertyName)
     ) {
-      const fallbackProperties = { ...(properties || {}) };
+      const fallbackProperties = {
+        ...(properties || {}),
+        last_sync_status: "error",
+        last_sync_error: `HubSpot rejected the ${propertyName} writeback. The CentralReach id is not stored on this record.`
+      };
       delete fallbackProperties[propertyName];
-      await updateObjectProperties(objectTypeId, recordId, fallbackProperties);
+      await updateProperties(objectTypeId, recordId, fallbackProperties);
       return { fallbackUsed: true, removedProperties: [propertyName] };
     }
     throw error;

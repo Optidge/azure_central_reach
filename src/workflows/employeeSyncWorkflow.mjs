@@ -176,6 +176,20 @@ function buildCentralReachContactUrl(contactId) {
   return `https://members.centralreach.com/#contacts/details/?id=${id}`;
 }
 
+function linkProperties({ employeeType, employeeIdProperty, contactId }) {
+  if (!contactId) {
+    return {};
+  }
+  const linkProperty =
+    employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
+      ? "central_reach_link_to_rt_rbt"
+      : "central_reach_record_link";
+  return {
+    [employeeIdProperty]: String(contactId),
+    [linkProperty]: buildCentralReachContactUrl(contactId)
+  };
+}
+
 function buildWritebackPropertyPatch({
   employeeType,
   employeeIdProperty,
@@ -197,15 +211,7 @@ function buildWritebackPropertyPatch({
   if (payloadHash && status !== "error") {
     base.last_sync_hash = payloadHash;
   }
-  if (contactId) {
-    base[employeeIdProperty] = String(contactId);
-    if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
-      base.central_reach_link_to_rt_rbt = buildCentralReachContactUrl(contactId);
-    } else {
-      base.central_reach_record_link = buildCentralReachContactUrl(contactId);
-    }
-  }
-  return base;
+  return { ...base, ...linkProperties({ employeeType, employeeIdProperty, contactId }) };
 }
 
 function getWorkflowStateId(employeeType, recordId) {
@@ -266,7 +272,11 @@ export async function runEmployeeSyncWorkflow(
 
   const stateId = getWorkflowStateId(normalizedEmployeeType, normalizedRecordId);
   let lockHeld = false;
+  // Known CR id and last good field hashes. A failure must keep both (Requirement 9; Hybrid
+  // design: "save the successful comparison baseline only after the required writes succeed").
   let linkedContactId = null;
+  let hubspotHasContactId = false;
+  let priorFieldHashes = null;
   try {
     const locked = await claimRecordLock(claimLock, {
       pk: "sync-lock:employee",
@@ -302,6 +312,9 @@ export async function runEmployeeSyncWorkflow(
     const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
     const existingContactId =
       hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
+    linkedContactId = existingContactId;
+    hubspotHasContactId = Boolean(hubspotContactId);
+    priorFieldHashes = prior?.data?.fieldHashes || null;
 
     const eligibility = employeeSyncEligibility({
       properties: hubspotProps,
@@ -374,7 +387,7 @@ export async function runEmployeeSyncWorkflow(
 
     const payloadHash = digestPayload(payloadHashInput);
     const nextFieldHashes = fieldHashes(payloadHashInput);
-    const previousFieldHashes = prior?.data?.fieldHashes || null;
+    const previousFieldHashes = priorFieldHashes;
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
     const previousHash = String(hubspotProps?.last_sync_hash || "");
     const canNoopByHash = Boolean(previousHash && previousHash === payloadHash && existingContactId);
@@ -442,6 +455,47 @@ export async function runEmployeeSyncWorkflow(
     linkedContactId = contactId;
     let metadataSyncSummary = null;
 
+    // A CR id that HubSpot does not hold yet (a create, or a match by external id) is saved
+    // before any later step can fail: first in Cosmos, then on the HubSpot record.
+    if (contactId && !hubspotHasContactId) {
+      await saveState({
+        pk: EMPLOYEE_STATE_PK,
+        id: stateId,
+        type: "pending_link",
+        ttlSeconds: config.ttl.successTtlSeconds,
+        data: {
+          workflow: "employeeSync",
+          employeeType: normalizedEmployeeType,
+          crContactId: String(contactId),
+          fieldHashes: previousFieldHashes,
+          updatedAt: new Date().toISOString()
+        }
+      });
+      try {
+        await writeEmployeeWriteback({
+          objectTypeId,
+          recordId: normalizedRecordId,
+          employeeIdProperty,
+          properties: filterWritebackProperties(
+            linkProperties({ employeeType: normalizedEmployeeType, employeeIdProperty, contactId }),
+            { kind: "employee", idProperty: employeeIdProperty }
+          )
+        });
+      } catch (linkError) {
+        // Not fatal: Cosmos holds the id and the final writeback sends it again.
+        logger(
+          "error",
+          "Employee CR id writeback failed after the CentralReach write.",
+          buildError({
+            workflow: "employeeSync",
+            stage: "writeLinkAfterUpsert",
+            error: linkError,
+            recordId: normalizedRecordId
+          })
+        );
+      }
+    }
+
     const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
     if (contactId && (Object.keys(metadataForCompare).length > 0 || labelIds.length > 0)) {
       const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadataForCompare);
@@ -458,19 +512,6 @@ export async function runEmployeeSyncWorkflow(
           failedCount: metadataSyncSummary.failedCount,
           failedFieldIds: metadataSyncSummary.failedFieldIds || [],
           invocationId: context?.invocationId || null
-        });
-        await writeEmployeeWriteback({
-          objectTypeId,
-          recordId: normalizedRecordId,
-          employeeIdProperty,
-          properties: filterWritebackProperties(
-            {
-              last_sync_status: "error",
-              last_sync_at: new Date().toISOString(),
-              last_sync_error: `MetadataWriteFailed fields: ${(metadataSyncSummary.failedFieldIds || []).join(",")}`.slice(0, 500)
-            },
-            { kind: "employee", idProperty: employeeIdProperty }
-          )
         });
         const failed = new Error("MetadataWriteFailed");
         failed.code = "METADATA_WRITE_FAILED";
@@ -589,19 +630,67 @@ export async function runEmployeeSyncWorkflow(
       })
     );
 
+    // Every failure is visible on the HubSpot record, so the failures report is complete.
+    // The CR id goes with it when HubSpot does not hold it yet.
     try {
+      const failedFieldIds = Array.isArray(error?.failedFieldIds) ? error.failedFieldIds : [];
+      await writeEmployeeWriteback({
+        objectTypeId,
+        recordId: normalizedRecordId,
+        employeeIdProperty,
+        properties: filterWritebackProperties(
+          {
+            last_sync_status: "error",
+            last_sync_at: new Date().toISOString(),
+            last_sync_error: (failedFieldIds.length
+              ? `MetadataWriteFailed fields: ${failedFieldIds.join(",")}`
+              : String(error?.message || "Employee sync failed")
+            ).slice(0, 500),
+            ...(linkedContactId && !hubspotHasContactId
+              ? linkProperties({
+                  employeeType: normalizedEmployeeType,
+                  employeeIdProperty,
+                  contactId: linkedContactId
+                })
+              : {})
+          },
+          { kind: "employee", idProperty: employeeIdProperty }
+        )
+      });
+    } catch (writebackError) {
+      logger(
+        "error",
+        "Employee sync error writeback failed.",
+        buildError({
+          workflow: "employeeSync",
+          stage: "writeErrorWriteback",
+          error: writebackError,
+          recordId: normalizedRecordId
+        })
+      );
+    }
+
+    // The fail state keeps the CR id and the last good field hashes, including when this run
+    // failed before it read them. A state that carries either lives as long as a success state,
+    // so a failure never shortens the life of the link.
+    try {
+      const stored = (await readPriorSyncState(readState, EMPLOYEE_STATE_PK, stateId))?.data;
+      const keptContactId = linkedContactId || stored?.crContactId || null;
+      const keptFieldHashes = priorFieldHashes || stored?.fieldHashes || null;
       await saveState({
         pk: EMPLOYEE_STATE_PK,
-        id: getWorkflowStateId(normalizedEmployeeType, normalizedRecordId),
+        id: stateId,
         type: STATE_TYPES.FAIL,
-        ttlSeconds: config.ttl.failTtlSeconds,
+        ttlSeconds:
+          keptContactId || keptFieldHashes ? config.ttl.successTtlSeconds : config.ttl.failTtlSeconds,
         data: {
           workflow: "employeeSync",
           employeeType: normalizedEmployeeType,
           status: "error",
           errorMessage: String(error?.message || "Employee sync failed").slice(0, 500),
           failedFieldIds: error?.failedFieldIds || [],
-          crContactId: linkedContactId,
+          crContactId: keptContactId,
+          fieldHashes: keptFieldHashes,
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
           invocationId: context?.invocationId || null,
           updatedAt: new Date().toISOString()
