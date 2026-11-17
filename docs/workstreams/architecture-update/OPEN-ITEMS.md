@@ -2,7 +2,7 @@
 
 Dated 2026-11-16. This is the short list. The detail, evidence and history for each id are in [ARCHITECTURE-REVIEW.md](ARCHITECTURE-REVIEW.md) (the tracker). Ids (`Q…`, `S…`, item numbers) match the tracker.
 
-State of the work: slice 1a (`5c4ee8f`) and the employee changes of 2026-11-16 are committed and pushed on `architecture-update`; `npm test` passes (120). Nothing is deployed. Nothing has been written to Central Reach (CR), HubSpot or Azure from this work.
+State of the work: slice 1a (`5c4ee8f`) and the employee changes of 2026-11-16 (`e1db83a`) are committed and pushed on `architecture-update`; `npm test` passes (120). Nothing is deployed. Nothing has been written to Central Reach (CR), HubSpot or Azure from this work.
 
 ## 1. Decisions waiting on Zeke
 
