@@ -48,6 +48,7 @@ const BT_RBT_PROPERTIES = [
   "last_sync_error",
   "entered_in_centralreach",
   "test_record",
+  "workday_id",
   "bt_name",
   "date_of_birth",
   "gender",
@@ -60,6 +61,7 @@ const BT_RBT_PROPERTIES = [
   "postal_code_home",
   "employee_phone",
   "bt_rbt_type",
+  "active_cases_count",
   "street_address__work_",
   "city__work_",
   "state__work_",
@@ -79,6 +81,7 @@ const BCBA_PROPERTIES = [
   "last_sync_error",
   "entered_in_centralreach",
   "test_record",
+  "workday_id",
   "bcba_name",
   "date_of_birth",
   "email",
@@ -122,6 +125,7 @@ function knownMetadataFieldIds(employeeType) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return [
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS,
+      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.ACTIVE_CASE_COUNT,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD
     ];
   }
@@ -356,7 +360,9 @@ export async function runEmployeeSyncWorkflow(
         invocationId: context?.invocationId || null
       });
     }
-    const validation = validatePayload(mapped.employeePayload);
+    const validation = validatePayload(mapped.employeePayload, {
+      linked: Boolean(existingContactId)
+    });
     if (!validation.isValid) {
       throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
     }
@@ -365,7 +371,18 @@ export async function runEmployeeSyncWorkflow(
 
     if (existingContactId) {
       const existingCrEmployee = await fetchCrEmployeeById(existingContactId);
-      outboundPayload = preserveIdentifiers(mapped.employeePayload, existingCrEmployee).payload;
+      const preserved = preserveIdentifiers(mapped.employeePayload, existingCrEmployee);
+      outboundPayload = preserved.payload;
+      if (preserved.externalSystemIdMismatch) {
+        // CR keeps its own id; the Workday ID in HubSpot no longer matches it and needs a human look.
+        logger("warn", "HubSpot workday_id differs from the Central Reach External System ID.", {
+          workflow: "employeeSync",
+          recordId: normalizedRecordId,
+          employeeType: normalizedEmployeeType,
+          crContactId: existingContactId,
+          invocationId: context?.invocationId || null
+        });
+      }
     }
 
     const omitFieldIds = mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
@@ -452,6 +469,15 @@ export async function runEmployeeSyncWorkflow(
 
     const status = syncResult.operation === "blocked" ? "blocked" : "success";
     const contactId = syncResult.crContactId || existingContactId || null;
+    if (syncResult.usedDefaultDateOfBirth) {
+      logger("warn", "Employee created in Central Reach with the placeholder date of birth.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        crContactId: contactId,
+        invocationId: context?.invocationId || null
+      });
+    }
     linkedContactId = contactId;
     let metadataSyncSummary = null;
 

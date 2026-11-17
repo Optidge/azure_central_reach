@@ -20,6 +20,7 @@ test("BT/RBT mapping builds expected safe payload", () => {
       id: "r1",
       properties: {
         hs_object_id: "r1",
+        workday_id: "1000001",
         bt_name: "Alex Rivera",
         date_of_birth: "2000-01-02",
         gender: "male",
@@ -35,7 +36,7 @@ test("BT/RBT mapping builds expected safe payload", () => {
     }
   });
 
-  assert.equal(mapped.employeePayload.externalSystemId, "r1");
+  assert.equal(mapped.employeePayload.externalSystemId, "1000001");
   assert.equal(mapped.employeePayload.firstName, "Alex");
   assert.equal(mapped.employeePayload.lastName, "Rivera");
   assert.equal(mapped.employeePayload.primaryEmail, "alex@example.com");
@@ -53,6 +54,7 @@ test("BCBA mapping builds expected payload and metadata", () => {
       id: "r2",
       properties: {
         hs_object_id: "r2",
+        workday_id: "1000002",
         bcba_name: "Pat Morgan",
         date_of_birth: "1990-10-20",
         work_email: "pat@work.test",
@@ -66,7 +68,7 @@ test("BCBA mapping builds expected payload and metadata", () => {
     }
   });
 
-  assert.equal(mapped.employeePayload.externalSystemId, "r2");
+  assert.equal(mapped.employeePayload.externalSystemId, "1000002");
   assert.equal(mapped.employeePayload.primaryEmail, "pat@work.test");
   assert.equal(mapped.employeeFamily, "bcba");
   assert.equal(Object.keys(mapped.metadataValues).length > 0, true);

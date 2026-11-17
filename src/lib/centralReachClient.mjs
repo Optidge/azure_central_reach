@@ -1,6 +1,9 @@
 import axios from "axios";
 import { withRetry } from "./retry.mjs";
-import { CENTRAL_REACH_METADATA_FIELD_TYPES } from "../constants/centralReach.mjs";
+import {
+  CENTRAL_REACH_METADATA_FIELD_TYPES,
+  EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH
+} from "../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
 import { clientWritePlan } from "./mappedState.mjs";
 
@@ -291,7 +294,16 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
   const existingPrimaryEmail =
     existingEmployee?.primaryEmail || existingEmployee?.employee?.primaryEmail || null;
 
-  if (existingExternalSystemId) {
+  // Central Reach rejects an update whose External System ID differs from the stored one (400,
+  // tested 2026-11-16). The stored id is always sent; HubSpot's Workday ID is used only when CR
+  // holds none.
+  const ownExternalSystemId = String(nextPayload.externalSystemId ?? "").trim();
+  const keepExistingExternalSystemId = Boolean(existingExternalSystemId);
+  const externalSystemIdMismatch =
+    keepExistingExternalSystemId &&
+    ownExternalSystemId !== "" &&
+    ownExternalSystemId !== String(existingExternalSystemId).trim();
+  if (keepExistingExternalSystemId) {
     nextPayload.externalSystemId = existingExternalSystemId;
   }
   if (existingPrimaryEmail) {
@@ -300,7 +312,8 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
 
   return {
     payload: nextPayload,
-    preservedExternalSystemId: Boolean(existingExternalSystemId),
+    preservedExternalSystemId: keepExistingExternalSystemId,
+    externalSystemIdMismatch,
     preservedPrimaryEmail: Boolean(existingPrimaryEmail)
   };
 }
@@ -350,6 +363,11 @@ async function createEmployee(payload) {
   if (contactForm) {
     createPayload.ContactForm = contactForm;
   }
+  // Create only: an update never sends the placeholder, so it cannot replace a real date in CR.
+  const usedDefaultDateOfBirth = String(createPayload.dateOfBirth ?? "").trim() === "";
+  if (usedDefaultDateOfBirth) {
+    createPayload.dateOfBirth = EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH;
+  }
 
   let response;
   try {
@@ -368,7 +386,8 @@ async function createEmployee(payload) {
 
   return {
     operation: "create",
-    crContactId
+    crContactId,
+    usedDefaultDateOfBirth
   };
 }
 
@@ -572,6 +591,13 @@ export async function createOrUpdateEmployee(payload) {
 
   if (existingContactId) {
     return updateEmployeeByContactId(existingContactId, employeePayload);
+  }
+
+  // A lookup or create with no External System ID could match or duplicate the wrong employee.
+  if (String(employeePayload.externalSystemId ?? "").trim() === "") {
+    const missing = new Error("CentralReach employee lookup needs an External System ID");
+    missing.code = "CR_EXTERNAL_ID_REQUIRED";
+    throw missing;
   }
 
   const byExternalResult = await updateEmployeeByExternalSystemId(employeePayload);

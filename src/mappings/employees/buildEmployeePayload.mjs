@@ -134,6 +134,14 @@ function mapGender(value) {
   return null;
 }
 
+// Guide [GER-BCBA] and [GER-BT], "External System ID · HS → CR": the Workday ID is the Central Reach
+// External System ID. It is set on a create. Central Reach rejects a changed id on an update, so a
+// linked employee always keeps the id CR holds (see buildEmployeePayloadForContactId).
+function externalSystemIdFields(properties) {
+  const workdayId = trimOrNull(properties.workday_id);
+  return workdayId ? { externalSystemId: workdayId } : {};
+}
+
 function buildHubspotRecordUrl({ portalId, objectTypeId, recordId }) {
   const portal = String(portalId || "").trim();
   const type = String(objectTypeId || "").trim();
@@ -194,7 +202,7 @@ function buildBtRbtPayload({ record, config }) {
   const btRbtType = String(properties.bt_rbt_type || "").trim().toUpperCase() || null;
 
   const employeePayload = {
-    externalSystemId: String(properties.hs_object_id || record?.id || ""),
+    ...externalSystemIdFields(properties),
     firstName,
     lastName,
     gender: mapGender(properties.gender),
@@ -230,6 +238,11 @@ function buildBtRbtPayload({ record, config }) {
   if (workAddress) {
     metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS] = workAddress;
   }
+  // Guide [GER-BT] "Active Case Load": display-only, from active_cases_count. Zero is a valid value.
+  const activeCaseCount = trimOrNull(properties.active_cases_count);
+  if (activeCaseCount !== null) {
+    metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.ACTIVE_CASE_COUNT] = activeCaseCount;
+  }
   if (hubspotRecordUrl) {
     metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD] =
       hubspotRecordUrl;
@@ -253,7 +266,7 @@ function buildBcbaPayload({ record, config }) {
   const stateCode = normalizeStateCode(properties.home_state);
 
   const employeePayload = {
-    externalSystemId: String(properties.hs_object_id || record?.id || ""),
+    ...externalSystemIdFields(properties),
     firstName,
     lastName,
     dateOfBirth: normalizeDate(properties.date_of_birth),
