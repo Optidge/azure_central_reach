@@ -1,375 +1,537 @@
-# Build plan — HubSpot → Azure → Central Reach
+# Build plan — HubSpot → Azure → CentralReach
 
-> **To be rewritten (Zeke, 2026-11-18).** The stage order below is out of date. Decided: all code stages are built first (stages 1, 4, 5, 6, 7 and 8 as numbered here), then deploy and full sandbox testing with test records only (`sandbox_test_field` = true); the builder is Grok 4.6 on high; United Care's answers block production only. See the 2026-11-18 entries in the [tracker](ARCHITECTURE-REVIEW.md) log and [guide-review-2026-11-18.md](guide-review-2026-11-18.md). Do not hand this file to a builder until it is rewritten.
+Final plan, dated 2026-11-18. It replaces the draft of 2026-11-17. Branch `architecture-update`, code at `be841e3`, `npm test` 120 pass.
 
-Dated 2026-11-17. Branch `architecture-update`, code at `e1db83a`, `npm test` 120 pass. **The build is paused. Nothing in this file is permission to change code, Azure, HubSpot or Central Reach (CR). Each stage starts only on Zeke's go-ahead.**
+This file is written so a builder with no history of the project can build from it. Every rule is stated here in plain words, with the guide section it comes from, the files it touches and the test that proves it.
 
-This is the full list of steps from today to production, each with an owner and a "done when". Decisions and evidence stay in [ARCHITECTURE-REVIEW.md](ARCHITECTURE-REVIEW.md) (the tracker) and [OPEN-ITEMS.md](OPEN-ITEMS.md); ids (`Q…`, `V…`, `S…`) match them. The guide (Google Doc `1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk`) wins over this file and over the code.
+- **Authority.** The integration guide (Google Doc `1TnUrUUUWuTQv9hLOaZdmM9YD9va2eKXIoAtw_puiYyk`) is the business-rule authority. If the guide and this file disagree, stop and tell Zeke. A read-only text copy of the guide sections the build uses is saved next to this file as `guide-extract-2026-11-18.md` (Stage 0, step 0.3); the live guide wins over the copy.
+- **Permission.** Zeke asked for the full build on 2026-11-18. This file is permission to change code and tests in this repo only. It is not permission to commit, push, deploy, start the app, or write to Azure, HubSpot or CentralReach. Each of those needs Zeke's go-ahead at the time.
+- **History.** Decisions, evidence and the reasons behind each rule are in [ARCHITECTURE-REVIEW.md](ARCHITECTURE-REVIEW.md) (the tracker) and [OPEN-ITEMS.md](OPEN-ITEMS.md). A builder does not need to read them. Section 16 maps each step to its tracker ID for the people who keep the tracker.
 
 ## 1. Summary
 
-- The approved design does not change: webhooks do the work, an hourly poller and a daily sweep are the safety checks, Cosmos keeps the link and the last synced values, failures show in a HubSpot report and one Azure email alert.
-- The work is 9 stages. Stages 1 to 3 get the sandbox running safely against production CR with test records only. Stages 4 to 8 finish the design. Stage 9 is production.
-- The employee create rule in this plan is the **temporary id** rule (Q35, Zeke 2026-11-17), not Danny's hold: the integration creates the employee when Entered in CentralReach = Yes and sends `workday_id` as the External System ID, or the HubSpot record id when `workday_id` is blank. Staff replace the temporary id with the Workday ID on the CR profile.
-- Five decisions from Zeke are needed before code starts (section 4, D1 to D5). Each has a default, so a one-line "defaults are fine" is enough.
+- **Order.** Prep, then all six code stages, then the final sandbox test plan and a deploy while the app is Stopped, then full sandbox testing, then production readiness.
+- **Design.** Unchanged and approved: HubSpot workflows send a signed, ID-only webhook; Azure queues the record; a worker reads HubSpot, checks the record may sync, compares it with the last synced copy, writes to CentralReach only what changed, and writes the result back to HubSpot. An hourly poller and a daily sweep are safety checks. Cosmos holds the link and the last synced values. Failures show in a HubSpot report and one Azure email alert. No new Azure resource is needed.
+- **Builder.** Grok 4.6 (high), run by Zeke in Cursor, or from the command line through `cursor-agent` (section 14). Claude owns this plan, reviews every stage, and keeps the tracker and guide current.
+- **What blocks what.** Nothing blocks the build. Only United Care's answers block production (section 12).
 
-| Stage | What | Main owner | Ends with |
+| Stage | What | Who | Ends with |
 |---|---|---|---|
-| 0 | Prep: decisions, HubSpot test records and workflows, Azure baseline | Zeke, Grok | Go-ahead for Stage 1 |
-| 1 | Code slice S1b-1: create and identity checks | Claude | Commit on `architecture-update` |
-| 2 | Deploy while the app is Stopped (gate A) | Grok | Build deployed, app still Stopped |
-| 3 | First sandbox start and test script (gate B). The script here is a draft; the final sandbox testing plan is written after the build (Zeke, 2026-11-18) | Zeke, Grok, Claude | Final test plan agreed; tests passed and recorded |
-| 4 | Code slice S1b-2: durable state and retries | Claude | Commit, deploy, re-test |
-| 5 | Code slices S5 + S6: poller and fewer calls | Claude | Commit, deploy, poller test |
-| 6 | Code slice S2: Case mappings | Claude | Commit, deploy, Case test |
-| 7 | Code slice S3: employee mappings | Claude | Commit, deploy, employee test |
-| 8 | Code slice S4: Contact routing | Claude | Commit, deploy, Contact test |
+| 0 | Prep: decisions recorded, guide aligned, guide copy saved, baseline test run | Claude, Zeke | Stage 1 starts |
+| 1 | Create and identity checks | Grok builds, Claude reviews | Reviewed diff, `npm test` green |
+| 2 | Durable state and retries | same | same |
+| 3 | Poller and fewer calls | same | same |
+| 4 | Case mappings | same | same |
+| 5 | Employee mappings | same | same |
+| 6 | Contact routing | same | same |
+| 7 | Final sandbox test plan; deploy while the app is Stopped | Claude writes, Zeke agrees; Grok deploys | Plan agreed; build deployed; app still Stopped |
+| 8 | Full sandbox testing with test records only | Zeke, Grok, Claude | Every test recorded |
 | 9 | Production readiness and go-live | Zeke, Danny, Grok | Production running |
 
 ## 2. Who does what
 
-| Owner | Does | Does not |
+| Who | Does | Does not |
 |---|---|---|
-| **Zeke** | Every decision and go-ahead. HubSpot setup (workflows, segments, reports, test records). CR screen actions. Secrets in Azure and local settings. Commit and push requests. | — |
-| **Claude** (this repo session) | All code and tests in this repo, one slice at a time, one writer. Tracker and OPEN-ITEMS upkeep. Read-only HubSpot and CR checks with Zeke's go-ahead. Guide edits only when Zeke asks, exact text shown first. | No Azure changes. No deploys. No CR or HubSpot writes. |
-| **Claude subagents** | Read-only work in parallel: an independent review of each slice's diff (Opus when Zeke asks), label-id lookups in the catalog export, the traceability table. | No code edits. Two writers never touch the repo at once. |
-| **Grok** (Azure MCP, local repo) | Azure reads, app settings that are not secrets, queue purges, deploys, start and stop, log and queue checks during tests, the email alert. An independent read-only code review and `npm test` per slice. | No code edits. Every Azure write needs Zeke's go-ahead in that session. No Service Bus send, receive or replay except the one alert test in Stage 3. |
-| **Danny / United Care** | Answers in OPEN-ITEMS section 3. HubSpot reminders and escalations for the Workday ID (native HubSpot, no integration code). | — |
+| **Zeke** | Every decision and go-ahead. HubSpot setup (workflows, lists, views, test records). CentralReach screen actions. Secrets in Azure and local settings. Says when to commit and push. | — |
+| **Grok** (builder) | Tests first, then code, one stage at a time, in this repo. Runs `npm test`. Returns a stage report (section 14). Azure steps in Stages 7 to 9, each on Zeke's go-ahead. | No commit, push, deploy or live API call during a code stage. |
+| **Claude** | This plan, the tracker, OPEN-ITEMS, the guide (on Zeke's request, text shown first). Reviews each stage's diff and re-runs `npm test`. Read-only HubSpot and CentralReach checks with Zeke's go-ahead. | No Azure changes. No CentralReach or HubSpot writes. |
+| **Reviewer subagent** (Opus, when Zeke asks) | An independent read of a stage's diff against this plan. | No code edits. |
+| **Danny / United Care** | Answers in section 12. | — |
 
-Rules that apply to every step:
+### Hard stops for everyone
 
-- CR has no sandbox. A sandbox test that creates or updates anything in CR is a **production CR write** and needs a test record Zeke names and his go-ahead.
-- Never use portal `246184070`. Sandbox is `52311591`, production is `50317927`.
-- No secret values, patient data or staff data in chat, logs or docs.
-- Per slice: tests first from the guide rows, then the code, then `npm test`, then two reviews (subagent and Grok), then Zeke's go-ahead to commit. The pre-commit block in `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md` runs before every commit; files are staged by path.
+1. **CentralReach has no sandbox.** Every CentralReach write is a production write. None is made without Zeke's go-ahead and a test record he names.
+2. **No live calls during the build.** Code stages are proven by offline tests only. Do not run `func start`, do not start or deploy `centralreachserverless`, do not run any script that calls HubSpot, CentralReach, Service Bus or Cosmos.
+3. **Portals.** Sandbox `52311591`. Production `50317927`. Retired `50850427`. Never use `246184070`.
+4. **Secrets and personal data.** Never print, log, commit or paste secrets, tokens, `.env`, `local.settings.json`, `.claude/`, patient or staff data, or the body of a provider error. Do not open `.env` or `local.settings.json`. Log field names, never values. A CentralReach employee response contains sensitive fields; never log a response body.
+5. **Existing CentralReach employees** are not created, linked or updated for now. This includes the six production BT/RBT records whose `employee_id` was typed by hand.
+6. **Git.** Commit and push only when Zeke says. Stage files by path. No force-push. No checkout, fetch, pull, stash, reset or branch switch. Never act on PR #2 or PR #3. Run the pre-commit block in `docs/workstreams/session-run/GIT-SESSION-PLAYBOOK.md` before every commit.
+7. **Guide edits** only when Zeke asks: exact text and place shown first, Docs connector only, insert-only, revision-guarded, re-read before and after.
 
-## 3. The rules Stage 1 builds
+## 3. What a builder needs to know first
 
-These restate decisions already made. Tracker ids in brackets.
+### The system in short
 
-**Sync status (Q31).** `last_sync_status` holds one of three values.
+```
+HubSpot workflow (Case / BCBA / BT/RBT; Contact in Stage 6)
+        | signed webhook: record ID + object type only
+        v
+src/functions/hubspotWebhook.mjs --> Service Bus: client-sync-queue / employee-sync-queue
+                                         ^
+src/workflows/intakePollerWorkflow.mjs (hourly poller, daily sweep) --+
+        |
+src/functions/processClientQueue.mjs   --> src/workflows/clientSyncWorkflow.mjs
+src/functions/processEmployeeQueue.mjs --> src/workflows/employeeSyncWorkflow.mjs
+        |
+worker: lock -> read HubSpot -> MAY THIS RECORD SYNC? (src/lib/syncEligibility.mjs)
+        -> map (src/mappings/...) -> compare with the saved copy (src/lib/mappedState.mjs, Cosmos)
+        -> nothing changed: stop, write nothing
+        -> changed: CentralReach writes (src/lib/centralReachClient.mjs)
+        -> save the new copy (src/lib/cosmosState.mjs) -> HubSpot status writeback (src/lib/hubspotClient.mjs)
+```
+
+### Words used in this plan
+
+| Word | Meaning |
+|---|---|
+| Case | A HubSpot Deal. One Case becomes one CentralReach **client**. |
+| BCBA, BT/RBT | HubSpot custom objects. Each record becomes one CentralReach **employee**. |
+| CR | CentralReach. |
+| CR ID | CentralReach `contactId`. Stored in HubSpot `client_id_number` (Case) or `employee_id` (BCBA, BT/RBT). |
+| Linked | HubSpot holds a CR ID for the record, or Cosmos holds one from an earlier run. |
+| External System ID | A CentralReach profile field. For a client it is the HubSpot Case record ID. For an employee it is the Workday ID, or the HubSpot record ID as a temporary value until the Workday ID exists. |
+| Entered in CentralReach | The HubSpot property that asks for a create: Case `enter_in_central_reach` (multi-checkbox, must contain `Yes`); BCBA and BT/RBT `entered_in_centralreach` (must equal `Yes`). |
+| Checklist | `btrbt_in_cr_checklist` (BT/RBT) and `bcba_in_cr_checklist` (BCBA), multi-checkbox. The option shown as "External System ID (Workday)" is stored as `External System ID`. "Ticked" means the property contains that stored value. |
+| Status | HubSpot `last_sync_status`, with the reason in `last_sync_error`. |
+
+### IDs
+
+| | Sandbox `52311591` | Production `50317927` |
+|---|---|---|
+| Case (Deal) | `0-3` | `0-3` |
+| BCBA | `2-72890322` | `2-48354212` |
+| BT/RBT | `2-72890325` | `2-48354559` |
+| Contact | `0-1` | `0-1` |
+| Case → BCBA: Supervising / IA / RE | 247 / 223 / 229 | 82 / 86 / 145 |
+| Case → BT/RBT: Primary BT 1 / Primary BT 2 | 238 / 240 | 76 / 143 |
+| BCBA → Contact | 191 | 17 |
+| Case → Guardian Contact | 3 | 3 |
+| Association types that never sync (unlabeled, Potential, Previous IA) | 164, 187, 251, 249, 242, 218, 235 | 20, 64, 153, 80, 74, 164, 286 |
+
+The four Case stages that never sync, in both portals: `1383894301`, `1383894303`, `1383894302`, `1332962645`. The full crosswalk is guide section `[SCURRENT]`.
+
+### How the code is tested
+
+- `npm test` runs `node --test`. Tests are `src/tests/smoke/*.test.mjs`.
+- Workflows take a `dependencies` argument, so tests pass in fakes for HubSpot, CentralReach, Cosmos and Service Bus. No test calls a live service.
+- Every new test title starts with the guide code it proves, for example `[G17] a blank workday_id creates with the HubSpot record ID`.
+- The 120 existing tests are a safety net only. When a rule in this plan changes what an old test asserts, change the old test and say so in the stage report.
+
+## 4. Decisions this plan is built on
+
+All by Zeke unless named. "For now" means it may change after United Care answers; the code keeps each rule in one place so a change is small.
+
+| # | Decision | Date |
+|---|---|---|
+| 1 | Webhooks first; an hourly poller and a daily sweep as safety checks; a record with no change writes nothing. | 11/16 |
+| 2 | Status is `success`, `error` or `waiting`. `blocked` is retired. | 11/17, for now |
+| 3 | Employee create: when Entered in CentralReach = Yes, the integration creates the employee and sends `workday_id` as the External System ID, or the HubSpot record ID (plain, no prefix) as a temporary ID when `workday_id` is blank. Staff later replace the temporary ID with the Workday ID on the CR profile and tick the checklist. Same rule for BT/RBT and BCBA. | 11/17 and 11/18, for now |
+| 4 | Right after a temporary-ID create the status is `waiting`. Field and label updates keep going while it is `waiting`. Checklist ticked while CR still holds the temporary ID is `error`. A second HubSpot record with the same Workday ID is `error`. | 11/18 |
+| 5 | An unlinked record whose Workday ID finds an employee already in CR: no link, no CR write, `waiting`. A match on the record's own HubSpot ID still links, because that is its own earlier create. | 11/18 |
+| 6 | A linked record whose HubSpot ID and CR ID are both filled and differ: no CR write, `error`. | 11/17, for now |
+| 7 | Record gate in code: one app setting names a HubSpot checkbox; the workers and the poller skip every record where it is not true. Sandbox value: `sandbox_test_field`. Sandbox test records leave `test_record` blank. | 11/18 |
+| 8 | The create signal stays Entered in CentralReach = Yes, kept in one place in code. | 11/18, for now |
+| 9 | Labels are add-only until the CentralReach label test is run. The staffing label row and the Active / Inactive label are built after that test, because a record holds one of each at a time and add-only would leave the old one in place. | 11/17, 11/18 |
+| 10 | Sandbox testing uses only records with `sandbox_test_field` = true. The employees and clients they create in production CR are those same test records. | 11/18 |
+| 11 | Existing CR employees are not created, linked or updated for now. | 11/17 |
+| 12 | The final sandbox test plan is written and agreed after the build. | 11/18 |
+
+### Checked on 2026-11-18 (read-only, with Zeke's go-ahead)
+
+A sample of 100 of the 475 production Cases that hold a CR Client ID was read from CentralReach. GET requests only; counts only.
+
+| Finding | Effect on this plan |
+|---|---|
+| `GET /contacts/client/{id}` does not return an External System ID field at all. | The linked-Case identity check cannot read the client's ID. It uses the lookup by External System ID instead (step 1.11). |
+| No sampled client holds its Case record ID as External System ID (the lookup returned 404 `NotFound` for 100 of 100). | The Case mismatch rule will not stop clients that were created by hand. That risk is closed. |
+| `GET /contacts/client/{id}` returned 404 `NotFound` for 81 of 100 and 200 for 19 (13 active, 6 inactive). | Not a build item. Before production, find out why most HubSpot Client IDs do not resolve through this call (step 9.3). |
+| `GET /contacts/employee/{id}` returns the employee under `contact`, including `contact.externalSystemId` and `contact.primaryEmail`. | The stored-email copy in today's code reads the wrong place and never finds the email (step 1.10). |
+
+Confirmed earlier and still relied on: an employee create with an empty External System ID is rejected (400); the API cannot change an External System ID after the create (400), but a person can on the CR profile; `GET /contacts/employee/byExternalSystemId?ExternalSystemId={id}` returns 200 with the employee, active or inactive, and 404 `NotFound` when nobody holds the ID.
+
+Not confirmed: what the client lookup by External System ID returns when it finds a client; the answer of `GET /contacts/{id}/labels`; whether the labels POST adds or replaces; whether a client update may set an External System ID on a client that has none. The code is written to be safe either way, and each is on the sandbox test list (Stage 8).
+
+## 5. The rules
+
+These apply across stages. Stage tables refer back to them.
+
+### 5.1 May this record sync? (the gate)
+
+Checked in this order, in the worker, before any mapping or CentralReach call. A skipped record gets no CentralReach call and no HubSpot writeback.
+
+| # | Check | Skip when |
+|---|---|---|
+| 1 | Record gate | The app setting `SYNC_RECORD_GATE_PROPERTY` names a property and it is not `true` on the record. |
+| 2 | Test record | `test_record` is true and `INCLUDE_TEST_RECORDS` is not `true`. |
+| 3 | Case stage | The Case is in one of the four excluded stages, linked or not. |
+| 4 | Create signal | The record is not linked and Entered in CentralReach is not Yes. |
+
+A linked record keeps syncing whatever Entered in CentralReach says (Yes, No, blank, `Yes - Generic`, `No- Made Inactive`). The integration never deactivates anyone in CentralReach.
+
+`SYNC_RECORD_GATE_PROPERTY` is required. Its value is a HubSpot property name, or the word `none` to turn the gate off on purpose. If the setting is missing, configuration is invalid and nothing syncs.
+
+The create signal is read in one place only: `caseEntryIsYes` and `employeeEntryIsYes` in `src/lib/syncEligibility.mjs`.
+
+### 5.2 Status values
 
 | Value | Meaning | Retried? | Where staff see it |
 |---|---|---|---|
-| `success` | CR matches HubSpot. | — | — |
-| `error` | A person must fix something, or the retries are used up. Reason in `last_sync_error`. | No | Failures report |
-| `waiting` | Nothing is broken. The record waits on a person or a setting (temporary id not yet replaced; employee create turned off). Reason in `last_sync_error`. | No, and never dead-lettered | Waiting view |
+| `success` | CentralReach matches HubSpot. | — | — |
+| `error` | A person must fix something, or the retries are used up. | No | Failures report |
+| `waiting` | Nothing is broken. The record waits on a person or a setting. | No, and never dead-lettered | Waiting view |
 
-`blocked` is no longer written. `noop` stays until Stage 5.
+- The reason goes in `last_sync_error` as a fixed sentence. It names fields, never values. All reason sentences live in one new file, `src/constants/syncReasons.mjs`.
+- Every status writeback also sets `last_sync_at`, `integration_last_write` and `updated_by_integration = true`.
+- `blocked` is no longer written. `noop` is written until Stage 3, then never.
+- An `error` or `waiting` that the code decides on purpose is not thrown: the worker writes the status and finishes, so the queue message completes.
 
-**Employee not yet linked, Entered in CentralReach = Yes (Q35, V5, V17).**
+### 5.3 Employee not yet linked, Entered in CentralReach = Yes
 
 ```
-required create fields present?  --no-->  error (names the missing field), no CR call
+required create fields present?  --no-->  error "Missing required field: <name>", no CR call
         | yes
-External System ID to use = workday_id, or the HubSpot record id when workday_id is blank
+External System ID to send = workday_id, or the HubSpot record ID when workday_id is blank
         |
-read-only CR lookup by workday_id (when filled) AND by the record id
-        |-- answer unclear (not 200 / 404) ----------->  stop, retry later, never create
-        |-- found by the record id -------------------->  this record's own employee: save the link, continue as linked
-        |-- found by workday_id ----------------------->  another HubSpot record already holds that CR employee?
-        |                                                    yes -> error, no CR write (Q32)
-        |                                                    no  -> save the link, continue as linked
+read-only lookups: by the HubSpot record ID (always), and by workday_id (when filled)
+        |-- an answer that is not 200 or 404 ------->  stop, retry later, never create
+        |-- found by the record ID ----------------->  this record's own earlier create: save the link, go on as linked (5.4)
+        |-- found by both, two different CR IDs ---->  error, no CR write
+        |-- found by workday_id only:
+        |       another HubSpot employee record already holds that CR ID  -->  error, no CR write
+        |       no HubSpot record holds it  -->  waiting "already in CentralReach", no link, no CR write
         |-- not found
         v
-employee create turned off?  --yes-->  waiting ("Employee create is turned off")
+employee create turned off?  --yes-->  waiting "Employee create is turned off"
         | no
-create once (lock on the External System ID) -> save the CR id in Cosmos and HubSpot employee_id
-        -> metadata -> labels (read the current set, post the union)
-CR rejects the create (400 / 409)  -->  error with a safe reason, no retry
+create once, under a lock on the External System ID
+        -> save the CR ID in Cosmos, then in HubSpot employee_id
+        -> metadata -> labels (5.6)
+        -> status: success when workday_id was sent; waiting "Waiting for the Workday ID" when the temporary ID was sent
+CR rejects the create (400 or 409)  -->  error with a safe reason, no retry
 ```
 
-**Employee already linked (Q30, Q35).** Before any update the integration reads the CR employee and compares ids.
+"Employee create turned off" means `ALLOW_EMPLOYEE_CREATE` is not `true` or `PUT_ONLY_MODE` is not `false`.
 
-| CR External System ID | HubSpot `workday_id` | Checklist "External System ID (Workday)" | CR update | Status |
+### 5.4 Employee already linked
+
+Before any update the worker reads the CR employee and compares IDs. "CR holds" below is the External System ID CentralReach holds; "the temporary ID" means it equals this record's own HubSpot record ID.
+
+| CR holds | HubSpot `workday_id` | Checklist | Update sent to CR? | Status and reason |
 |---|---|---|---|---|
-| Equals `workday_id` | Filled | Either | Yes | `success` |
-| This record's temporary id | Blank | Not ticked | Yes | `waiting`: "Waiting for the Workday ID" |
-| This record's temporary id | Filled | Not ticked | Yes | `waiting`: "Replace the temporary id in CentralReach with the Workday ID, then tick the checklist" |
-| This record's temporary id | Either | Ticked | Yes | `error`: "Checklist is ticked but CentralReach still holds the temporary id" |
-| Any other value that differs | Filled | Either | **No** | `error`: "Workday ID does not match CentralReach" |
-| Blank in CR, or a value that is not the temporary id while HubSpot `workday_id` is blank | — | — | Yes | `success` (a blank on either side is not a mismatch) |
+| The same value as `workday_id` | Filled | Either | Yes | `success` |
+| The temporary ID | Blank | Not ticked | Yes | `waiting`: Waiting for the Workday ID. |
+| The temporary ID | Filled | Not ticked | Yes | `waiting`: Replace the temporary External System ID in CentralReach with the Workday ID, then tick the checklist. |
+| The temporary ID | Filled or blank | Ticked | Yes | `error`: Checklist is ticked but CentralReach still holds the temporary External System ID. |
+| Anything but the temporary ID | Blank | Ticked | Yes | `error`: Checklist is ticked but the Workday ID is blank in HubSpot. |
+| Another value that differs from `workday_id` | Filled | Either | **No** | `error`: Workday ID in HubSpot does not match the External System ID in CentralReach. |
+| Nothing; or another value while `workday_id` is blank and the checklist is not ticked | — | — | Yes | `success` (a blank on either side is not a mismatch) |
 
-- The checklist property is `btrbt_in_cr_checklist` (BT/RBT) or `bcba_in_cr_checklist` (BCBA); "ticked" means it contains `External System ID`.
-- A linked update always sends the External System ID CR holds, because the API rejects a changed one (tested 2026-11-16). Only a person can replace the temporary id, on the CR profile (tested 2026-11-17).
-- This check runs before the "nothing changed" check, so ticking the checklist always updates the status.
+- Only the mismatch row stops the update. In every other row the temporary ID or the matching ID shows it is the right CR employee, so field and label updates continue.
+- An update always sends the External System ID CentralReach already holds, because the API rejects a changed one. When CR holds none, the update sends `workday_id` if it is filled.
+- This check runs before the "nothing changed" check, so ticking the checklist or filling the Workday ID always refreshes the status.
+- If the CR write itself fails, that failure is the status.
 
-**Case already linked (Q30, V4).** The integration reads the CR client first. When CR's External System ID is filled and differs from the Case record id: no CR write, `error`.
+### 5.5 Case (client)
 
-**Labels (Q22, V1).** Read the contact's labels, post the union of those and the labels the guide requires. Add-only until CR test (b) is run.
+- **Create.** Unchanged: look up by the Case record ID, create when CentralReach clearly has no match, send the Case record ID as the External System ID.
+- **Linked Case.** Before an update that would write to CentralReach, look up the client by this Case's record ID. Found under a different CR ID than HubSpot holds: no CR write, `error`. Found under the same CR ID, or not found: update. An unclear answer: stop and retry later.
+- **Required fields.** First name, last name and date of birth are checked before a create; first and last name before an update. There is no date-of-birth placeholder for clients.
 
-**Date of birth (Q28, V9, V10).** Blank on a create: placeholder `2000-01-01`. Blank on an update: the field is left out. A value that cannot be read as a date, or a `date_of_birth` property missing from the portal: `error`.
+### 5.6 Labels
 
-**Not built in Stage 1:** the Workday ID format check (Q34, waits for Danny), anything for employees already in CR (Q33, go-live), label removal.
+- Read the contact's current labels, then post the union of those and the labels the guide requires. If the read fails, post nothing and treat the run as a temporary failure.
+- If every required label is already on the contact, post nothing.
+- Labels are only added. Nothing is removed until the CentralReach label test shows whether removal is possible.
+- The staffing label row (`staffing_status`) and the Active / Inactive label (`case_status`) are not built until after that test. Nothing is sent to CentralReach for either until then.
 
-## 4. Decisions needed from Zeke
+### 5.7 Dates
 
-| # | Decision | Default if you say "defaults are fine" | Needed by |
+- A filled date that cannot be read as a date is an `error`. It is never treated as blank.
+- Employee date of birth: blank on a create sends the placeholder `2000-01-01` and logs a warning; blank on an update leaves the field out of the request; a `date_of_birth` property that is missing from the HubSpot answer (the property does not exist in the portal) is an `error`.
+- Client date of birth: blank on a create is an `error`; blank on an update leaves the field out.
+
+### 5.8 A failed read is never a clear
+
+A read that fails or is refused (401, 403), or a Case answer that is missing its sensitive identity fields, never becomes a blank sent to CentralReach. The run stops with no CR write.
+
+## 6. Stage 0 — Prep (no code)
+
+| # | Step | Who | Done when |
 |---|---|---|---|
-| D1 | **Format of the temporary id.** Plain HubSpot record id, or a prefix such as `HS-{record id}`. | **Plain record id**, as you described it and as Cases already work. HubSpot record ids are 11 digits and Workday IDs are 7, and the code checks "equals this record's own id", so they cannot be confused in code. It is one function, so a prefix is a one-line change, but only before the first sandbox create; after that CR would hold a mix. | Stage 1 |
-| D2 | **BCBA uses the same temporary-id rule as BT/RBT.** | **Yes.** One code path. Whether BCBAs really reach CR before Workday is still open with Sara, and the rule is harmless if they do not. | Stage 1 |
-| D3 | **Field updates continue while CR holds the temporary id.** | **Yes.** The temporary id proves it is the right CR employee, and the BT is in scheduling during that time. Status shows `waiting`. | Stage 1 |
-| D4 | **An unlinked record whose `workday_id` finds an employee in CR is linked**, unless another HubSpot record already holds that employee. | **Yes** in code. In production, employees already in CR are kept out by the go-live gate (D6), not by code (Q33). | Stage 1 |
-| D5 | **Two HubSpot records, one Workday ID (Q32): the second record stops with `error`.** Proposed, not decided. | **Build it.** It is the safe behaviour and prevents one record overwriting the other's CR employee. United Care still picks the right record for the pair `2002628`. | Stage 1 |
-| D6 | **How the poller, and production, are limited to chosen records.** The sandbox segments filter webhooks only. The poller reads HubSpot directly. Read today: lists `1463`, `1464`, `1465` all filter on one checkbox, `sandbox_test_field` = true. | One optional app setting that names a HubSpot checkbox property. When set, the poller searches only records where it is true, and the worker gate skips any record where it is not. Sandbox value: `sandbox_test_field`. Production can use the same idea for go-live (a property United Care sets as each existing employee is confirmed). Not built without your OK; without it the poller stays off in the sandbox and Stage 5 is proven offline only. | Stage 5 |
-| D7 | Commit and push the three changed docs and this plan. | Commit when you say so. | Anytime |
-| D8 | Guide conflict: "No production rollout is authorized" against Danny's 11/14 "clear to finish" (Q19). | — | Stage 9 |
+| 0.1 | Record Zeke's 2026-11-18 answers in the tracker and OPEN-ITEMS. | Claude | Done 2026-11-18 |
+| 0.2 | Add the same rules to the guide as dated, insert-only notes. The text is drafted in `guide-inserts-2026-11-18.md`. | Claude, on Zeke's approval | Done 2026-11-18: 24 notes added in one revision-guarded batch and verified by a re-read (insert-only; headings unchanged). |
+| 0.3 | Save a read-only text copy of the guide sections the build uses as `guide-extract-2026-11-18.md`: Business rules, `[GER-REQ]`, `[GER-CASE]`, `[GER-BCBA]`, `[GER-BT]`, `[GER-CONTACT]`, `[G17]`, `[G18]`, sections 7 to 9, the appendix, `[SCURRENT]` and the Change detection Architecture tab. | Claude | Done 2026-11-18, taken after 0.2, so it includes the 11/18 notes |
+| 0.4 | Baseline: `npm test` shows 120 pass on a clean tree. | Claude | Done 2026-11-18: 120 pass at `be841e3` |
+| 0.5 | Not blocking: run the CentralReach label test on a test employee Zeke names (read the labels, add one label, read again, restore). It decides the label rules for Stages 4 and 5 and unblocks the staffing and Active / Inactive rows. It is a production CR write, so it runs only on Zeke's word and on the record he names. | Zeke, in Cursor (2026-11-18) | Result in the tracker |
+| 0.6 | Not blocking: a read-only read of the CR label catalog and metadata field list, to confirm the IDs marked † in section 10. | Zeke, in Cursor (2026-11-18) | IDs confirmed or corrected |
 
-## 5. Stage 0 — Prep (no code)
+## 7. Stage 1 — Create and identity checks
 
-| # | Step | Owner | Done when |
+**Goal.** Nothing can reach CentralReach for the wrong record, twice, or with a missing required field. This is the stage both earlier reviews asked for before any start.
+
+**Guide sections.** Business rules `[GBR]`; required create fields `[GER-REQ]`; the External System ID rows of `[GER-BCBA]` and `[GER-BT]`; `[G17]` and `[G18]`; the Change detection Architecture tab (11/17 bullets).
+
+**Files.** `src/lib/config.mjs`, `src/lib/syncEligibility.mjs`, `src/lib/centralReachClient.mjs`, `src/lib/hubspotClient.mjs`, `src/lib/dates.mjs`, `src/workflows/employeeSyncWorkflow.mjs`, `src/workflows/clientSyncWorkflow.mjs`, `src/mappings/employees/buildEmployeePayload.mjs`, `src/mappings/employees/validateEmployeePayload.mjs`, `src/mappings/client/buildClientPayload.mjs`, `src/mappings/client/validateClientPayload.mjs`, `src/constants/hubspot.mjs`, new `src/constants/syncReasons.mjs`, `local.settings.example.json`, tests.
+
+| # | Rule (plain words) | Change | Tests that prove it |
 |---|---|---|---|
-| 0.1 | Answer D1 to D5 and give the go-ahead for Stage 1. | Zeke | Recorded in the tracker |
-| 0.2 | Read the Azure state again (app Stopped, settings, queue and dead-letter counts, alert rules) and report any change since the 2026-11-17 read. Read-only. | Grok | Report in chat; tracker updated |
-| 0.3 | Create the sandbox test records, each named "Azure Test …", each with `sandbox_test_field` = true, Entered in CentralReach **left blank** until its test. See the table below. | Zeke | Records exist and appear in lists `1463` to `1465` (all three lists are empty today) |
-| 0.4 | Confirm every sandbox workflow that sends a webhook to Azure filters on its list, entry and ongoing. | Zeke | A record outside the list sends no webhook (proved in test T1) |
-| 0.5 | Add `workday_id` and the checklist property (`btrbt_in_cr_checklist`, `bcba_in_cr_checklist`) to the trigger list of the ongoing-update employee workflows, so filling the Workday ID or ticking the checklist re-runs the sync. This replaces the older "release a held record" trigger; there is no hold any more. | Zeke | Tests T7 to T9 produce a webhook |
-| 0.6 | Sandbox HubSpot views, one per object: failures (`last_sync_status` = `error`, showing `last_sync_error`) and waiting (`last_sync_status` = `waiting`; BCBA and BT/RBT). | Zeke | Views exist |
-| 0.7 | Pick two 7-digit Workday IDs for the test records. Claude checks read-only that CR holds no employee under either (GET by External System ID returns 404). | Zeke, Claude | Both return 404 |
-| 0.8 | Re-read the guide rows Stage 1 implements (`[G17]`, Business rules, `[GER-REQ]`, `[GER-BT]`, `[GER-BCBA]`) right before coding. | Claude | Any difference from section 3 is raised before code changes |
+| 1.1 | **Record gate** (rule 5.1, check 1). | `config.mjs`: `SYNC_RECORD_GATE_PROPERTY` is required in both config lists; a helper returns the property name, or nothing when the value is `none`. `syncEligibility.mjs`: a new first check and skip reason `record_gate`. Both workflows add the property to the list they read from HubSpot. `local.settings.example.json`: `"SYNC_RECORD_GATE_PROPERTY": "sandbox_test_field"`. | For Case, BCBA and BT/RBT: gate set and the property blank or false → skipped, no CR call, no writeback, also when the record is linked. Property true → proceeds. Value `none` → not checked. Setting missing → configuration invalid. |
+| 1.2 | **Three status values** (rule 5.2). A create CentralReach rejects is an `error`. Create turned off is `waiting`. | `centralReachClient.mjs` `createOrUpdateEmployee` stops returning `blocked`; it returns a clear result for "create is turned off" and for "CR rejected the create" (keep `extractCreateErrorReason`). `employeeSyncWorkflow.mjs` writes `waiting` or `error`, saves a fail record in Cosmos for the rejection (never a success record), and finishes without throwing. Every writeback sets `integration_last_write`. New `syncReasons.mjs` holds every reason sentence. | A 400 and a 409 on create each give `error`, a fail record, no retry. Create off gives `waiting` and the function returns normally. No code path writes `blocked`. An error writeback carries `integration_last_write`. |
+| 1.3 | **Required fields are checked before CentralReach is called** (`[GER-REQ]`). Employee create: first name, last name, primary email, date of birth rule (5.7). Client create: first name, last name, date of birth. Updates: first and last name. A value of only spaces is blank. | Employee names come from `first_name` and `last_name` (remove the split of `bcba_name` / `bt_name`). BCBA primary email comes from `ucaba_email_address` (remove `work_email`); BT/RBT from `email`. Validators take a `linked` flag and return the missing field names. A blank or malformed email on a create is `error`. The workflow writes `error` "Missing required field: <name>" and makes no CR call. | One test per required field, per entity, for create. Names for update. A filled `first_name` with a blank `last_name` is an error naming the last name. The reason sentence contains the field name and no value. |
+| 1.4 | **Dates** (rule 5.7). | One shared date reader in `src/lib/dates.mjs` used by both employee and client mappers: returns the date, "blank", or "unreadable". An update leaves the date of birth out when blank. A `date_of_birth` key missing from the HubSpot `properties` answer is an `error`. | Blank on create sends the placeholder. Blank on update: the request has no date key. Unreadable → `error`. Missing property → `error`. Client blank on create → `error`. |
+| 1.5 | **Temporary External System ID** (`[G17]`, decision 3). | One function in `buildEmployeePayload.mjs` returns the ID to send on a create: `workday_id`, or the record ID when it is blank. Remove the "workday_id is blank" validation error. | Blank `workday_id` → the create sends the record ID. Filled → the create sends the Workday ID. BT/RBT and BCBA. |
+| 1.6 | **Read-only lookup before an employee create** (rule 5.3). | New `findEmployeeByExternalSystemId(id)` in `centralReachClient.mjs`: `GET /contacts/employee/byExternalSystemId?ExternalSystemId={id}`. 200 → found, with the CR ID read from `contact.contactId`. 404 → not found. Anything else is thrown and never leads to a create. The update call `PUT /contacts/employee/byExternalSystemId` is no longer used as a lookup; remove it. The workflow follows the tree in 5.3. | One test per branch of the tree: unclear answer stops; found by record ID links; found by both with different IDs is `error`; found by Workday ID only is `waiting` or `error` (1.7); not found creates. No test sees a PUT used as a lookup. |
+| 1.7 | **One CR employee, one HubSpot record** (decisions 4 and 5). | New search in `hubspotClient.mjs`: find BCBA and BT/RBT records whose `employee_id` equals a CR ID, leaving out the current record. Used when the lookup finds an employee by Workday ID only. A hit → `error` "Another HubSpot record is already linked…". No hit → `waiting` "A CentralReach employee already holds this Workday ID…". Neither writes `employee_id` nor calls CR again. | A BCBA and a BT/RBT with one Workday ID: the first creates, the second is `error`, and the first one's CR employee gets no write. A Workday ID that only CR knows → `waiting`, `employee_id` stays blank, no CR write. |
+| 1.8 | **Two records cannot create at the same moment.** | A second Cosmos lease on the External System ID to be sent (partition `create-lock:employee`) covers lookup, create and saving the CR ID. Not acquired → the run ends as "in progress" (thrown today; rescheduled in Stage 2). | Two runs with one Workday ID started together: exactly one create. |
+| 1.9 | **Linked employee ID check** (rule 5.4). | Add the two checklist properties to the properties read. Compare IDs after the CR read and before the "nothing changed" check. The mismatch row makes no CR write. Status and reason per the table, written even when no mapped field changed. | One test per table row, for BT/RBT and for BCBA. The mismatch row: zero CR writes. Ticking the checklist with no other change still updates the status. |
+| 1.10 | **Stored email copy reads the right place.** Updates send the primary email CentralReach already holds (unchanged rule; CentralReach's update error names this field). | `buildEmployeePayloadForContactId` reads the email from the same places as the External System ID reader: the top level, `contact`, `employee` and `result`. | Each response shape gives the stored email. |
+| 1.11 | **Linked Case ID check** (rule 5.5). | New `findClientByExternalSystemId(caseRecordId)`: `GET /contacts/client/byExternalSystemId?ExternalSystemId={id}`, read like 1.6. Before a linked update that will write to CR: found under another CR ID → `error`, no write. A 200 with no readable CR ID is an unclear answer: stop, no write. | Same CR ID → update. Different CR ID → `error`, no write. 404 → update. Unclear → no write. A run with nothing to send makes no lookup. |
+| 1.12 | **Labels: read, then add what is missing** (rule 5.6). | `centralReachClient.mjs`: `GET /contacts/{id}/labels`, then post the union. Accept the documented answer shapes; an answer that cannot be read as a list of label IDs is a failed read. Skip both calls when the required set is empty. | The post holds the labels CR already has plus the required ones. A failed read makes no post and fails the run. All present → no post. |
+| 1.13 | **Regression.** | Update old tests whose rule changed (the Workday ID hold, `blocked`, name sources). | `npm test` green; the new total is in the stage report. |
 
-Test records for Stage 3 (all in sandbox `52311591`):
+**Not in Stage 1:** retries with delays, state that never expires, poller changes, new field mappings, label rows, the Workday ID format check.
 
-| Name | Object | Set up as | Used in |
+**Known safe limit after Stage 1.** If Cosmos has lost a record's state and HubSpot never received its CR ID, a record that was created with its Workday ID is shown as `waiting` "already in CentralReach" instead of being linked again. No duplicate and no wrong write result; a person links it by entering the CR ID in `employee_id`. Stage 2 removes the cause by keeping the link without expiry.
+
+## 8. Stage 2 — Durable state and retries
+
+**Goal.** The link and the last synced values never expire; a half-finished run is never mistaken for "nothing changed"; a temporary failure is retried later with growing delays instead of at once.
+
+**Guide sections.** Change detection Architecture tab: "Save synced state only after required updates succeed", the 11/17 approved design (retry delays, dead-letter), and "Minimum changes and tests before production".
+
+**Files.** Both workflows, `src/lib/cosmosState.mjs`, `src/lib/mappedState.mjs`, `src/lib/serviceBusClient.mjs`, `src/lib/retry.mjs`, `src/lib/config.mjs`, `src/functions/processClientQueue.mjs`, `src/functions/processEmployeeQueue.mjs`, `src/functions/hubspotWebhook.mjs`, `src/constants/staffingAssociations.mjs`, `src/mappings/client/buildClientMetadata.mjs`, `host.json`, tests.
+
+| # | Rule (plain words) | Change | Tests that prove it |
 |---|---|---|---|
-| BT-A | BT/RBT | First and last name, email, date of birth, `workday_id` **blank** | T3 to T10 |
-| BT-B | BT/RBT | Complete, with test Workday ID 1 | T11 |
-| BT-C | BT/RBT | Complete except **no email** | T2 |
-| BCBA-A | BCBA | Complete (`ucaba_email_address` filled), `workday_id` blank | T13 |
-| BCBA-B | BCBA | Complete, with the **same** Workday ID as BT-B | T12 |
-| Case-A | Deal | The four client create fields filled | T14, T15 |
-| Out-1 | BT/RBT | Complete, `sandbox_test_field` not set | T1 |
+| 2.1 | **The link record never expires.** One Cosmos record per HubSpot record holds the CR ID, the last fully synced field hashes, the External System ID used, and whether the last run finished cleanly. | Write it with `ttl: -1` (the container's default is 30 days, so the item must say "never"). Keep attempt details (last error, invocation) in a separate record that may expire. Stop using `SUCCESS_TTL_SECONDS` and `FAIL_TTL_SECONDS` for the link. | The link record is written with no expiry on success and on failure. A failure never removes the CR ID or the last good hashes. |
+| 2.2 | **The saved values belong to one CR ID.** | The link record stores the CR ID its hashes were synced to. If the record's CR ID differs, drop the hashes and treat every field as changed. | Changing the CR ID forces a full write, not a no-op. |
+| 2.3 | **A create with an unknown result is never repeated blindly.** | Before the create is sent, save the External System ID about to be used ("pending create") in the link record. The next run looks that ID up first, even if `workday_id` was edited in between. Clear it once the CR ID is saved. | Timeout on the create, then `workday_id` edited, then a retry: the retry finds the first employee and does not create. |
+| 2.4 | **"Nothing changed" is only trusted after a clean run.** | Mark the link record "in progress" before the first CR write and "clean" after every write succeeded. A run is a no-op only when the record is clean and the hashes match the Cosmos copy. HubSpot `last_sync_hash` alone is not enough. | A run that failed halfway, followed by a HubSpot value changed back: the next run writes again. |
+| 2.5 | **A lock is released only by the run that took it.** | The lease stores an owner token; release deletes it only when the token matches. The lease lasts at least as long as the function may run (default 600 seconds; record the real function timeout at deploy). | A slow run whose lease expired does not delete the next run's lease. |
+| 2.6 | **Everything knows which portal it is for.** | `config.mjs`: replace the commented sandbox/production block with a table keyed by portal ID (object types, excluded association types, staffing role IDs from section 3). `HUBSPOT_PORTAL_ID` becomes required and must be `52311591` or `50317927`; any other value is invalid configuration. Queue messages and Cosmos keys carry the portal ID; a worker completes and logs a message for another portal without acting. Remove the `HUBSPOT_PORTAL_ID_TEST` override in `buildClientMetadata.mjs`. | Portal `50850427` or `246184070` → invalid configuration. A message for the other portal → no HubSpot or CR call. Excluded association IDs follow the portal. |
+| 2.7 | **Failures are sorted into three kinds.** Temporary: 429, 5xx, a timeout on a read or an update, a busy lock, a record that changed during the run. Permanent: missing or bad data, a CR 4xx other than 429. Unknown create: a timeout or 5xx on the create call itself. | One classifier in `src/lib/retry.mjs`. Permanent → `error` on the record, no retry, message completes. Unknown create → treated as temporary for timing, with 2.3 protecting the next attempt. A metadata failure keeps its status code so it can be classified. | One test per kind, per worker. A CR 400 on an update is `error` with no retry. |
+| 2.8 | **Temporary failures are retried at 1 minute, 5 minutes, 15 minutes, 1 hour and 4 hours.** After the last one: `error` "Retries used up" on the record and the message goes to the dead-letter queue, which fires the email alert. | The queue function schedules a new Service Bus message with the next delay, the attempt number in the body and a message ID that is unique per attempt, then lets the current message complete. After the fifth retry fails it writes `error` and throws. A redelivery of a message that has already used its retries throws at once without calling HubSpot or CR, so Service Bus dead-letters it. If the Azure Functions Node model offers a supported way to dead-letter directly, say so in the stage report before using it. | Attempt numbers and delays in order. Each attempt has a different message ID. After the last attempt: `error` written once, then no further calls on redelivery. |
+| 2.9 | **A busy record is rescheduled, not failed.** | "Sync in progress" and "changed during the run" use the same scheduler (first delay 1 minute) instead of an immediate rethrow. | Two messages for one record: the second is rescheduled and later runs as a no-op. |
+| 2.10 | **CentralReach's Retry-After is respected.** | Read it as seconds or as a date. In-process waits stay short (5 seconds); a longer Retry-After sets the scheduled delay when it is longer than the next step. | A 429 with a long Retry-After schedules at least that far out. |
+| 2.11 | **Service Bus settings are stated on purpose.** | `host.json`: set the Service Bus concurrency and lock-renewal options explicitly (start with 4 concurrent calls and a 10-minute lock renewal). Confirm the option names against the extension bundle in use and name the source in the stage report. | `host.json` parses; a test asserts the keys exist. |
 
-Checked read-only on 2026-11-17 in `52311591`: every property this plan reads exists on the sandbox objects (`workday_id`, `employee_id`, `entered_in_centralreach`, both checklist properties, `first_name`, `last_name`, `date_of_birth`, `last_sync_status`, `last_sync_error`, `test_record`). One gap: sandbox BCBA has **no `work_email` property**, which is where the code reads the BCBA email today. Step 1.2 moves it to `ucaba_email_address`, as the guide says; until then a BCBA create cannot pass.
+**Not in Stage 2:** poller changes, the no-op that writes nothing, mappings.
 
-## 6. Stage 1 — Code slice S1b-1: create and identity checks
+## 9. Stage 3 — Poller and fewer calls
 
-Owner: Claude. One writer. Rough size: 2 days. Files: `src/lib/centralReachClient.mjs`, `src/lib/hubspotClient.mjs`, `src/workflows/employeeSyncWorkflow.mjs`, `src/workflows/clientSyncWorkflow.mjs`, both employee mapping files, `src/mappings/client/validateClientPayload.mjs`, `src/constants/centralReach.mjs`, `src/constants/hubspot.mjs`, tests.
+**Goal.** The poller becomes an hourly safety check that never loses its place and never touches a record outside the gate. A record with no change costs reads only and writes nothing.
 
-| # | Step | Change | Proved by (offline tests) |
+**Guide sections.** Change detection Architecture tab (backup path; the 11/17 approved design); Business rules `[GBR]` Requirement 2; section 11 "Some mapped values change without anyone editing the field".
+
+**Files.** `src/workflows/intakePollerWorkflow.mjs`, `src/functions/intakePoller.mjs`, `src/functions/intakePollerHttpTest.mjs`, `src/lib/hubspotClient.mjs`, `src/lib/config.mjs`, both workflows, `src/lib/centralReachClient.mjs`, `src/functions/hubspotWebhook.mjs`, `src/lib/hubspotWebhook.mjs`, `README.md`, `docs/SOURCE-OF-TRUTH.md`, `package.json`, tests.
+
+| # | Rule (plain words) | Change | Tests that prove it |
 |---|---|---|---|
-| 1.1 | **Status values** (Q31, V2) | Outcomes become `success`, `error`, `waiting`. A create CR rejects writes `error` and a fail record in Cosmos, not `blocked` with a success record. Create turned off (`PUT_ONLY_MODE` on, or `ALLOW_EMPLOYEE_CREATE` off) writes `waiting`. Neither is retried. | A 400 and a 409 on create each give `error` and no success record. Create off gives `waiting`, and the queue message completes. |
-| 1.2 | **Required create fields** (V17, `[GER-REQ]`) | Employee names read from `first_name` and `last_name`; BCBA email from `ucaba_email_address`. Before a create, check each of the six employee fields and four client fields in `[GER-REQ]`; a value of only spaces counts as blank. A blank one gives `error` naming the field (never its value) and makes no CR call. | One test per required field, per entity. |
-| 1.3 | **Date of birth** (V9, V10) | Rules in section 3. | Blank create sends the placeholder. Blank update leaves the field out. Unreadable date gives `error`. Property missing from the HubSpot answer gives `error`. |
-| 1.4 | **Temporary External System ID** (Q35, D1, D2) | One function returns the id to send on a create: `workday_id`, or the record id when it is blank. The "Workday ID is blank" validation error is removed. | Blank `workday_id` creates with the record id. Filled creates with the Workday ID. |
-| 1.5 | **Read-only lookup before a create** (V5, V11, test d) | New `GET /contacts/employee/byExternalSystemId?ExternalSystemId={id}`, run for `workday_id` (when filled) and for the record id. 200 is found, 404 `NotFound` is not found, anything else stops the run without a create. The update call is no longer used as a lookup for employees. | Each branch of the diagram in section 3, including "found by both with different CR ids" (`error`). |
-| 1.6 | **One CR employee, one HubSpot record** (V5, Q32, D5) | Before linking to an employee found by `workday_id`, search both HubSpot employee objects for another record whose `employee_id` is that CR id. If one exists: `error`, no CR write. | A BCBA and a BT/RBT with one Workday ID: the first links or creates, the second stops with `error`. |
-| 1.7 | **Create lock** (V5) | A second lock on the External System ID covers lookup, create and saving the CR id, so two records with one Workday ID cannot create at the same moment. | Two runs with one Workday ID started together create once. |
-| 1.8 | **Linked employee id check** (Q30, Q35, D3) | The table in section 3. The two checklist properties are added to the properties read. The check runs before the "nothing changed" check. | One test per table row, for BT/RBT and BCBA. |
-| 1.9 | **Linked Case id check** (V4) | Read the CR client before a linked update; a filled, different External System ID gives `error` and no write. | Match updates. Mismatch stops. Blank in CR updates. |
-| 1.10 | **Labels: read, then union** (V1) | `GET /contacts/{id}/labels`, then post the union. A failed read posts nothing. | The post contains the labels CR already holds plus the required ones. A failed read makes no post. |
-| 1.11 | **Stored email copy** (V11) | The copy of CR's primary email reads the same response paths as the id reader. | Each of the three response shapes. |
-| 1.12 | **Regression** | Existing tests updated where the rule changed (hold, `blocked`). | `npm test` passes; new total recorded in the tracker. |
-| 1.13 | **Independent reviews** | A subagent reviews the diff against section 3 and the guide rows, without being given conclusions. Grok reviews the same diff read-only and runs `npm test`. Findings are fixed or answered in the tracker. | Both reviews returned and recorded |
-| 1.14 | **Docs** | Tracker and OPEN-ITEMS updated. Guide text for anything that changed is shown to Zeke and applied only if he asks. | — |
-| 1.15 | **Commit and push** | On Zeke's go-ahead: playbook pre-commit block, stage by path, commit, push. | Commit hash in the tracker |
+| 3.1 | **The poller runs once an hour.** | Timer from every 5 minutes to the top of each hour. | The schedule string. |
+| 3.2 | **A saved checkpoint per entity; it only moves forward after the records were queued.** | For Case, BCBA and BT/RBT separately: search records with `hs_lastmodifieddate` at or after the checkpoint, oldest first, page by page up to a fixed cap of pages per run. After each page is queued, move the checkpoint to that page's last timestamp. If pages remain, the next run continues. The first run starts one hour back. The checkpoint is stored without expiry. Remove the 15-minute lookback, the per-record dedupe entries and the one-page limit. | An outage of any length is caught up over following runs. A queue failure halfway leaves the checkpoint at the last finished page. Nothing is skipped when two records share a timestamp. |
+| 3.3 | **One entity's failure does not stop the others; a rejected search fails loudly.** | Each entity's search runs in its own try block. Remove the fallback that re-runs a search without its date filter. | A failed Case search still runs both employee searches. A rejected filter is an error, not an unfiltered search. |
+| 3.4 | **The record gate applies to the poller.** | When `SYNC_RECORD_GATE_PROPERTY` names a property, every poller search adds "that property is true". The Case search keeps excluding the four stages. The worker gate still runs for every queued record. | With the gate set, every search request carries the filter. With `none`, it does not. |
+| 3.5 | **Once a day, every linked record and every unlinked record with Entered in CentralReach = Yes is queued.** This replaces the five-minute recheck and is the re-run path for records fixed outside HubSpot. | Run it in the first hourly run at or after a fixed hour (08:00 UTC), once per day, guarded by a Cosmos marker. Spread the messages with scheduled delivery (60 a minute) so CentralReach is not flooded. The unlinked search uses the entry property constants, not its own copy of the rule. | Runs once per day even if a run is missed. Linked and unlinked-Yes records are queued; the gate filter is present. |
+| 3.6 | **The poller does not re-queue what the integration just wrote.** | Skip a candidate whose `hs_lastmodifieddate` is within 120 seconds after its `integration_last_write`. (A false skip is caught by the webhook or the daily sweep; a false queue costs one no-op.) | Own write → skipped. A later human edit → queued. |
+| 3.7 | **A record with no change writes nothing.** | A run is a no-op when: the link record is clean (2.4), the hashes match, HubSpot already holds the CR ID, and the status HubSpot shows is the status this run would write. Then: no CR call, no HubSpot write, no Cosmos write. If only the status differs, write only the status. For employees, `workday_id` and the checklist become part of the compared state, and the CR read for the ID check (1.9) is skipped only when the last status is `success` and nothing changed. Remove the duplicate first HubSpot read in both workflows. `noop` is never written to HubSpot. | No-op Case: HubSpot reads only (the Case and its two staffing association lists), one Cosmos read, zero writes. No-op employee with status `success`: one HubSpot read, one Cosmos read, zero CR calls. A `waiting` employee still gets its ID check. HubSpot missing the CR ID → the ID is written. |
+| 3.8 | **Only changed metadata fields are sent.** | Send the metadata fields whose hash differs from the saved copy (all of them when there is no saved copy). Add the one-call `PATCH /contacts/{ContactId}/metadata` behind an app setting `CR_METADATA_BATCH` (default `false`); it is turned on only after a sandbox run confirms it. Body shape from the CentralReach API spec (`../central_reach_test_integration/central_reach_docs/`); if the spec does not settle it, leave the batch call out and say so. | One changed field → one metadata call. With the setting on → one call for many fields. |
+| 3.9 | **A change no webhook delivered is logged by field name.** | When a run started by the poller or the sweep finds changed fields, log the field names (never values) with a fixed message. This shows which workflow trigger is missing. | The log has names only. |
+| 3.10 | **A check lists mapped properties that no workflow trigger covers.** | Export the list of HubSpot properties each worker reads for mapping. New `npm run check:triggers` compares them with `docs/workstreams/architecture-update/webhook-triggers.json` (Zeke exports each sandbox workflow's trigger properties into it) and exits non-zero when a mapped property has no trigger. It is not part of `npm test` until the sandbox workflows are final; it must pass before Stage 7's deploy. Seed the file with an empty list per object. | The check fails on a missing property and passes when covered. |
+| 3.11 | **Clean-up.** | Remove the log-only "coalesce" step and its Cosmos write from the webhook. Fix `README.md` (the deploy example names the wrong Function App; the coalesce description; the old sandbox IDs) and the dead tab link in `docs/SOURCE-OF-TRUTH.md`. Remove app settings the code no longer reads from the required lists and the example file, and list them in the stage report. | Webhook tests: a repeat notice is still queued; no Cosmos call. |
 
-Not in this slice: retries with delays, durable Cosmos state, poller changes, new field mappings.
+## 10. Stages 4 to 6 — Mappings and Contact routing
 
-## 7. Stage 2 — Deploy while the app is Stopped (gate A)
+Rows that wait on an open question are left out and listed in section 12. They are never guessed.
 
-Owner: Grok, with Zeke's go-ahead for each write. `centralreachserverless` stays **Stopped** for the whole stage.
+Target IDs: the metadata and label IDs shown without a mark are already in `src/constants/centralReach.mjs`. IDs marked † come from the repo's own notes of 2026-10-27 (`docs/Sandbox props & labels_summary.md`, `docs/centralreach-metadata-and-labels-discovery.md`); add them as constants, and step 0.6 confirms them before sandbox testing.
 
-| # | Step | Owner | Done when |
-|---|---|---|---|
-| 2.1 | App settings for sandbox `52311591`: `HUBSPOT_PORTAL_ID`, `HS_BCBA_OBJECT_TYPE_ID` = `2-72890322`, `HS_BT_RBT_OBJECT_TYPE_ID` = `2-72890325`. | Grok | Read back |
-| 2.2 | The sandbox app's token and webhook secret (`HUBSPOT_PRIVATE_APP_TOKEN`, `HUBSPOT_WEBHOOK_CLIENT_SECRET`), entered in the Azure portal. Never pasted in chat. | Zeke | Set; Grok confirms the names exist, not the values |
-| 2.3 | Remove the six unused pipeline and stage-allowlist settings. | Grok | Gone |
-| 2.4 | Safe starting switches: `AzureWebJobs.intakePoller.Disabled` = `true`, `AzureWebJobs.processClientQueue.Disabled` = `true`, `AzureWebJobs.processEmployeeQueue.Disabled` = `true`, `ALLOW_EMPLOYEE_CREATE` = `false`, `PUT_ONLY_MODE` = `true`. `INCLUDE_TEST_RECORDS` not set. | Grok | Read back |
-| 2.5 | Purge both dead-letter queues (406 and 628 old-sandbox messages). Never replay them. | Grok | Both show 0 |
-| 2.6 | Check both queues show 0 active messages and the Cosmos `sync-state` container holds nothing from retired portal `50850427`. | Grok | Counts reported |
-| 2.7 | One email alert: dead-letter count above 0 on either queue, to Zeke. Add an email receiver to the action group. Use the Service Bus metric, not logs. | Grok | Rule exists; tested in T16 |
-| 2.8 | Deploy the Stage 1 commit. Record the commit hash and the function timeout (Q21). | Grok | Hash in the tracker; app still Stopped |
-| 2.9 | Point each sandbox webhook workflow at the deployed function URL, if not already. | Zeke | URL confirmed |
+### Stage 4 — Case mappings
 
-## 8. Stage 3 — First sandbox start and test script (gate B)
+**Guide sections.** `[GER-CASE]`, section 3 field map, section 4 (associations), section 7 (client labels), the appendix (stored values).
 
-**Draft test script (Zeke, 2026-11-18).** After the architecture build is done, a final sandbox testing requirements plan is written and agreed before sandbox testing. Tests T0 to T16 below are the draft input to that plan, not the final plan. The same note is in the guide (`[G18]` and the Change detection Architecture tab).
+**Files.** `src/mappings/client/buildClientPayload.mjs`, `src/mappings/client/buildClientMetadata.mjs`, `src/mappings/client/validateClientPayload.mjs`, `src/workflows/clientSyncWorkflow.mjs`, `src/lib/hubspotClient.mjs`, `src/constants/centralReach.mjs`, `src/lib/config.mjs`, tests. One test per row; the title names the guide row.
 
-Before the start, all of these are true: Stage 1 is deployed (2.8); the segments filter every webhook workflow (0.4); the poller is disabled (2.4); the HTTP test functions are not called; queues are empty (2.6).
-
-For each test: Zeke makes the HubSpot or CR change, Grok reports the queue counts and the run's log lines (field names only, no values), Claude reads the HubSpot record and, where noted, CR (read-only), and records the result in the tracker. **Tests marked CR write need Zeke's go-ahead at that step.** Stop at the first unexpected result.
-
-| # | Test | Do | Expect | CR write |
+| # | Guide row | HubSpot source | CentralReach target | Rule |
 |---|---|---|---|---|
-| T0 | Start | Start the app with only the employee worker enabled; creates still off. | Functions listed; no messages; no errors | No |
-| T1 | Segment gate | Set Entered in CentralReach = Yes on **Out-1**. | No webhook, no message, record untouched | No |
-| T2 | Missing field | Set Yes on **BT-C** (no email). | `error` naming the email field; in the failures view; no CR call; no dead letter | No |
-| T3 | Create turned off | Set Yes on **BT-A**. | One read-only lookup (by the record id); `waiting` "Employee create is turned off"; nothing created | No |
-| T4 | Create with the temporary id | Turn creates on (`ALLOW_EMPLOYEE_CREATE` = `true`, `PUT_ONLY_MODE` = `false`); edit BT-A. | One CR employee whose External System ID is BT-A's record id; `employee_id` filled; link metadata set; labels are the union; status `waiting` "Waiting for the Workday ID" | **Yes** |
-| T5 | No duplicate | Edit BT-A again twice, quickly. | Still one CR employee | Yes (update) |
-| T6 | Update while temporary | Change BT-A's address. | CR shows the new address; status still `waiting` | Yes |
-| T7 | Workday ID arrives | Fill `workday_id` on BT-A in HubSpot only. | CR unchanged; status `waiting` "Replace the temporary id…" | No |
-| T8 | Staff replace the id | On the CR profile, replace the temporary id with the Workday ID; tick the checklist in HubSpot. | Status `success` | Manual |
-| T9 | Ticked too early | Run after T13. On **BCBA-A**, tick the checklist while CR still holds the temporary id. | `error` "Checklist is ticked but…"; CR unchanged | No |
-| T10 | Mismatch stop | Change BT-A's `workday_id` to a different value. Then restore it. | `error` "Workday ID does not match CentralReach"; no CR write; `success` after the restore | No |
-| T11 | Create with a Workday ID | Set Yes on **BT-B**. | CR employee with External System ID = the Workday ID; `success` | **Yes** |
-| T12 | One Workday ID, two records | Set Yes on **BCBA-B** (same Workday ID as BT-B). | `error`; no second employee; BT-B's CR employee unchanged | No |
-| T13 | BCBA create | Set Yes on **BCBA-A**. | CR employee on the `Admin` form with the temporary id; `waiting` | **Yes** |
-| T14 | Case | Enable the client worker. Set Yes on **Case-A**; edit it again; change a field. | One CR client; no duplicate; the change reaches CR; `success` | **Yes** |
-| T15 | Case mismatch stop | Put a different test client's CR id in Case-A's `client_id_number`. Then restore it. | `error`; no CR write | No |
-| T16 | Alert | Send one malformed test message to a queue (the only Service Bus send in this plan). Then purge it. | It dead-letters; the email arrives | No |
+| 4.1 | Mailing Address | `street_address`, `home_apt`, `location_city`, `stateregion`, `postal_code`, `phone` | Address line 1 and 2, city, state, zip, cell phone | State comes from `stateregion`, not `location`. Line 1 is `street_address` only. |
+| 4.2 | Comorbid and Maladaptive | `does_your_child_have_any_other_comorbid_diagnoses_`, `maladaptive_behaviors__parentguardian` | Metadata `132303`, `126207` | Main fields only; stop reading the two `__clinical` properties. Send the stored option values. |
+| 4.3 | Severity and parent notes | `severity_level_clinical`, `important_information` | `133826`, `138378`† | Parent notes is new. |
+| 4.4 | Work Schedule #1 and #2 | `work_schedule_details`, `btrbt_work_schedule_2_details` | `132304`, `138093` | The Location #2 variants wait (section 12). |
+| 4.5 | Client Availability | `finalized_client_service_hours_post_assessment`, `client_service_hours_total` | `126209` | The text, then the weekly hours when filled. |
+| 4.6 | Total Assigned Hours | `total_hours_bt1bt2_work_schedule` | `134331` | Ignore the two older totals. |
+| 4.7 | Approved Auth Hours | `initial_auth_tracks` chooses: Prior Authorization Required → `n97153_approved_assessment_hours_auth_req`; No Prior Authorization Required → `ia_hours_from_the_ia` | `132431` | Blank when the track is blank. |
+| 4.8 | Auth Period | `ongoing_auth_period_start_date`, `ongoing_autrh_period_end_date` (the spelling is real) | `134672` | Start – end. Never the `_f` copies. |
+| 4.9 | Known Allergies | `allergies` (stored `Confirmed` / `Denial`), `allergies__yes__explain` | `126214` | Yes with the explanation, or No. |
+| 4.10 | Secondary Insurance and ID | `insurance_2` (or `insurance_2__other__summary` when Other), `insurance_id_2` | `144600`†, `144601`† | Not `n2_what_type_of_insurance`. |
+| 4.11 | Referring Physician Medicaid ID, Diagnosis, Referral Source | `referring_provider_medicaid_id`; `phi_diagnosis` + `diagnosis_other`; `referral_source` | `141233`†, `144793`†, `126222`† | `phi_diagnosis` stores `Yes` for "Yes-F84.0". |
+| 4.12 | ASD dates | `most_recent_asd_diagnosis_date_1`; `most_recent_asd_diagnosis_date_medicaid` | `131195` (general); `138701` (Medicaid FFS NY) | Send both, each to its own field. Remove the pick-one logic and `most_recent_asd_diagnosis_date_2`. |
+| 4.13 | Service Location Address | `specific_home_location`: Child's House → `full_home_address`; Other Location → `service__street_address`, `service__apt`, `service__city`, `service__postal_code` | `137697`† | More Than One Location and Address 2 wait (section 12). |
+| 4.14 | IA, Reassessment BCBA and Primary BT names | Case → BCBA and Case → BT/RBT associations by role (IDs in section 3), then each staff record's `first_name` + `last_name` | `131314`, `144602`†, `131313`, `138092` | Read associations, not the text rollups. An association answer with no `results` list is a failed read, not "no staff". Match the type ID and the `USER_DEFINED` category together. Several staff in one role: names joined, in record-ID order. Read staff names in one batch call per object type. |
+| 4.15 | Supervising BCBA | `ongoing_central_reach_provider_supplier` | `131308` | The typed text as it is. |
+| 4.16 | Care Coordinator | `hubspot_owner_id` → `GET /crm/v3/owners/{id}` | `138851`† | Cache owners in memory. If the owner call is refused (403: the scope is not on the app yet), leave the field out, log a warning, and do not fail the run. |
+| 4.17 | Requests | — | — | Stop requesting `insurance_id_4`, the misspelled `…_other_addres` property and the properties replaced above. |
+| 4.18 | Sensitive fields | `phi_first_name__cloned_`, `phi_last_name`, `phi_date_of_birth`, `phi_gender`, `insurance_id_1`, `insurance_id_2`, `phi__policy_holder_dob`, `phi_diagnosis` | — | If a requested sensitive key is missing from the HubSpot answer, the read failed (rule 5.8): `error`, no CR write. |
+| 4.19 | Labels · State | `location` | CO Client `1132648`, NJ Client `1132647`†, NY Client `1082499` | Add-only. |
+| 4.20 | Labels · Service location | `specific_home_location` is Child's House or More Than One Location | Home `1052656`† | Add-only. |
+| 4.21 | Labels · Funding | `insurance_primary` with `location` | Aetna + NY `1082497`†; Cigna + NY `1082498`†; Cigna + CO `1124249`†; Medicaid FFS + NY / NJ / CO `1052532`† / `1124247`† / `1124248`†; any of the nine `-Carelon` options `1107648`†; Anthem BCBS `1052620`†; UHC `1052534`† | Add-only. Other combinations get no funding label. |
 
-After the tests: Zeke decides whether the app stays running (webhooks only, segments on) or is stopped again. The test employees stay in CR as "Azure Test" records; the API cannot delete them, and Zeke can make them inactive on the CR screen.
+Not built in Stage 4: the staffing label row and the Active / Inactive label (both held until the label test; Zeke, 2026-11-18); Grad Permit Holder; the physician pair selector stays as it is today (`n1_what_type_of_insurance`).
 
-CR behaviour tests that can use these test employees (each is a CR write; Zeke's go-ahead; results go in the tracker under Q6):
+### Stage 5 — Employee mappings
 
-| Test | Question | Needed before |
-|---|---|---|
-| (b) | Does the labels POST replace the set or only add? Decides the label rules. | Stages 6 and 7 label rows |
-| (a) | How is a metadata value cleared? | Stage 6 |
-| (e) | Does an update accept a changed primary email? | Stage 7 |
-| (f) | Does the API accept each contact form name as the screen shows it? | Stage 7 (Q29) |
-| (i) | Does CR accept a second employee with an External System ID already in use? | Stage 9 (Q32) |
-| (g) | Can an update set an External System ID on an employee that has none? Needs an employee made on the CR screen. | Stage 9 (Q33) |
-| (h), (c) | Changed External System ID on a client; what a 409 matches on. | Optional |
+**Guide sections.** `[GER-BCBA]`, `[GER-BT]`, sections 5, 6, 8 and 9, the appendix.
 
-## 9. Stage 4 — Code slice S1b-2: durable state and retries
+**Files.** `src/mappings/employees/buildEmployeePayload.mjs`, `src/mappings/employees/validateEmployeePayload.mjs`, `src/workflows/employeeSyncWorkflow.mjs`, `src/constants/centralReach.mjs`, tests.
 
-Owner: Claude. Rough size: 2 days. Files: both workers, `cosmosState.mjs`, `mappedState.mjs`, `serviceBusClient.mjs`, both queue functions, `retry.mjs`, `host.json`, tests.
+| # | Guide row | HubSpot source | CentralReach target | Rule |
+|---|---|---|---|---|
+| 5.1 | BCBA gender | `gender_new` (Male / Female) | Gender | Never the archived `gender`. |
+| 5.2 | BCBA address and phone | `address`, `apartment__home`, `city_home`, `state_home`, `postal_code_home`, `employee_phone` | Address, city, state, zip, cell phone | Replaces `home_apt`, `city_work`, `home_state`. Adds the zip. |
+| 5.3 | BCBA excluded field | `credentialed_insurances__ny` | — | Stop reading it and stop sending metadata `134444`. |
+| 5.4 | BCBA labels · header and state | Every BCBA; one per Work State in `location` (a multi-checkbox) | BCBA `1130668`; CO / NJ / NY Employee `1107687` / `1107686`† / `1132655` | Add-only. Skip New Mexico and Virginia. |
+| 5.5 | BCBA labels · assignment and licensure | `assign_states` contains `Assign CO` / `Assign NJ`; `lba_licensure__ny` = `Yes` / `Grad Permit` | BCBA Colorado `1124246`†; BCBA LBA NJ `1124245`†; BCBA LBA NY `1052629`; GRAD Student- LBA NY `1092164`† | "Will Apply" is stored as `No` and gets no label. |
+| 5.6 | BCBA label · NY Medicaid | `ny_insurance_labels` contains `MCD FFS-NY` | NY Medicaid `1107647`† | The commercial insurer options wait (section 12). |
+| 5.7 | BCBA label · Salaried | `work_status` = `Salaried` | Salaried `1132653`† | Add-only. |
+| 5.8 | BCBA label · Billing Hold | `cr_billing_hold_label` = `Yes` | Billing Hold Medicaid Affiliation `1103437`† | Added on Yes. Not removed on No until the label test. |
+| 5.9 | BT/RBT address | `street_home`, `location_city`, `state_home`, `postal_code_home`, `employee_phone` | Address line 1, city, state, zip, cell phone | State from `state_home`, not `location_home`. Zip from `postal_code_home` only. The guide lists no apartment for the home address, so `home_apt` is no longer sent. |
+| 5.10 | BT/RBT work address | `street_address__work_`, `apartment__work`, `city__work_`, `state__work_`, `postal_code__work_` | Metadata `133819` | Adds the apartment. |
+| 5.11 | BT/RBT labels · state | One per Work State in `location` | CO / NJ / NY Employee | Add-only. Replaces the single label from the home state. |
+| 5.12 | BT/RBT labels · role | `bt_rbt_type` × each Work State | BT: Behavior Technician NY `1052630`, NJ `1132652`†, CO `1132650`†. RBT: RBT NY `1052631`, NJ `1132651`†, CO `1107692` | An RBT gets the RBT label only. A BT in Colorado gets Behavior Technician CO, not RBT CO. `bt_to_rbt_path` has no effect. |
 
-| # | Step | Change | Tracker id |
+Unchanged in Stage 5, on purpose: the contact form (BCBA `Admin`, BT/RBT `Behavior Technician NY`); updates send the email CentralReach holds; the labels All Employees `1052618` and Clinical `1052643` stay as they are today; BCBA personal email (Stage 6). Not built: the Workday ID format check; BCBA Care Coordinator.
+
+### Stage 6 — Contact routing
+
+**Guide sections.** `[GER-CONTACT]`; section 11 "It's actually 4 objects".
+
+**Files.** `src/lib/hubspotWebhook.mjs`, `src/functions/hubspotWebhook.mjs`, `src/functions/processClientQueue.mjs`, new `src/workflows/contactFanOutWorkflow.mjs`, `src/lib/hubspotClient.mjs`, `src/lib/serviceBusClient.mjs`, `src/mappings/employees/buildEmployeePayload.mjs`, `src/workflows/employeeSyncWorkflow.mjs`, tests.
+
+| # | Rule (plain words) | Change | Tests that prove it |
 |---|---|---|---|
-| 4.1 | Durable link record | One Cosmos record per HubSpot record holds the CR id and the last fully synced values, with no expiry. Attempt status is a separate record that may expire. | 8H, N1 |
-| 4.2 | Baseline tied to the CR id | If the CR id changes, the saved values are dropped and every field counts as changed. | V14 |
-| 4.3 | Pending create | The External System ID about to be used is saved before the create is sent. The next run looks that id up first. | V13 |
-| 4.4 | Honest "nothing changed" | A run is a no-op only when the previous run finished cleanly. | 8F, B3 |
-| 4.5 | Lock ownership | A lock is released only by the run that took it, and lasts long enough for a slow run. | 8D |
-| 4.6 | Portal in messages and state | Queue messages and state keys carry the portal id; association exclusions follow the portal. | 8I, B4 |
-| 4.7 | Failure classes | Temporary (429, 5xx, timeout on an update), permanent (bad data, CR 400), unknown create result. | 12 |
-| 4.8 | Scheduled retries | A temporary failure is re-queued with delays of 1 min, 5 min, 15 min, 1 h, 4 h. The attempt number travels in the message and each attempt has its own message id. After the last: dead-letter, `error` on the record, the alert. | 12, V18 |
-| 4.9 | Busy and stale runs | "Sync in progress" and "stale" are rescheduled, not failed. | 12C, V16 |
-| 4.10 | Retry-After and metadata failures | CR's Retry-After is honoured in full; a metadata failure keeps its status code. | 12B, 12E, B8 |
-| 4.11 | `host.json` Service Bus options | Set on purpose instead of defaults. | 12D |
-| 4.12 | Tests, two reviews, docs, commit | As in Stage 1. | — |
-| 4.13 | Deploy and re-test | Grok deploys and checks the Cosmos container allows records with no expiry. Re-run T4-style checks on a new test record, plus: two quick edits (the second run is rescheduled, not failed). | — |
+| 6.1 | **A Contact change is accepted and queued.** | The webhook accepts object type `0-1` and sends a `contactChange` message (Contact ID only) to the client queue. | A Contact notice returns 202 and queues one message. |
+| 6.2 | **A Contact change reaches every record that reads from it, through the normal workers.** A Contact never becomes its own CentralReach record. | The fan-out reads the Contact's associations to Cases (Guardian) and to BCBAs, then queues an ordinary sync message for each. The gate in the workers decides whether each may sync. The record gate and `test_record` are not checked on the Contact itself. | One Contact linked to two Cases and one BCBA → three messages. No CR call is made by the fan-out. A failed association read queues nothing and is retried. |
+| 6.3 | **Guardian name, email and phone reach the client.** | Already read from the Case sync properties (`guardian_first_name`, `guardian_last_name`, `email`, `phone`); confirm they are in the compared state. | A Guardian change produces a client update. |
+| 6.4 | **BCBA personal email comes from the BCBA's Contact.** | Read the associated Contact's `email` through the BCBA → Contact association and send it to metadata `138069`, replacing `email` on the BCBA record. A failed Contact read leaves the field out; it is not a clear. | Contact email changes → the metadata field updates. No Contact → the field is left out. |
 
-## 10. Stage 5 — Code slices S5 + S6: poller and fewer calls
+Live testing of Stage 6 waits for the sandbox Contact workflow. The code and its offline tests are built now.
 
-Owner: Claude. Rough size: 2 to 3 days. Files: `intakePollerWorkflow.mjs`, `intakePoller.mjs`, `hubspotClient.mjs`, `config.mjs`, both workers, `hubspotWebhook.mjs`, `README.md`, tests. **A sandbox run of the poller needs D6.**
+## 11. Stages 7 to 9 — After the build
 
-| # | Step | Change | Tracker id |
+### Stage 7 — Final sandbox test plan and deploy while Stopped
+
+| # | Step | Who | Done when |
 |---|---|---|---|
-| 5.1 | Hourly timer | From every 5 minutes to once an hour. | Q1 |
-| 5.2 | Checkpoint per entity | Each search starts from a saved point and moves it forward only after the queue sends succeed, never past a page it did not finish. All pages are read, with a cap per run. | V19 |
-| 5.3 | Independent searches | A failed Case search no longer skips the employee searches. A rejected filter fails loudly instead of running without the filter. | Poller gaps |
-| 5.4 | Unlinked Yes search | Finds records with Yes and no CR id, whatever their last edit date, including earlier `waiting` and `error` records. | Poller gaps |
-| 5.5 | Daily sweep | Once a day, every linked record is queued. Replaces the five-minute recheck. | Item 11 |
-| 5.6 | No self-triggering | The poller no longer re-queues records the integration itself just wrote. | N2, N3 |
-| 5.7 | A no-op writes nothing | One HubSpot read, one Cosmos read, no writes; only when HubSpot already holds the CR id. The duplicate first read is removed. `noop` is no longer written. | Item 9, V15, Q10 |
-| 5.8 | One-call metadata update | Used once a sandbox run confirms it. | Item 9 |
-| 5.9 | Missed-webhook log | When the poller finds a change no webhook delivered, it logs the changed field names (never values). | Design |
-| 5.10 | Trigger coverage test | Zeke exports each webhook workflow's trigger properties into a repo file; a test fails when a mapped property has no trigger. | Design |
-| 5.11 | Webhook clean-up | Remove the log-only coalesce; fix the README line. | Item 10 |
-| 5.12 | Record gate (only if D6 is approved) | The optional property gate in the poller searches and the worker. | D6, Q26 |
-| 5.13 | Tests, two reviews, docs, commit, deploy | As before. | — |
-| 5.14 | Sandbox poller test | With D6 set to `sandbox_test_field`: enable the poller; edit a test record with its workflow turned off; within an hour the change reaches CR and the log names the field. A no-op run writes nothing to HubSpot. | — |
+| 7.1 | Write `SANDBOX-TEST-PLAN.md` from the draft list below and the rules in section 5. | Claude | Zeke agrees |
+| 7.2 | Sandbox HubSpot: test records (each with `sandbox_test_field` = true, `test_record` blank, Entered in CentralReach blank until its test); every webhook workflow filters on its test list (`1463` Deals, `1464` BCBAs, `1465` BT/RBTs); the employee ongoing-update workflows trigger on `workday_id` and the checklist; failures and waiting views per object; trigger lists exported into `webhook-triggers.json`. | Zeke | `npm run check:triggers` passes |
+| 7.3 | Azure, app Stopped, each write on Zeke's go-ahead: settings for `52311591` (portal ID, both object type IDs); the sandbox token and webhook secret entered by Zeke in the portal; `SYNC_RECORD_GATE_PROPERTY` = `sandbox_test_field`; remove the six unused pipeline and allowlist settings and the settings Stage 3 retired; safe switches (poller and both workers disabled, `ALLOW_EMPLOYEE_CREATE` = `false`, `PUT_ONLY_MODE` = `true`); purge both dead-letter queues (never replay); confirm both queues are empty and Cosmos holds nothing from `50850427`; one email alert on dead-letter count above zero; deploy the reviewed commit and record its hash and the function timeout. | Grok | Every value read back; app still Stopped |
 
-## 11. Stage 6 — Code slice S2: Case mappings
+### Stage 8 — Full sandbox testing
 
-Owner: Claude. Rough size: 3 days. Files: `buildClientPayload.mjs`, `buildClientMetadata.mjs`, `validateClientPayload.mjs`, `clientSyncWorkflow.mjs`, `hubspotClient.mjs`, `src/constants/centralReach.mjs`, tests. One test per guide row.
+Run only from the agreed plan. Each test that writes to CentralReach needs Zeke's go-ahead at that step and a test record he names. Stop at the first unexpected result. Draft list (input to 7.1, not the final plan):
 
-| # | Step | Waits on |
+| Area | Draft tests |
+|---|---|
+| Gate | A record outside the test list sends no webhook; with the poller on, a record without `sandbox_test_field` is never queued. |
+| Employee create | Missing email → `error`, no CR call. Create off → `waiting`. Create with a blank `workday_id` → temporary ID, `waiting`. Two quick edits → one employee. Create with a Workday ID → `success`. BCBA create. |
+| Workday ID steps | Address change while `waiting` reaches CR. Workday ID filled → `waiting` "replace". ID replaced on the CR profile and checklist ticked → `success`. Checklist ticked too early → `error`. Workday ID changed to another value → `error`, no CR write. |
+| Identity | Two records with one Workday ID → the second is `error`. A Workday ID that an existing test employee holds → `waiting`, no link. |
+| Case | Create, no duplicate, an update, the linked-Case check with a wrong Client ID → `error`. |
+| Retries and alert | A forced temporary failure walks the delay steps; one malformed test message dead-letters and the email arrives. |
+| Poller | A change with its workflow off reaches CR within the hour and the log names the field; a no-op run writes nothing. |
+| CentralReach behaviour | Labels POST adds or replaces; how a metadata value is cleared; whether an update accepts a changed email; contact form names; an update of a client created by hand (no External System ID); the one-call metadata update. |
+
+After the label test, build the two held label rows as replace-on-change if CentralReach allows it:
+
+- Staffing, from `staffing_status` (IDs are in `CENTRAL_REACH_CLIENT_STAFFING_LABELS`). A blank value sends no staffing label.
+- Active / Inactive, from `case_status`: `Warm` → Active Client `1125427`†; `Cold` → In-Active Client `1121488`†.
+
+If CentralReach cannot replace or remove a label, Zeke decides for each row whether to send it add-only or keep holding it.
+
+### Stage 9 — Production readiness
+
+| # | Step | Who |
 |---|---|---|
-| 6.1 | Mailing address from `street_address`; state from `stateregion`. | — |
-| 6.2 | Comorbid and maladaptive from the parent/guardian properties. | — |
-| 6.3 | Work Schedule 1 and 2, Client Availability, Total Assigned Hours, Approved Auth Hours, Auth Period from the guide's sources. | Q15 for the Location 2 variants |
-| 6.4 | Secondary insurance and id; allergies explanation; Referring Physician Medicaid ID; Diagnosis; parent notes; referral source. | Q16 for `insurance_id_3` |
-| 6.5 | Both ASD dates, each to its own CR field. | Q13 (field ids, physician pair) |
-| 6.6 | Service location address branches. | Q15 |
-| 6.7 | IA BCBA and BT names from associations, not text. Association answers are checked (source, target, category, role together) before roles are mapped. | — |
-| 6.8 | Supervising BCBA from `ongoing_central_reach_provider_supplier`. | Q9 |
-| 6.9 | Care Coordinator from the owner. | Q8 (scope) |
-| 6.10 | Remove `insurance_id_4` and the misspelled address property from requests. | — |
-| 6.11 | A filled date that cannot be read is an `error`. A Case read with missing sensitive identity fields is a failed read, never a clear. | Item 7, N4 |
-| 6.12 | Case labels with known ids: Active / In-Active, state (CO, NY; NJ after lookup), Home, funding labels with known ids. Add-only. | Q4, Q5, Q17; CR test (b) for removal |
-| 6.12a | Case staffing label from `staffing_status` (read the property, do not derive from stages). Ids, supplied by Zeke 2026-11-18, parent Staffing Status `1156741`: Pending 97151 Services `1156742`, 97151 Services `1156743`, Pending 97153 Services `1156744`, Starting 97153 Services `1156745`, Staffed 97153 `1156746`, X 97153 `1156747`. A blank value sends no staffing label. A Case holds one staffing label at a time, so this row needs replace-on-change: with add-only, old staffing labels would stay on the client. **Decided by Zeke 2026-11-18:** build it after CR test (b). The ids are already in `src/constants/centralReach.mjs` (`CENTRAL_REACH_CLIENT_STAFFING_LABELS`, constants only). If CR cannot replace labels, Zeke decides whether to send it add-only or hold it. | CR test (b) |
-| 6.13 | Label-id lookup in the catalog export (read-only subagent task; can run during Stage 1). | Zeke's OK for the read |
-| 6.14 | Tests, two reviews, docs, commit, deploy, one Case sandbox test per changed group. | — |
+| 9.1 | United Care's answers (section 12). | Danny / United Care |
+| 9.2 | Existing CR employees: list which HubSpot employees are already in CR (a CR export matched against HubSpot, reviewed by United Care) and decide each. Until then the production record gate keeps them out of create and update, including the six hand-linked BT/RBT records and any of the 264 existing BTs whose checklist is ticked later. Zeke decides the production gate property. | Zeke / Danny |
+| 9.3 | Existing CR clients: 81 of 100 sampled HubSpot Client IDs did not resolve through `GET /contacts/client/{id}`. Compare a few in the CR screen and decide before linked Case updates are turned on. | Zeke |
+| 9.4 | Production HubSpot: `date_of_birth` on BCBA as a property sync; `crm.objects.owners.read`; webhook workflows with full trigger lists; failures and waiting views. | Zeke / Danny |
+| 9.5 | Production Azure: settings for `50317927`, production secrets, the alert with Danny or a shared inbox added, deploy with the commit recorded. | Grok, Zeke |
+| 9.6 | Go-live in steps: one worker at a time; updates before creates; then creates for new records only. Watch the failures view, the waiting view and the alert daily for the first week. | Zeke, Grok |
+| 9.7 | Record the final state in the guide. | Claude, on Zeke's request |
 
-Rows that wait on an open question are left out and listed in OPEN-ITEMS, not guessed.
+Separate from these stages: the HubSpot API version migration (needs an owner; target before March 2027). Optional: destination audit, Case History Log, managed identity.
 
-## 12. Stage 7 — Code slice S3: employee mappings
+## 12. Not built yet, and what each waits on
 
-Owner: Claude. Rough size: 2 days. Files: `buildEmployeePayload.mjs`, `validateEmployeePayload.mjs`, `centralReachClient.mjs`, `employeeSyncWorkflow.mjs`, constants, tests.
-
-| # | Step | Waits on |
+| Item | Waits on | Owner |
 |---|---|---|
-| 7.1 | BCBA: gender from `gender_new`; address from `address`, `apartment__home`, `city_home`, `state_home`, `postal_code_home`; Salaried from `work_status`. | — |
-| 7.2 | BCBA: remove the field the guide excludes (`credentialed_insurances__ny`). | — |
-| 7.3 | BT/RBT: home state from `state_home`; work address includes `apartment__work`; zip from `postal_code_home` only. | — |
-| 7.4 | Employee state labels: one per Work State in `location`. | Q17 for NJ ids |
-| 7.5 | BT role labels: BT gets Behavior Technician, RBT gets RBT, by state. | Q17 |
-| 7.6 | BCBA assignment, licensure, insurer and billing-hold labels with known ids. Add-only. | Q4; CR test (b) |
-| 7.7 | Contact form by type and state. | Q29 and CR test (f) |
-| 7.8 | Email change rule. | CR test (e) |
-| 7.9 | Workday ID format check. | Q34 (Danny) |
-| 7.10 | Tests, two reviews, docs, commit, deploy, sandbox employee test. | — |
+| Staffing label row; Active / Inactive label (held: Zeke, 2026-11-18); any label removal (Billing Hold off) | The CentralReach label test (step 0.5) | Zeke |
+| Workday ID format check | The format (640 of 644 production values are 7 digits) | Danny |
+| Contact form by employee type and state | The table and the property that decides the state | United Care via Danny |
+| Employee email change reaching CR | A CentralReach test of a changed email | Zeke |
+| BCBA commercial insurer labels (Aetna, Cigna, Carelon) and CO Medicaid | How the NY and CO options map to the stateless labels | United Care |
+| Funding labels for Aetna or Cigna in NJ, Aetna in CO, Other | Target labels | United Care |
+| Work schedule Location #2 variants; Service Location "More Than One Location"; Address 2 | What `service_address__other` means and what decides "BT works at Location #2" | Sara |
+| Physician pair selector; `insurance_id_3` | Which property decides Medicaid or commercial; the mapping | Zeke / Sara |
+| Grad Permit Holder; Outgoing Supervising BCBA; SUB and On Leave BCBA | How the marker is carried; the removal-date rule | United Care |
+| BCBA Care Coordinator | The CR employee field | Zeke |
+| All Employees, Clinical, All Clients labels (the guide does not list them) | Keep or drop. Recommended: keep. | Zeke |
+| Create signal earlier than Entered in CentralReach = Yes | Sara's answer | Sara, then Zeke |
 
-## 13. Stage 8 — Code slice S4: Contact routing
+## 13. Risks and assumptions
 
-Owner: Claude. Rough size: 1 to 2 days. Blocked until the sandbox Contact workflow exists and the BCBA personal-email sync property is confirmed (V20).
+- **Assumed:** Danny and United Care accept the temporary ID. If not, only steps 1.5 to 1.9 change.
+- **Assumed:** nothing at United Care reads the CR External System ID before staff replace the temporary ID. Not confirmed.
+- **Assumed formats:** Client Availability, Known Allergies and Diagnosis text (steps 4.5, 4.9, 4.11); several staff in one role joined by commas (4.14). Each is checked in the sandbox test plan.
+- **Not confirmed:** the IDs marked † (step 0.6); the answer shapes listed in section 4. The code treats an unreadable answer as a failed read, never as "empty".
+- **Risk:** staff forget to replace the temporary ID. Covered by the waiting view and United Care's HubSpot alerts; the integration cannot replace it.
+- **Risk:** every sandbox create is a real CR record that the API cannot delete. Keep to a handful of named test records; Zeke can make them inactive on the CR screen.
+- **Risk:** a record created with its Workday ID whose state is lost shows `waiting` instead of re-linking (end of section 7). No duplicate results.
+- **Cost accepted:** an employee run that is not a clean no-op makes one CR read for the ID check; a Case run reads the Case and two association lists.
 
-| # | Step |
+## 14. Hand-off brief for the builder (Grok)
+
+Run from the root of the working copy that holds this file. One stage per run. The model ID was listed as available by `cursor-agent --list-models` on 2026-11-18.
+
+```bash
+cursor-agent -p --model cursor-grok-4.6-high --output-format text --force "Build Stage N of docs/workstreams/architecture-update/BUILD-PLAN.md. Follow section 14 of that file exactly."
+```
+
+**Brief.**
+
+1. You are building one stage of an integration that writes to a production system. Read these first, in full: this file's sections 2 to 5, the section for your stage, and `guide-extract-2026-11-18.md` for the guide rows your stage cites. Read the source files your stage lists before changing them.
+2. Obey the hard stops in section 2. In particular: no live API calls, no `func start`, no deploy, no git commands that change anything (no add, commit, push, checkout, stash, reset), and do not open `.env` or `local.settings.json`.
+3. Work in this order: write the tests for every row of your stage table from the rule text; run them and see them fail; write the code; run `npm test` until everything passes.
+4. Build only your stage. If a rule is unclear, or the code makes a rule impossible as written, do not guess: leave that row unbuilt and say so in the report.
+5. Keep the change small and readable. Follow the existing style: ES modules, functions passed in through `dependencies` for tests, `safeLog` for logs, field names in logs and reasons, never values. No new packages.
+6. Do not weaken or delete a test to make it pass. Change an old test only where this plan changed its rule, and list each one.
+7. Finish with a **stage report**: files changed; each new test title; the `npm test` totals; each old test changed and why; any row not built and why; any app setting added, renamed or retired; questions; and one line confirming that no live call, deploy or git change was made.
+
+## 15. Review brief (Claude, and the Opus subagent when Zeke asks)
+
+Give the reviewer the diff, this file's sections 2 to 5 and the stage section. Do not give it conclusions.
+
+1. Re-run `npm test`. Read every changed file in full, not only the diff lines.
+2. For each row of the stage table: is the rule built as written, and does a test prove it? Name any row with no test.
+3. Look for any path that can: create a duplicate; write to the wrong CentralReach record; write for a record the gate should skip; lose a change; turn a failed read into a blank; retry something permanent or drop something temporary; log or store a value instead of a field name.
+4. Check that the create signal is read only in `src/lib/syncEligibility.mjs`, that `blocked` is not written, and that no test or script calls a live service.
+5. Report findings with `file:line`, a severity (high: duplicate, wrong record, gate bypass, lost change, production write risk; medium; low) and the smallest fix. Change nothing.
+
+Per stage: Grok builds → Claude reviews → Grok or Claude fixes → `npm test` → tracker and OPEN-ITEMS updated → Zeke says whether to commit and push.
+
+## 16. Cross-reference to the tracker
+
+For tracker upkeep only. A builder can ignore this table.
+
+| Plan step | Tracker ID |
 |---|---|
-| 8.1 | The webhook accepts Contact notices and queues a `contactChange` message. |
-| 8.2 | A fan-out step finds the linked Cases (Guardian association) and BCBAs (BCBA to Contact association) and queues each through the normal workers, so the gate still applies. |
-| 8.3 | Guardian name, email and phone reach the Case's CR client; the BCBA personal email reaches the BCBA's CR employee. A Contact never becomes its own CR record. |
-| 8.4 | Tests, two reviews, docs, commit, deploy, sandbox test with a test Contact. |
-
-## 14. Stage 9 — Production readiness and go-live
-
-Nothing here starts until Stages 1 to 8 are done and Zeke resolves D8.
-
-| # | Step | Owner | Tracker id |
-|---|---|---|---|
-| 9.1 | Answers from Danny, Sara and United Care that block production: agreement to the temporary id; anything that reads CR's External System ID early; Workday ID format and the 4 wrong values (one may be a Social Security number; correct it first); the shared Workday ID pair `2002628`; date of birth source; contact forms. | Danny / United Care | Q35, Q34, Q32, Q28, Q29 |
-| 9.2 | **Existing CR employees.** List which HubSpot employees are already in CR (a CR export matched against HubSpot, reviewed by United Care) and decide each discrepancy. Until decided they stay out of the sync: the production gate (D6) or workflow filters keep them out of create and update, including the six hand-linked BT/RBT records. **Note for production (Zeke, 2026-11-18, to be decided):** if Danny's Workday ID alerts cover BTs already in Workday, staff will tick the checklist on up to 264 existing records, and each tick sends a webhook once the checklist trigger exists in production. The gate must keep those records out until United Care confirms them. | Zeke / Danny | Q33, V6 |
-| 9.3 | CR tests (g) and (i). | Zeke, Claude | Q6 |
-| 9.4 | Production HubSpot: `date_of_birth` on BCBA as a property sync; `crm.objects.owners.read` scope; production webhook workflows with full trigger lists (including `workday_id` and the checklists); failures and waiting views. | Zeke / Danny | Q28, Q8 |
-| 9.5 | Remaining label rows, and label removal if CR test (b) allows it. | Claude | Item 5 |
-| 9.6 | Repo docs fixes (`SOURCE-OF-TRUTH.md`, three `README.md` lines). | Claude | Q12 |
-| 9.7 | Production Azure: settings for `50317927`, production secrets, the alert with Danny or a shared inbox added, poller on, deploy with the commit recorded. | Grok, Zeke | Gate |
-| 9.8 | Go-live in steps: one worker at a time; updates before creates (`PUT_ONLY_MODE` on first); then creates for new records only. Watch the failures view, the waiting view and the alert daily for the first week. | Zeke, Grok | — |
-| 9.9 | Record the final state in the guide. | Claude, on Zeke's request | — |
-
-Separate workstream, not in these stages: the HubSpot API version migration (needs an owner; target before March 2027). Optional: destination audit, Case History Log, managed identity.
-
-## 15. What can run at the same time
-
-| While this runs | These can run too |
-|---|---|
-| Stage 1 code (Claude) | 0.2 Azure read (Grok); 0.3 to 0.6 HubSpot setup (Zeke); 6.13 label-id lookup (subagent); 2.1 to 2.7 Azure prep with the app Stopped (Grok) |
-| Stage 3 tests | Stage 4 code (Claude), as long as nothing is deployed mid-test |
-| Stages 4 to 8 | Danny's and United Care's answers; CR behaviour tests on the Stage 3 test employees |
-
-Code slices run one after another on one branch. Stages 6 and 7 touch different mapping files and could be built in parallel in separate worktrees if speed matters more than simplicity; the default is one after the other.
-
-## 16. Risks and assumptions
-
-- **Assumption:** Danny and United Care accept the temporary id. If they do not, only steps 1.4, 1.5 and 1.8 change; the rest of Stage 1 stands.
-- **Assumption:** nothing at United Care reads CR's External System ID before staff replace the temporary id. Not confirmed (OPEN-ITEMS section 3, question 17).
-- **Risk:** staff forget to replace the temporary id. Covered by the `waiting` view and United Care's own HubSpot reminders; the integration cannot replace it.
-- **Risk:** the response shape of the CR labels read is not confirmed until T4. The code handles the documented shapes and makes no post when the read fails.
-- **Risk:** every Stage 3 create is a real CR employee that cannot be deleted by API. Kept to four test employees and one test client.
-- **Risk:** a production record with a wrong `workday_id` is sent to CR as typed until the format check (Q34) exists. Production creates do not start before 9.1.
-- **Not verified by Claude:** that each sandbox workflow filters on its list (0.4). T1 proves it.
-
-## 17. Validation, in short
-
-| Stage | Proof |
-|---|---|
-| 1, 4, 5, 6, 7, 8 | `npm test` passes; one test per guide row; two independent reviews; commit hash recorded |
-| 2 | Grok's read-back of every setting; dead-letter counts 0; app Stopped |
-| 3 | T0 to T16 each recorded with the HubSpot status, a read-only CR check and the queue counts |
-| 9 | 9.1 to 9.7 closed in OPEN-ITEMS; first-week daily check of the failures view, waiting view and alert |
-
-## Appendix — Hand-off briefs
-
-**Grok, brief A (Stages 0.2 and 2).** Repo `/Users/zeke/Desktop/projects/client_projects/Optidge/azure_central_reach`, branch `architecture-update`. Read this file's sections 2 and 7 first. Do steps 2.1 and 2.3 to 2.8 in order, asking Zeke before each write, and read each value back. Keep `centralreachserverless` Stopped. No Service Bus send, receive or replay; purge only the two dead-letter queues. Report: each step, the value read back, the deployed commit hash, anything unexpected. No secret values in the report.
-
-**Grok, brief B (Stage 3).** Read sections 2 and 8. Start the app only when Zeke says so. For each test Zeke runs, report: active and dead-letter counts for both queues, and the run's log lines with field names only. Change `ALLOW_EMPLOYEE_CREATE`, `PUT_ONLY_MODE` and the worker switches only at the test that names them, on Zeke's word. Stop the app at once on any unexpected CR write.
-
-**Grok, brief C (each code slice).** Read-only review of the slice's diff against the stage table in this file and the guide rows it cites. Run `npm test`. Report findings with `file:line`, a severity, and the smallest fix. Change nothing.
-
-**Reviewer subagent (each code slice).** Give it: the diff, section 3 of this file, the stage table, and the guide rows. Do not give it conclusions. Ask for: any path that can create a duplicate, write to the wrong CR record, lose a change, or write to CR for a record that should be skipped; any rule in the tables with no test.
+| 1.1, 3.4 | Q26, review F16; decision of 2026-11-18 |
+| 1.2 | Q31, V2 |
+| 1.3 | V17 |
+| 1.4 | V9, V10, item 7 |
+| 1.5 to 1.7 | Q35, Q32, V5, review F01 and F02 |
+| 1.8 | V5 |
+| 1.9 | Q30, Q35 |
+| 1.10 | V11 |
+| 1.11 | V4, Q30, review F15 |
+| 1.12 | V1, Q22 |
+| 2.1 to 2.4 | 8F, 8H, N1, V13, V14, B3 |
+| 2.5, 2.6 | 8D, 8I, B4 |
+| 2.7 to 2.11 | Item 12, V16, V18, B8 |
+| 3.1 to 3.6 | Item 11, V19, N2, N3 |
+| 3.7, 3.8 | Item 9, V15, Q10 |
+| 3.10, 3.11 | Item 10, Q12 |
+| Stage 4 | Items 3, 6, 7; B5, N4 |
+| Stage 5 | Items 4, 5 |
+| Stage 6 | Item 10, V20 |
+| 9.2, 9.3 | Q33, V6; 2026-11-18 client read |
