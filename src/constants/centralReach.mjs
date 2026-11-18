@@ -37,6 +37,22 @@ export const CENTRAL_REACH_CLIENT_LABELS = {
   CO_CLIENT: 1132648
 };
 
+// Parent label "Staffing Status" in Central Reach. The six staffing labels sit under it.
+export const CENTRAL_REACH_STAFFING_STATUS_PARENT_LABEL_ID = 1156741;
+
+// Client staffing labels, keyed by the HubSpot Case staffing_status stored value (the stored value
+// equals the Central Reach label name). Ids from a live GET /contacts/labels (Zeke, 2026-11-18).
+// Not sent yet: the staffing label row is built after the Central Reach label test, because a Case
+// holds one staffing label at a time and labels are add-only until that test is run.
+export const CENTRAL_REACH_CLIENT_STAFFING_LABELS = {
+  "Pending 97151 Services": 1156742,
+  "97151 Services": 1156743,
+  "Pending 97153 Services": 1156744,
+  "Starting 97153 Services": 1156745,
+  "Staffed 97153": 1156746,
+  "X 97153": 1156747
+};
+
 export const CENTRAL_REACH_CLIENT_METADATA_FIELDS = {
   ALLERGIES: 126214,
   MALADAPTIVE_BEHAVIORS: 126207,
