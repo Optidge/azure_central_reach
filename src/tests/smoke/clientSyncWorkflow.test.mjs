@@ -28,6 +28,7 @@ function buildDeps(overrides = {}) {
     buildClientPayload: () => ({ FirstName: "Alex", LastName: "Rivera" }),
     validateClientPayload: () => ({ isValid: true, errors: [] }),
     hashPayload: () => "new-hash",
+    findClientByExternalSystemId: async () => ({ found: false, crContactId: null }),
     createOrUpdateClient: async () => ({ operation: "update", crContactId: "2001" }),
     buildClientMetadata: () => ({ labelIds: [1], metadataValues: { 123: "ok" } }),
     updateClientMetadata: async () => ({ updatedCount: 1, failedCount: 0 }),
@@ -77,18 +78,16 @@ test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
   assert.equal(calls.stateWrites[0].data.operation, "noop");
 });
 
-test("runClientSyncWorkflow writes fail state and rethrows on errors", async () => {
+test("runClientSyncWorkflow writes fail state when validation decides an error", async () => {
   const { deps, calls } = buildDeps({
     validateClientPayload: () => ({ isValid: false, errors: ["FirstName is required"] })
   });
 
-  await assert.rejects(
-    runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps),
-    /PayloadValidationError/
-  );
-
+  const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
+  assert.equal(result.status, "error");
   assert.equal(calls.writebacks.length, 1);
   assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
+  assert.equal(calls.writebacks[0].properties.last_sync_error, "FirstName is required");
   assert.equal(calls.stateWrites[0].type, "fail");
 });
 

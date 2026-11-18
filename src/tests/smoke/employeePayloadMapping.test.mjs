@@ -21,7 +21,8 @@ test("BT/RBT mapping builds expected safe payload", () => {
       properties: {
         hs_object_id: "r1",
         workday_id: "1000001",
-        bt_name: "Alex Rivera",
+        first_name: "Alex",
+        last_name: "Rivera",
         date_of_birth: "2000-01-02",
         gender: "male",
         email: "Alex@example.com",
@@ -55,9 +56,10 @@ test("BCBA mapping builds expected payload and metadata", () => {
       properties: {
         hs_object_id: "r2",
         workday_id: "1000002",
-        bcba_name: "Pat Morgan",
+        first_name: "Pat",
+        last_name: "Morgan",
         date_of_birth: "1990-10-20",
-        work_email: "pat@work.test",
+        ucaba_email_address: "pat@work.test",
         email: "pat@home.test",
         address: "22 Oak",
         city_work: "Aurora",

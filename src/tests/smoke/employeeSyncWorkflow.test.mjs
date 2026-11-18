@@ -50,7 +50,8 @@ function buildDeps(overrides = {}) {
     }),
     validateEmployeePayload: () => ({ isValid: true, errors: [] }),
     hashPayload: () => "hash-2",
-    getEmployeeByContactId: async () => ({ externalSystemId: "1", primaryEmail: "a@test.com" }),
+    getEmployeeByContactId: async () => ({ primaryEmail: "a@test.com" }),
+    findEmployeeByExternalSystemId: async () => ({ found: false, crContactId: null }),
     buildEmployeePayloadForContactId: (payload) => ({ payload }),
     createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "100" }),
     updateClientMetadata: async () => ({}),
@@ -137,8 +138,8 @@ test("hash match does not noop when employee_id is missing", async () => {
   assert.equal(result.crContactId, "101");
 });
 
-test("workflow returns blocked when creation is disabled", async () => {
-  const { deps } = buildDeps({
+test("workflow returns waiting when creation is turned off", async () => {
+  const { deps, calls } = buildDeps({
     getBtRbtRecordById: async () => ({
       id: "1",
       properties: {
@@ -148,11 +149,16 @@ test("workflow returns blocked when creation is disabled", async () => {
         entered_in_centralreach: "Yes"
       }
     }),
-    createOrUpdateEmployee: async () => ({ operation: "blocked", reason: "disabled" })
+    createOrUpdateEmployee: async () => ({
+      operation: "create_turned_off",
+      reason: "Employee create is turned off"
+    })
   });
 
   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
-  assert.equal(result.status, "blocked");
+  assert.equal(result.status, "waiting");
+  assert.equal(calls.writebacks.at(-1).properties.last_sync_error, "Employee create is turned off");
+  assert.notEqual(result.status, "blocked");
 });
 
 test("workflow writes BCBA CentralReach link property", async () => {
@@ -289,15 +295,14 @@ test("workflow logs warning when metadata write reports failed fields", async ()
   assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
 });
 
-test("workflow writes fail state and rethrows errors", async () => {
+test("workflow writes fail state when validation decides an error", async () => {
   const { deps, calls } = buildDeps({
     validateEmployeePayload: () => ({ isValid: false, errors: ["externalSystemId is required"] })
   });
 
-  await assert.rejects(
-    runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps),
-    /PayloadValidationError/
-  );
+  const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
+  assert.equal(result.status, "error");
+  assert.equal(calls.writebacks[0].properties.last_sync_error, "externalSystemId is required");
   assert.equal(calls.stateWrites[0].type, "fail");
 });
 

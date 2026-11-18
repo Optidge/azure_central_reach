@@ -37,16 +37,19 @@ test("buildClientPayload maps and normalizes AWS canonical fields", () => {
 });
 
 test("validateClientPayload enforces required names", () => {
-  const valid = validateClientPayload({
-    FirstName: "Alex",
-    LastName: "Rivera"
-  });
+  const valid = validateClientPayload(
+    { FirstName: "Alex", LastName: "Rivera" },
+    { linked: true }
+  );
   assert.equal(valid.isValid, true);
 
-  const invalid = validateClientPayload({
-    FirstName: "",
-    LastName: null
-  });
+  const invalid = validateClientPayload(
+    { FirstName: "", LastName: null },
+    { linked: true }
+  );
   assert.equal(invalid.isValid, false);
-  assert.deepEqual(invalid.errors, ["FirstName is required", "LastName is required"]);
+  assert.deepEqual(invalid.errors, [
+    "Missing required field: phi_first_name__cloned_",
+    "Missing required field: phi_last_name"
+  ]);
 });

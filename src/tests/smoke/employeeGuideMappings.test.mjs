@@ -2,19 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import axios from "axios";
 import { buildEmployeePayload } from "../../mappings/employees/buildEmployeePayload.mjs";
-import {
-  MISSING_WORKDAY_ID_ERROR,
-  validateEmployeePayload
-} from "../../mappings/employees/validateEmployeePayload.mjs";
+import { validateEmployeePayload } from "../../mappings/employees/validateEmployeePayload.mjs";
 import {
   buildEmployeePayloadForContactId,
   createCentralReachClient,
   createOrUpdateEmployee
 } from "../../lib/centralReachClient.mjs";
 
-// Guide [GER-BCBA] and [GER-BT], row "External System ID · HS → CR" (Zeke, 2026-11-16):
-// the Workday ID is the Central Reach External System ID for both employee types. The HubSpot
-// record id is not sent as the External System ID.
+// Guide [G17], [GER-BCBA] and [GER-BT]: a filled workday_id is the External System ID.
+// A blank workday_id sends the HubSpot record ID as a temporary External System ID.
 const config = { hubspot: { hubspotPortalId: "1", btRbtObjectTypeId: "2-a", bcbaObjectTypeId: "2-b" } };
 
 function mapEmployee(employeeType, properties) {
@@ -36,22 +32,35 @@ describe("employee External System ID", () => {
     assert.equal(payload.externalSystemId, "7654321");
   });
 
-  it("a blank workday_id sends no External System ID for either type", () => {
-    for (const [type, name] of [["bt_rbt", { bt_name: "Alex Rivera" }], ["bcba", { bcba_name: "Pat Morgan" }]]) {
-      const payload = mapEmployee(type, { workday_id: "  ", ...name });
-      assert.equal("externalSystemId" in payload, false);
+  it("[G17] a blank workday_id sends the HubSpot record ID for either type", () => {
+    for (const type of ["bt_rbt", "bcba"]) {
+      const payload = mapEmployee(type, {
+        workday_id: "  ",
+        first_name: "Alex",
+        last_name: "Rivera"
+      });
+      assert.equal(payload.externalSystemId, "9001");
     }
   });
 
-  it("an unlinked employee with a blank workday_id fails validation, so nothing is created", () => {
-    const payload = mapEmployee("bcba", { bcba_name: "Pat Morgan" });
-    const result = validateEmployeePayload(payload);
-    assert.equal(result.isValid, false);
-    assert.deepEqual(result.errors, [MISSING_WORKDAY_ID_ERROR]);
+  it("[G17] an unlinked employee with a blank workday_id still validates for a create", () => {
+    const payload = mapEmployee("bcba", {
+      workday_id: "",
+      first_name: "Pat",
+      last_name: "Morgan",
+      ucaba_email_address: "pat@work.test",
+      date_of_birth: "1990-10-20"
+    });
+    const result = validateEmployeePayload(payload, { linked: false, emailField: "ucaba_email_address" });
+    assert.equal(result.isValid, true);
+    assert.equal(payload.externalSystemId, "9001");
   });
 
   it("a linked employee with a blank workday_id still validates for an update", () => {
-    const payload = mapEmployee("bcba", { bcba_name: "Pat Morgan" });
+    const payload = mapEmployee("bcba", {
+      first_name: "Pat",
+      last_name: "Morgan"
+    });
     assert.equal(validateEmployeePayload(payload, { linked: true }).isValid, true);
   });
 
@@ -252,11 +261,12 @@ describe("employee create date of birth placeholder", () => {
     assert.equal(result.usedDefaultDateOfBirth, false);
   });
 
-  it("the lookup before a create does not send the placeholder", async () => {
+  it("[G17] an employee create does not use PUT as a lookup", async () => {
     const { requests } = await runWithCentralReach(handler, () =>
       create({ externalSystemId: "1234567", firstName: "Pat", lastName: "Morgan", dateOfBirth: null })
     );
-    const put = requests.find((item) => item.method === "PUT");
-    assert.equal(put.body.dateOfBirth, null);
+    assert.equal(requests.some((item) => item.method === "PUT"), false);
+    const post = requests.find((item) => item.method === "POST" && item.url.endsWith("/contacts/employee"));
+    assert.equal(post.body.dateOfBirth, "2000-01-01");
   });
 });

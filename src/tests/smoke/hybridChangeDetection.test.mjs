@@ -156,6 +156,7 @@ function clientDeps(overrides = {}) {
       calls.metadata.push({ contactId, values, options });
       return { updatedCount: 0, failedCount: 0, failedFieldIds: [] };
     },
+    findClientByExternalSystemId: async () => ({ found: false, crContactId: null }),
     createOrUpdateClient: async (input) => {
       calls.upserts.push(input);
       return { operation: input.existingContactId ? "update" : "create", crContactId: input.existingContactId || "900" };

@@ -475,6 +475,44 @@ export async function searchRecordsByKnownProperty({
   };
 }
 
+export async function findHubSpotRecordsByEmployeeId({
+  bcbaObjectTypeId,
+  btRbtObjectTypeId,
+  employeeId,
+  excludeRecordId,
+  employeeIdProperty = "employee_id"
+}) {
+  assertHubSpotReady();
+  const wanted = String(employeeId ?? "").trim();
+  const excluded = String(excludeRecordId ?? "").trim();
+  if (!wanted) {
+    return [];
+  }
+  const found = [];
+  for (const objectTypeId of [bcbaObjectTypeId, btRbtObjectTypeId]) {
+    const typeId = String(objectTypeId || "").trim();
+    if (!typeId) {
+      continue;
+    }
+    const searchResult = await runSearch(`/crm/v3/objects/${typeId}/search`, {
+      filterGroups: [
+        {
+          filters: [{ propertyName: employeeIdProperty, operator: "EQ", value: wanted }]
+        }
+      ],
+      properties: [employeeIdProperty, "hs_object_id"],
+      limit: 100
+    });
+    for (const row of Array.isArray(searchResult?.results) ? searchResult.results : []) {
+      const id = String(row?.id ?? row?.properties?.hs_object_id ?? "").trim();
+      if (id && id !== excluded) {
+        found.push({ id, objectTypeId: typeId });
+      }
+    }
+  }
+  return found;
+}
+
 export async function listAssociations({ fromObjectType, fromId, toObjectType, maxPages = 20 }) {
   assertHubSpotReady();
   const fromType = String(fromObjectType || "").trim();

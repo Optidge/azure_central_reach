@@ -1,3 +1,5 @@
+import { readDate } from "../../lib/dates.mjs";
+
 function cleanEmail(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized || null;
@@ -32,20 +34,18 @@ function mapGender(value) {
   return null;
 }
 
-function toIsoMidnight(value) {
-  if (!value) {
-    return null;
+function clientDateOfBirth(properties) {
+  if (!Object.prototype.hasOwnProperty.call(properties || {}, "phi_date_of_birth")) {
+    return { dateOfBirthStatus: "blank" };
   }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
+  const read = readDate(properties.phi_date_of_birth);
+  if (read === "blank") {
+    return { dateOfBirthStatus: "blank" };
   }
-
-  const yyyy = date.getUTCFullYear();
-  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(date.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}T00:00:00.000Z`;
+  if (read === "unreadable") {
+    return { dateOfBirthStatus: "unreadable" };
+  }
+  return { DateOfBirth: `${read}T00:00:00.000Z`, dateOfBirthStatus: "date" };
 }
 
 const US_STATE_NAME_TO_CODE = {
@@ -121,13 +121,19 @@ export function buildClientPayload({ deal, config }) {
 
   const props = deal?.properties || {};
   const email = cleanEmail(props.email);
+  const dateOfBirth = clientDateOfBirth(props);
+  const trimmed = (value) => {
+    const text = String(value ?? "").trim();
+    return text || null;
+  };
 
   return {
     ContactForm: process.env.CR_CLIENT_CONTACT_FORM || "Public Client Intake Form",
     ExternalSystemId: String(deal?.id || props.hs_object_id || ""),
-    FirstName: props.phi_first_name__cloned_ || null,
-    LastName: props.phi_last_name || null,
-    DateOfBirth: toIsoMidnight(props.phi_date_of_birth),
+    FirstName: trimmed(props.phi_first_name__cloned_),
+    LastName: trimmed(props.phi_last_name),
+    ...(dateOfBirth.DateOfBirth ? { DateOfBirth: dateOfBirth.DateOfBirth } : {}),
+    dateOfBirthStatus: dateOfBirth.dateOfBirthStatus,
     Gender: mapGender(props.phi_gender),
     PrimaryEmail: isValidEmail(email) ? email : null,
     PhoneCell: normalizePhone(props.phone),

@@ -11,10 +11,12 @@ import {
 import {
   createCentralReachClient,
   createOrUpdateEmployee,
+  findEmployeeByExternalSystemId,
   getEmployeeByContactId,
   buildEmployeePayloadForContactId,
   updateClientMetadata
 } from "../lib/centralReachClient.mjs";
+import { findHubSpotRecordsByEmployeeId } from "../lib/hubspotClient.mjs";
 import { CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS } from "../constants/centralReach.mjs";
 import {
   HubSpotReadError,
@@ -31,7 +33,20 @@ import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { buildEmployeePayload } from "../mappings/employees/buildEmployeePayload.mjs";
 import { validateEmployeePayload } from "../mappings/employees/validateEmployeePayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
-import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+import {
+  BCBA_CHECKLIST_PROPERTY,
+  BT_RBT_CHECKLIST_PROPERTY,
+  HUBSPOT_EMPLOYEE_TYPES
+} from "../constants/hubspot.mjs";
+import {
+  ANOTHER_HUBSPOT_RECORD_LINKED,
+  CONFLICTING_EXTERNAL_IDS,
+  missingDateProperty,
+  unreadableDate,
+  WAITING_FOR_WORKDAY_ID,
+  WORKDAY_ALREADY_IN_CENTRALREACH
+} from "../constants/syncReasons.mjs";
+import { checklistTicked, employeeCreateLookupDecision, linkedEmployeeIdentity } from "../lib/syncDecisions.mjs";
 import { employeeSyncEligibility } from "../lib/syncEligibility.mjs";
 
 const EMPLOYEE_STATE_PK = "sync:employee";
@@ -49,8 +64,11 @@ const BT_RBT_PROPERTIES = [
   "entered_in_centralreach",
   "test_record",
   "workday_id",
+  "first_name",
+  "last_name",
   "bt_name",
   "date_of_birth",
+  BT_RBT_CHECKLIST_PROPERTY,
   "gender",
   "email",
   "street_home",
@@ -82,10 +100,14 @@ const BCBA_PROPERTIES = [
   "entered_in_centralreach",
   "test_record",
   "workday_id",
+  "first_name",
+  "last_name",
   "bcba_name",
   "date_of_birth",
   "email",
+  "ucaba_email_address",
   "work_email",
+  BCBA_CHECKLIST_PROPERTY,
   "address",
   "home_apt",
   "city_work",
@@ -207,9 +229,8 @@ function buildWritebackPropertyPatch({
     last_sync_status: status,
     last_sync_at: now,
     last_sync_error: errorMessage || "",
-    ...(status === "success" || status === "noop" || status === "blocked"
-      ? { integration_last_write: now, updated_by_integration: true }
-      : {})
+    integration_last_write: now,
+    updated_by_integration: true
   };
 
   if (payloadHash && status !== "error") {
@@ -233,6 +254,10 @@ export async function runEmployeeSyncWorkflow(
   const fetchBtRbt = dependencies.getBtRbtRecordById || getBtRbtRecordById;
   const fetchBcba = dependencies.getBcbaRecordById || getBcbaRecordById;
   const upsertEmployee = dependencies.createOrUpdateEmployee || createOrUpdateEmployee;
+  const findByExternalId =
+    dependencies.findEmployeeByExternalSystemId || findEmployeeByExternalSystemId;
+  const findHolders =
+    dependencies.findHubSpotRecordsByEmployeeId || findHubSpotRecordsByEmployeeId;
   const fetchCrEmployeeById = dependencies.getEmployeeByContactId || getEmployeeByContactId;
   const preserveIdentifiers =
     dependencies.buildEmployeePayloadForContactId || buildEmployeePayloadForContactId;
@@ -265,10 +290,18 @@ export async function runEmployeeSyncWorkflow(
       ? config.hubspot.btRbtObjectTypeId
       : config.hubspot.bcbaObjectTypeId;
   const employeeIdProperty = config.hubspot.employeeIdProperty || "employee_id";
+  const recordGateProperty = config.sync?.recordGateProperty || null;
+  const checklistProperty =
+    normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
+      ? BT_RBT_CHECKLIST_PROPERTY
+      : BCBA_CHECKLIST_PROPERTY;
   const properties =
     normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
       ? [...BT_RBT_PROPERTIES, employeeIdProperty]
       : [...BCBA_PROPERTIES, employeeIdProperty];
+  if (recordGateProperty && !properties.includes(recordGateProperty)) {
+    properties.push(recordGateProperty);
+  }
 
   initHubSpot(config);
   initCentralReach(config);
@@ -314,7 +347,7 @@ export async function runEmployeeSyncWorkflow(
 
     const prior = await readPriorSyncState(readState, EMPLOYEE_STATE_PK, stateId);
     const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
-    const existingContactId =
+    let existingContactId =
       hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
     linkedContactId = existingContactId;
     hubspotHasContactId = Boolean(hubspotContactId);
@@ -323,7 +356,8 @@ export async function runEmployeeSyncWorkflow(
     const eligibility = employeeSyncEligibility({
       properties: hubspotProps,
       linked: Boolean(existingContactId),
-      includeTestRecords: Boolean(config.sync?.includeTestRecords)
+      includeTestRecords: Boolean(config.sync?.includeTestRecords),
+      recordGateProperty
     });
     if (!eligibility.eligible) {
       // No Central Reach call and no HubSpot writeback for a skipped employee.
@@ -360,27 +394,241 @@ export async function runEmployeeSyncWorkflow(
         invocationId: context?.invocationId || null
       });
     }
+    const decided = async ({ status, reason, contactId = null, fail = false }) => {
+      await writeEmployeeWriteback({
+        objectTypeId,
+        recordId: normalizedRecordId,
+        employeeIdProperty,
+        properties: filterWritebackProperties(
+          buildWritebackPropertyPatch({
+            employeeType: normalizedEmployeeType,
+            employeeIdProperty,
+            status,
+            contactId,
+            errorMessage: reason || ""
+          }),
+          { kind: "employee", idProperty: employeeIdProperty }
+        )
+      });
+      if (fail) {
+        // The fail record keeps the CR id and the last good field hashes, and then lives as long
+        // as a success record. Same rule as the catch block below.
+        const keptContactId = contactId || linkedContactId || null;
+        await saveState({
+          pk: EMPLOYEE_STATE_PK,
+          id: stateId,
+          type: STATE_TYPES.FAIL,
+          ttlSeconds:
+            keptContactId || priorFieldHashes
+              ? config.ttl.successTtlSeconds
+              : config.ttl.failTtlSeconds,
+          data: {
+            workflow: "employeeSync",
+            employeeType: normalizedEmployeeType,
+            status,
+            errorMessage: String(reason || "").slice(0, 500),
+            crContactId: keptContactId,
+            fieldHashes: priorFieldHashes,
+            hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+            invocationId: context?.invocationId || null,
+            updatedAt: new Date().toISOString()
+          }
+        });
+      }
+      return {
+        ok: true,
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        status,
+        crContactId: contactId
+      };
+    };
+
+    if (mapped.dateOfBirthStatus === "missing") {
+      return decided({ status: "error", reason: missingDateProperty("date_of_birth"), fail: true });
+    }
+    if (mapped.dateOfBirthStatus === "unreadable") {
+      return decided({ status: "error", reason: unreadableDate("date_of_birth"), fail: true });
+    }
+
     const validation = validatePayload(mapped.employeePayload, {
-      linked: Boolean(existingContactId)
+      linked: Boolean(existingContactId),
+      emailField: mapped.emailField || "email"
     });
     if (!validation.isValid) {
-      throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
+      return decided({
+        status: "error",
+        reason: validation.errors?.[0] || "Employee sync failed",
+        fail: true
+      });
     }
 
     let outboundPayload = mapped.employeePayload;
+    let identity = null;
+    let syncResult = null;
+    let createdThisRun = false;
+    let linkSaved = false;
+
+    // A CR id that HubSpot does not hold yet is saved before any later step can fail: first in
+    // Cosmos, then on the HubSpot record.
+    const saveLink = async (contactId) => {
+      // Set first: if the Cosmos save fails, the error writeback still sends the id to HubSpot.
+      linkedContactId = String(contactId);
+      await saveState({
+        pk: EMPLOYEE_STATE_PK,
+        id: stateId,
+        type: "pending_link",
+        ttlSeconds: config.ttl.successTtlSeconds,
+        data: {
+          workflow: "employeeSync",
+          employeeType: normalizedEmployeeType,
+          crContactId: String(contactId),
+          fieldHashes: priorFieldHashes,
+          updatedAt: new Date().toISOString()
+        }
+      });
+      linkSaved = true;
+      try {
+        await writeEmployeeWriteback({
+          objectTypeId,
+          recordId: normalizedRecordId,
+          employeeIdProperty,
+          properties: filterWritebackProperties(
+            linkProperties({ employeeType: normalizedEmployeeType, employeeIdProperty, contactId }),
+            { kind: "employee", idProperty: employeeIdProperty }
+          )
+        });
+      } catch (linkError) {
+        // Not fatal: Cosmos holds the id and the final writeback sends it again.
+        logger(
+          "error",
+          "Employee CR id writeback failed after the CentralReach write.",
+          buildError({
+            workflow: "employeeSync",
+            stage: "writeLinkAfterUpsert",
+            error: linkError,
+            recordId: normalizedRecordId
+          })
+        );
+      }
+    };
+
+    if (!existingContactId) {
+      const externalId = String(mapped.employeePayload.externalSystemId || normalizedRecordId).trim();
+      let createLockHeld = false;
+      try {
+        const locked = await claimRecordLock(claimLock, {
+          pk: "create-lock:employee",
+          id: externalId,
+          ttlSeconds: config.ttl?.leaseTtlSeconds || 120
+        });
+        if (!locked) {
+          const busy = new Error("SyncInProgress");
+          busy.code = "SYNC_IN_PROGRESS";
+          throw busy;
+        }
+        createLockHeld = true;
+        const byRecord = await findByExternalId(normalizedRecordId);
+        const workday = String(hubspotProps.workday_id || "").trim();
+        const byWorkday = workday
+          ? await findByExternalId(workday)
+          : { found: false, crContactId: null };
+        const decision = employeeCreateLookupDecision({
+          byRecordId: byRecord,
+          byWorkday,
+          workdayFilled: Boolean(workday)
+        });
+        if (decision.outcome === "conflicting_ids") {
+          return decided({ status: "error", reason: CONFLICTING_EXTERNAL_IDS, fail: true });
+        }
+        if (decision.outcome === "found_by_workday") {
+          const holders = await findHolders({
+            bcbaObjectTypeId: config.hubspot.bcbaObjectTypeId,
+            btRbtObjectTypeId: config.hubspot.btRbtObjectTypeId,
+            employeeId: decision.crContactId,
+            excludeRecordId: normalizedRecordId,
+            employeeIdProperty
+          });
+          if (Array.isArray(holders) && holders.length > 0) {
+            return decided({ status: "error", reason: ANOTHER_HUBSPOT_RECORD_LINKED, fail: true });
+          }
+          return decided({
+            status: "waiting",
+            reason: WORKDAY_ALREADY_IN_CENTRALREACH,
+            fail: false
+          });
+        }
+        if (decision.outcome === "link_own") {
+          existingContactId = decision.crContactId;
+          linkedContactId = existingContactId;
+        } else {
+          syncResult = await upsertEmployee({
+            payload: outboundPayload,
+            employeeType: normalizedEmployeeType,
+            existingContactId: null,
+            allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate),
+            putOnlyMode: config.features?.putOnlyMode !== false
+          });
+          createdThisRun = syncResult?.operation === "create";
+          if (syncResult?.operation === "create_turned_off") {
+            return decided({ status: "waiting", reason: syncResult.reason, fail: false });
+          }
+          if (syncResult?.operation === "create_rejected") {
+            return decided({ status: "error", reason: syncResult.reason, fail: true });
+          }
+          // Row 1.8: the lease also covers saving the new CR id, so a second record with the
+          // same Workday ID finds this record as its holder.
+          if (createdThisRun && syncResult.crContactId) {
+            await saveLink(syncResult.crContactId);
+          }
+        }
+      } finally {
+        if (createLockHeld) {
+          try {
+            await unlock({ pk: "create-lock:employee", id: externalId });
+          } catch (releaseError) {
+            if (!isStateClientUnavailable(releaseError)) {
+              throw releaseError;
+            }
+          }
+        }
+      }
+    }
 
     if (existingContactId) {
       const existingCrEmployee = await fetchCrEmployeeById(existingContactId);
       const preserved = preserveIdentifiers(mapped.employeePayload, existingCrEmployee);
-      outboundPayload = preserved.payload;
-      if (preserved.externalSystemIdMismatch) {
-        // CR keeps its own id; the Workday ID in HubSpot no longer matches it and needs a human look.
+      // A copy: the edits below must not change the mapped payload that the stale check hashes.
+      outboundPayload = { ...preserved.payload };
+      if (mapped.dateOfBirthStatus === "blank" || outboundPayload.dateOfBirth == null) {
+        delete outboundPayload.dateOfBirth;
+      }
+      // Rule 5.4: when CR holds no External System ID, an update sends workday_id only if it is
+      // filled. The temporary ID (the HubSpot record ID) is for a create only.
+      if (!preserved.crExternalSystemId && String(hubspotProps.workday_id || "").trim() === "") {
+        delete outboundPayload.externalSystemId;
+      }
+      identity = linkedEmployeeIdentity({
+        crExternalSystemId: preserved.crExternalSystemId,
+        workdayId: hubspotProps.workday_id,
+        recordId: normalizedRecordId,
+        checklistIsTicked: checklistTicked(hubspotProps?.[checklistProperty])
+      });
+      if (preserved.externalSystemIdMismatch && identity.sendUpdate) {
         logger("warn", "HubSpot workday_id differs from the Central Reach External System ID.", {
           workflow: "employeeSync",
           recordId: normalizedRecordId,
           employeeType: normalizedEmployeeType,
           crContactId: existingContactId,
           invocationId: context?.invocationId || null
+        });
+      }
+      if (!identity.sendUpdate) {
+        return decided({
+          status: identity.status,
+          reason: identity.reason,
+          fail: true,
+          contactId: existingContactId
         });
       }
     }
@@ -407,7 +655,17 @@ export async function runEmployeeSyncWorkflow(
     const previousFieldHashes = priorFieldHashes;
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
     const previousHash = String(hubspotProps?.last_sync_hash || "");
-    const canNoopByHash = Boolean(previousHash && previousHash === payloadHash && existingContactId);
+    const canNoopByHash = Boolean(
+      previousHash && previousHash === payloadHash && existingContactId && !syncResult
+    );
+    if (canNoopByHash && identity && identity.status !== "success") {
+      return decided({
+        status: identity.status,
+        reason: identity.reason,
+        fail: identity.status === "error",
+        contactId: existingContactId
+      });
+    }
     if (canNoopByHash) {
       const writebackResult = await writeEmployeeWriteback({
         objectTypeId,
@@ -459,16 +717,30 @@ export async function runEmployeeSyncWorkflow(
       };
     }
 
-    const syncResult = await upsertEmployee({
-      payload: outboundPayload,
-      employeeType: normalizedEmployeeType,
-      existingContactId,
-      allowEmployeeCreate: config.features.allowEmployeeCreate,
-      putOnlyMode: config.features.putOnlyMode
-    });
+    if (!syncResult) {
+      syncResult = await upsertEmployee({
+        payload: outboundPayload,
+        employeeType: normalizedEmployeeType,
+        existingContactId,
+        allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate),
+        putOnlyMode: config.features?.putOnlyMode !== false
+      });
+      if (syncResult?.operation === "create_turned_off") {
+        return decided({ status: "waiting", reason: syncResult.reason, fail: false });
+      }
+      if (syncResult?.operation === "create_rejected") {
+        return decided({ status: "error", reason: syncResult.reason, fail: true });
+      }
+    }
 
-    const status = syncResult.operation === "blocked" ? "blocked" : "success";
+    const workdayBlank = String(hubspotProps.workday_id || "").trim() === "";
+    const status = createdThisRun && workdayBlank ? "waiting" : identity?.status || "success";
     const contactId = syncResult.crContactId || existingContactId || null;
+    if (createdThisRun && workdayBlank) {
+      syncResult.reason = WAITING_FOR_WORKDAY_ID;
+    } else if (identity?.reason) {
+      syncResult.reason = identity.reason;
+    }
     if (syncResult.usedDefaultDateOfBirth) {
       logger("warn", "Employee created in Central Reach with the placeholder date of birth.", {
         workflow: "employeeSync",
@@ -481,45 +753,9 @@ export async function runEmployeeSyncWorkflow(
     linkedContactId = contactId;
     let metadataSyncSummary = null;
 
-    // A CR id that HubSpot does not hold yet (a create, or a match by external id) is saved
-    // before any later step can fail: first in Cosmos, then on the HubSpot record.
-    if (contactId && !hubspotHasContactId) {
-      await saveState({
-        pk: EMPLOYEE_STATE_PK,
-        id: stateId,
-        type: "pending_link",
-        ttlSeconds: config.ttl.successTtlSeconds,
-        data: {
-          workflow: "employeeSync",
-          employeeType: normalizedEmployeeType,
-          crContactId: String(contactId),
-          fieldHashes: previousFieldHashes,
-          updatedAt: new Date().toISOString()
-        }
-      });
-      try {
-        await writeEmployeeWriteback({
-          objectTypeId,
-          recordId: normalizedRecordId,
-          employeeIdProperty,
-          properties: filterWritebackProperties(
-            linkProperties({ employeeType: normalizedEmployeeType, employeeIdProperty, contactId }),
-            { kind: "employee", idProperty: employeeIdProperty }
-          )
-        });
-      } catch (linkError) {
-        // Not fatal: Cosmos holds the id and the final writeback sends it again.
-        logger(
-          "error",
-          "Employee CR id writeback failed after the CentralReach write.",
-          buildError({
-            workflow: "employeeSync",
-            stage: "writeLinkAfterUpsert",
-            error: linkError,
-            recordId: normalizedRecordId
-          })
-        );
-      }
+    // A create saved its link inside the create lease. A match by external id saves it here.
+    if (contactId && !hubspotHasContactId && !linkSaved) {
+      await saveLink(contactId);
     }
 
     const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
@@ -637,7 +873,11 @@ export async function runEmployeeSyncWorkflow(
       writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
     };
   } catch (error) {
-    if (error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE") {
+    if (
+      error?.code === "SYNC_IN_PROGRESS" ||
+      error?.code === "SYNC_STALE" ||
+      error?.code === "CR_LOOKUP_UNKNOWN"
+    ) {
       throw error;
     }
     logger(
@@ -672,6 +912,8 @@ export async function runEmployeeSyncWorkflow(
               ? `MetadataWriteFailed fields: ${failedFieldIds.join(",")}`
               : String(error?.message || "Employee sync failed")
             ).slice(0, 500),
+            integration_last_write: new Date().toISOString(),
+            updated_by_integration: true,
             ...(linkedContactId && !hubspotHasContactId
               ? linkProperties({
                   employeeType: normalizedEmployeeType,

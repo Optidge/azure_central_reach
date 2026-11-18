@@ -283,6 +283,8 @@ A read that fails or is refused (401, 403), or a Case answer that is missing its
 
 **Known safe limit after Stage 1.** If Cosmos has lost a record's state and HubSpot never received its CR ID, a record that was created with its Workday ID is shown as `waiting` "already in CentralReach" instead of being linked again. No duplicate and no wrong write result; a person links it by entering the CR ID in `employee_id`. Stage 2 removes the cause by keeping the link without expiry.
 
+**Stage 1 status, 2026-11-18.** Built by Grok, reviewed by Claude, six review findings (S1-R1 to S1-R6) fixed; `npm test` 237 pass. The review left follow-ups for later stages. Each is written into its stage below and marked "from the Stage 1 review": Stage 3, steps 7.1 and 7.4, the Stage 8 table, step 9.8 and section 13.
+
 ## 8. Stage 2 — Durable state and retries
 
 **Goal.** The link and the last synced values never expire; a half-finished run is never mistaken for "nothing changed"; a temporary failure is retried later with growing delays instead of at once.
@@ -328,6 +330,11 @@ A read that fails or is refused (401, 403), or a Case answer that is missing its
 | 3.9 | **A change no webhook delivered is logged by field name.** | When a run started by the poller or the sweep finds changed fields, log the field names (never values) with a fixed message. This shows which workflow trigger is missing. | The log has names only. |
 | 3.10 | **A check lists mapped properties that no workflow trigger covers.** | Export the list of HubSpot properties each worker reads for mapping. New `npm run check:triggers` compares them with `docs/workstreams/architecture-update/webhook-triggers.json` (Zeke exports each sandbox workflow's trigger properties into it) and exits non-zero when a mapped property has no trigger. It is not part of `npm test` until the sandbox workflows are final; it must pass before Stage 7's deploy. Seed the file with an empty list per object. | The check fails on a missing property and passes when covered. |
 | 3.11 | **Clean-up.** | Remove the log-only "coalesce" step and its Cosmos write from the webhook. Fix `README.md` (the deploy example names the wrong Function App; the coalesce description; the old sandbox IDs) and the dead tab link in `docs/SOURCE-OF-TRUTH.md`. Remove app settings the code no longer reads from the required lists and the example file, and list them in the stage report. | Webhook tests: a repeat notice is still queued; no Cosmos call. |
+
+**From the Stage 1 review (2026-11-18), for step 3.7.** Two cases write on every run today. Step 3.7 must end both, and its tests must name them:
+
+- A linked employee that is `waiting` (CR still holds the temporary ID) with no field change: each run writes the same `waiting` status to HubSpot again. No CR write.
+- A linked employee whose status is `error` but whose updates continue (checklist ticked while CR holds the temporary ID): `last_sync_hash` is not saved on an `error`, so each run sends the same update to CR again.
 
 ## 10. Stages 4 to 6 — Mappings and Contact routing
 
@@ -411,9 +418,10 @@ Live testing of Stage 6 waits for the sandbox Contact workflow. The code and its
 
 | # | Step | Who | Done when |
 |---|---|---|---|
-| 7.1 | Write `SANDBOX-TEST-PLAN.md` from the draft list below and the rules in section 5. | Claude | Zeke agrees |
-| 7.2 | Sandbox HubSpot: test records (each with `sandbox_test_field` = true, `test_record` blank, Entered in CentralReach blank until its test); every webhook workflow filters on its test list (`1463` Deals, `1464` BCBAs, `1465` BT/RBTs); the employee ongoing-update workflows trigger on `workday_id` and the checklist; failures and waiting views per object; trigger lists exported into `webhook-triggers.json`. | Zeke | `npm run check:triggers` passes |
+| 7.1 | Finish `SANDBOX-TEST-PLAN.md` from the draft list below and the rules in section 5. The record convention (Zeke, 2026-11-18) is already in that file. Keep it. From the Stage 1 review: check every property name in the convention against the finished mappers before round 1, because Stage 5 changes the employee state, address and apartment properties (steps 5.2, 5.4, 5.9, 5.11). | Claude | Zeke agrees |
+| 7.2 | Sandbox HubSpot: one fresh Case, BT/RBT, and BCBA per round, named in `SANDBOX-TEST-PLAN.md` (`sandbox_test_field` = true, `test_record` blank, Entered in CentralReach blank until its test). Log HubSpot and CentralReach IDs in `sandbox-test-log.md`. Every webhook workflow filters on its test list (`1463` Deals, `1464` BCBAs, `1465` BT/RBTs). The employee ongoing-update workflows trigger on `workday_id` and the checklist. Failures and waiting views per object. Trigger lists exported into `webhook-triggers.json`. | Zeke | `npm run check:triggers` passes |
 | 7.3 | Azure, app Stopped, each write on Zeke's go-ahead: settings for `52311591` (portal ID, both object type IDs); the sandbox token and webhook secret entered by Zeke in the portal; `SYNC_RECORD_GATE_PROPERTY` = `sandbox_test_field`; remove the six unused pipeline and allowlist settings and the settings Stage 3 retired; safe switches (poller and both workers disabled, `ALLOW_EMPLOYEE_CREATE` = `false`, `PUT_ONLY_MODE` = `true`); purge both dead-letter queues (never replay); confirm both queues are empty and Cosmos holds nothing from `50850427`; one email alert on dead-letter count above zero; deploy the reviewed commit and record its hash and the function timeout. | Grok | Every value read back; app still Stopped |
+| 7.4 | From the Stage 1 review. Before round 1, confirm the answer shape of `GET /contacts/{id}/labels` with one read-only GET on a test contact Zeke names. Record the field names only, never values. The code reads a label ID only from `labelId` or a plain number (`readLabelIds` in `src/lib/centralReachClient.mjs`). If CR names the field differently, change that reader and its test first. Until it matches, every create and update stops at the label step with `error`: the core fields are written, the labels and metadata are not. | Zeke runs the GET; Claude or Grok changes the reader | The reader matches the real answer; `npm test` passes |
 
 ### Stage 8 — Full sandbox testing
 
@@ -428,6 +436,7 @@ Run only from the agreed plan. Each test that writes to CentralReach needs Zeke'
 | Case | Create, no duplicate, an update, the linked-Case check with a wrong Client ID → `error`. |
 | Retries and alert | A forced temporary failure walks the delay steps; one malformed test message dead-letters and the email arrives. |
 | Poller | A change with its workflow off reaches CR within the hour and the log names the field; a no-op run writes nothing. |
+| From the Stage 1 review | The first linked employee update ends `success` or `waiting`, which confirms the employee read carries `contact.contactId` or `contact.primaryEmail`; an `error` "CentralReach employee read could not be read" means the reader in `getEmployeeByContactId` needs the real field name. The first update of a linked Case whose client holds its Case record ID confirms the client lookup answer has `contact.contactId`; if not, the run stops with no write. A second record with the same Workday ID, saved within a few seconds of the first: expect `error`; note it if HubSpot search is slow to show the first record and the result is `waiting`. CR accepts `#` in a name and `+` in an email. After each round, the three test contacts are made inactive on the CR screen and the log is marked. |
 | CentralReach behaviour | Labels POST adds or replaces; how a metadata value is cleared; whether an update accepts a changed email; contact form names; an update of a client created by hand (no External System ID); the one-call metadata update. |
 
 After the label test, build the two held label rows as replace-on-change if CentralReach allows it:
@@ -448,6 +457,7 @@ If CentralReach cannot replace or remove a label, Zeke decides for each row whet
 | 9.5 | Production Azure: settings for `50317927`, production secrets, the alert with Danny or a shared inbox added, deploy with the commit recorded. | Grok, Zeke |
 | 9.6 | Go-live in steps: one worker at a time; updates before creates; then creates for new records only. Watch the failures view, the waiting view and the alert daily for the first week. | Zeke, Grok |
 | 9.7 | Record the final state in the guide. | Claude, on Zeke's request |
+| 9.8 | From the Stage 1 review. Do this before step 9.6. Build the Workday ID format check once Danny confirms the format (640 of 644 production values are 7 digits; section 12). A `workday_id` that is not in the format is `error` before any CR call. This also closes the temporary-ID risk in section 13: a HubSpot record ID is longer than a Workday ID, so it can never equal one. If Danny cannot give a fixed format, Zeke decides whether the temporary ID gets a prefix. | Danny for the format; Zeke decides; Grok builds |
 
 Separate from these stages: the HubSpot API version migration (needs an owner; target before March 2027). Optional: destination audit, Case History Log, managed identity.
 
@@ -476,6 +486,8 @@ Separate from these stages: the HubSpot API version migration (needs an owner; t
 - **Not confirmed:** the IDs marked † (step 0.6); the answer shapes listed in section 4. The code treats an unreadable answer as a failed read, never as "empty".
 - **Risk:** staff forget to replace the temporary ID. Covered by the waiting view and United Care's HubSpot alerts; the integration cannot replace it.
 - **Risk:** every sandbox create is a real CR record that the API cannot delete. Keep to a handful of named test records; Zeke can make them inactive on the CR screen.
+- **Risk (from the Stage 1 review):** the temporary ID is the plain HubSpot record ID. An unlinked record that finds a CR employee by its own record ID links to it as "its own earlier create" (decision 5). If a real employee's External System ID in CR ever equalled a new record's HubSpot record ID, that record would link to the wrong employee and update it. Unlikely: the production record IDs seen are 11 digits and 640 of 644 Workday IDs are 7 digits. Not a sandbox risk, because only the test records sync. Closed by step 9.8 before production.
+- **Assumed (from the Stage 1 review):** a CR employee read carries `contact.contactId` or `contact.primaryEmail`, and a label read names the label ID `labelId`. If either is wrong the run stops with a visible `error` and no wrong write. Steps 7.4 and Stage 8 confirm both.
 - **Risk:** a record created with its Workday ID whose state is lost shows `waiting` instead of re-linking (end of section 7). No duplicate results.
 - **Cost accepted:** an employee run that is not a clean no-op makes one CR read for the ID check; a Case run reads the Case and two association lists.
 

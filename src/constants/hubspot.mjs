@@ -32,4 +32,11 @@ export const CASE_EXCLUDED_STAGE_IDS = Object.freeze([
 export const CASE_ENTRY_PROPERTY = "enter_in_central_reach";
 export const EMPLOYEE_ENTRY_PROPERTY = "entered_in_centralreach";
 export const ENTRY_YES_VALUE = "Yes";
+// Sandbox rounds are named in docs/workstreams/architecture-update/SANDBOX-TEST-PLAN.md.
+// sandbox_test_field = true. test_record stays blank. npm test does not create those records.
 export const TEST_RECORD_PROPERTY = "test_record";
+
+// The option shown as "External System ID (Workday)" is stored as "External System ID".
+export const BT_RBT_CHECKLIST_PROPERTY = "btrbt_in_cr_checklist";
+export const BCBA_CHECKLIST_PROPERTY = "bcba_in_cr_checklist";
+export const EXTERNAL_SYSTEM_ID_CHECKLIST_VALUE = "External System ID";

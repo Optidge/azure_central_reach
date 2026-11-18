@@ -5,6 +5,7 @@ import { createHubSpotClient, getDealById, listAssociations, updateDealPropertie
 import {
   createCentralReachClient,
   createOrUpdateClient,
+  findClientByExternalSystemId,
   updateClientMetadata
 } from "../lib/centralReachClient.mjs";
 import { acquireLease, createStateClient, getState, putState, releaseLease } from "../lib/cosmosState.mjs";
@@ -24,6 +25,7 @@ import { buildClientPayload } from "../mappings/client/buildClientPayload.mjs";
 import { buildClientMetadata } from "../mappings/client/buildClientMetadata.mjs";
 import { validateClientPayload } from "../mappings/client/validateClientPayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
+import { CASE_CLIENT_ID_MISMATCH, unreadableDate } from "../constants/syncReasons.mjs";
 import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
 
 const CLIENT_STATE_PK = "sync:client";
@@ -145,6 +147,14 @@ function buildCentralReachContactUrl(contactId) {
   return `https://members.centralreach.com/#contacts/details/?id=${id}`;
 }
 
+// dateOfBirthStatus is a note for the validator. It is not a CentralReach field, so it is kept out
+// of the request and out of the hash on every read of the Case.
+function centralReachPayload(mapped) {
+  const payload = { ...(mapped || {}) };
+  delete payload.dateOfBirthStatus;
+  return payload;
+}
+
 function linkProperties(crContactIdProperty, contactId) {
   if (!contactId) {
     return {};
@@ -166,6 +176,7 @@ export async function runClientSyncWorkflow(
   const fetchDeal = dependencies.getDealById || getDealById;
   const pushWriteback = dependencies.updateDealProperties || updateDealProperties;
   const upsertClient = dependencies.createOrUpdateClient || createOrUpdateClient;
+  const findClient = dependencies.findClientByExternalSystemId || findClientByExternalSystemId;
   const pushMetadata = dependencies.updateClientMetadata || updateClientMetadata;
   const saveState = dependencies.putState || putState;
   const readState = dependencies.getState || getState;
@@ -205,7 +216,11 @@ export async function runClientSyncWorkflow(
     }
     lockHeld = true;
 
+    const recordGateProperty = config.sync?.recordGateProperty || null;
     const propertyList = [...REQUIRED_DEAL_PROPERTIES, crContactIdProperty];
+    if (recordGateProperty && !propertyList.includes(recordGateProperty)) {
+      propertyList.push(recordGateProperty);
+    }
     let deal;
     try {
       deal = await fetchDeal(normalizedDealId, propertyList);
@@ -231,7 +246,8 @@ export async function runClientSyncWorkflow(
     const eligibility = caseSyncEligibility({
       properties: deal?.properties,
       linked: Boolean(existingContactId),
-      includeTestRecords: Boolean(config.sync?.includeTestRecords)
+      includeTestRecords: Boolean(config.sync?.includeTestRecords),
+      recordGateProperty
     });
     if (!eligibility.eligible) {
       // No Central Reach call and no HubSpot writeback for a skipped Case.
@@ -251,11 +267,54 @@ export async function runClientSyncWorkflow(
       };
     }
 
-    const payload = mapPayload({ deal, config });
-    const validation = validatePayload(payload);
+    const savedFieldHashes = prior?.data?.fieldHashes || null;
+    // An error decided on purpose: write the status and finish. The fail record keeps the CR id
+    // and the last good field hashes, and then lives as long as a success record.
+    const decidedError = async (reason) => {
+      await pushWriteback(
+        normalizedDealId,
+        filterWritebackProperties(
+          {
+            last_sync_status: "error",
+            last_sync_at: new Date().toISOString(),
+            last_sync_error: reason,
+            integration_last_write: new Date().toISOString(),
+            updated_by_integration: true
+          },
+          { kind: "client", idProperty: crContactIdProperty }
+        )
+      );
+      await saveState({
+        pk: CLIENT_STATE_PK,
+        id: normalizedDealId,
+        type: STATE_TYPES.FAIL,
+        ttlSeconds:
+          existingContactId || savedFieldHashes
+            ? config.ttl.successTtlSeconds
+            : config.ttl.failTtlSeconds,
+        data: {
+          workflow: "clientSync",
+          status: "error",
+          errorMessage: reason,
+          crContactId: existingContactId,
+          fieldHashes: savedFieldHashes,
+          updatedAt: new Date().toISOString()
+        }
+      });
+      return {
+        ok: true,
+        dealId: normalizedDealId,
+        status: "error",
+        crContactId: existingContactId
+      };
+    };
+
+    const mappedPayload = mapPayload({ deal, config });
+    const validation = validatePayload(mappedPayload, { linked: Boolean(existingContactId) });
     if (!validation.isValid) {
-      throw new Error(`PayloadValidationError: ${validation.errors.join(", ")}`);
+      return decidedError(validation.errors?.[0] || "Client sync failed");
     }
+    const payload = centralReachPayload(mappedPayload);
 
     const metadata = mapMetadata({ deal });
     let includeRelationships = false;
@@ -301,7 +360,7 @@ export async function runClientSyncWorkflow(
     });
     const payloadHash = digestPayload(comparable);
     const nextFieldHashes = fieldHashes(comparable);
-    const previousFieldHashes = prior?.data?.fieldHashes || null;
+    const previousFieldHashes = savedFieldHashes;
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
     const existingHash = deal?.properties?.last_sync_hash || null;
 
@@ -312,6 +371,18 @@ export async function runClientSyncWorkflow(
         crContactId: String(existingContactId)
       };
     } else {
+      if (existingContactId) {
+        const lookup = await findClient(normalizedDealId);
+        const lookedUpId = lookup?.found ? String(lookup.crContactId || "").trim() : "";
+        if (lookup?.found && !lookedUpId) {
+          const unknown = new Error("CentralReach client lookup returned no contactId");
+          unknown.code = "CR_LOOKUP_UNKNOWN";
+          throw unknown;
+        }
+        if (lookup?.found && lookedUpId !== String(existingContactId)) {
+          return decidedError(CASE_CLIENT_ID_MISMATCH);
+        }
+      }
       syncResult = await upsertClient({
         payload,
         existingContactId
@@ -387,7 +458,7 @@ export async function runClientSyncWorkflow(
       }
       throw error;
     }
-    const confirmedPayload = mapPayload({ deal: confirmedDeal, config });
+    const confirmedPayload = centralReachPayload(mapPayload({ deal: confirmedDeal, config }));
     const confirmedMetadata = mapMetadata({ deal: confirmedDeal });
     const confirmedHash = digestPayload(
       buildComparableState({
@@ -464,7 +535,11 @@ export async function runClientSyncWorkflow(
       metadataFailedCount: metadataSyncSummary?.failedCount ?? 0
     };
   } catch (error) {
-    if (error?.code === "SYNC_IN_PROGRESS" || error?.code === "SYNC_STALE") {
+    if (
+      error?.code === "SYNC_IN_PROGRESS" ||
+      error?.code === "SYNC_STALE" ||
+      error?.code === "CR_LOOKUP_UNKNOWN"
+    ) {
       throw error;
     }
     logger(
@@ -490,6 +565,8 @@ export async function runClientSyncWorkflow(
             last_sync_at: new Date().toISOString(),
             last_sync_status: "error",
             last_sync_error: String(error?.message || "Client sync failed").slice(0, 500),
+            integration_last_write: new Date().toISOString(),
+            updated_by_integration: true,
             ...(Array.isArray(error?.failedFieldIds) && error.failedFieldIds.length
               ? { last_sync_error: `MetadataWriteFailed fields: ${error.failedFieldIds.join(",")}`.slice(0, 500) }
               : {}),

@@ -5,6 +5,7 @@ import {
   EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH
 } from "../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+import { EMPLOYEE_CREATE_TURNED_OFF } from "../constants/syncReasons.mjs";
 import { clientWritePlan } from "./mappedState.mjs";
 
 let centralReachHttpClient = null;
@@ -104,6 +105,52 @@ function extractCrContactId(data) {
   }
 
   return null;
+}
+
+function readLookupContactId(data) {
+  const id = data?.contact?.contactId;
+  if (id === null || id === undefined || String(id).trim() === "") {
+    return null;
+  }
+  return String(id);
+}
+
+async function findByExternalSystemId(kind, id) {
+  const normalized = String(id ?? "").trim();
+  if (!normalized) {
+    const missing = new Error(`CentralReach ${kind} lookup needs an External System ID`);
+    missing.code = "CR_EXTERNAL_ID_REQUIRED";
+    throw missing;
+  }
+  try {
+    const response = await crRequest(
+      `/contacts/${kind}/byExternalSystemId?ExternalSystemId=${encodeURIComponent(normalized)}`,
+      { method: "GET" }
+    );
+    const crContactId = readLookupContactId(response);
+    if (!crContactId) {
+      const unknown = new Error(`CentralReach ${kind} lookup returned no contactId`);
+      unknown.code = "CR_LOOKUP_UNKNOWN";
+      throw unknown;
+    }
+    return { found: true, crContactId };
+  } catch (error) {
+    if (error?.code === "CR_LOOKUP_UNKNOWN" || error?.code === "CR_EXTERNAL_ID_REQUIRED") {
+      throw error;
+    }
+    if (error?.response?.status === 404) {
+      return { found: false, crContactId: null };
+    }
+    throw error;
+  }
+}
+
+export function findEmployeeByExternalSystemId(id) {
+  return findByExternalSystemId("employee", id);
+}
+
+export function findClientByExternalSystemId(id) {
+  return findByExternalSystemId("client", id);
 }
 
 function readCrExternalSystemId(data) {
@@ -279,20 +326,63 @@ export async function createOrUpdateClient(payloadOrOptions) {
   };
 }
 
+function readEmployeeContactId(data) {
+  const candidates = [
+    data?.contact?.contactId,
+    data?.contactId,
+    data?.employee?.contactId,
+    data?.result?.contactId
+  ];
+  for (const candidate of candidates) {
+    if (candidate !== null && candidate !== undefined && String(candidate).trim() !== "") {
+      return String(candidate).trim();
+    }
+  }
+  return null;
+}
+
 export async function getEmployeeByContactId(contactId) {
   const normalizedId = String(contactId || "").trim();
   if (!normalizedId) {
     throw new Error("CentralReach employee contactId is required");
   }
 
-  return crRequest(`/contacts/employee/${normalizedId}`, { method: "GET" });
+  const employee = await crRequest(`/contacts/employee/${normalizedId}`, { method: "GET" });
+  // Rule 5.8: an answer that does not show this employee is a failed read. It is never read as
+  // "CentralReach holds no External System ID and no email".
+  const answeredId = readEmployeeContactId(employee);
+  const unreadable = !answeredId && !readCrPrimaryEmail(employee);
+  if (unreadable || (answeredId && answeredId !== normalizedId)) {
+    const failed = new Error("CentralReach employee read could not be read");
+    failed.code = "CR_EMPLOYEE_READ_FAILED";
+    throw failed;
+  }
+  return employee;
+}
+
+function readCrPrimaryEmail(data) {
+  const candidates = [
+    data?.primaryEmail,
+    data?.PrimaryEmail,
+    data?.contact?.primaryEmail,
+    data?.contact?.PrimaryEmail,
+    data?.employee?.primaryEmail,
+    data?.employee?.PrimaryEmail,
+    data?.result?.primaryEmail,
+    data?.result?.PrimaryEmail
+  ];
+  for (const candidate of candidates) {
+    if (candidate !== null && candidate !== undefined && String(candidate).trim() !== "") {
+      return String(candidate).trim();
+    }
+  }
+  return null;
 }
 
 export function buildEmployeePayloadForContactId(payload, existingEmployee = {}) {
   const nextPayload = payload && typeof payload === "object" ? { ...payload } : {};
   const existingExternalSystemId = readCrExternalSystemId(existingEmployee);
-  const existingPrimaryEmail =
-    existingEmployee?.primaryEmail || existingEmployee?.employee?.primaryEmail || null;
+  const existingPrimaryEmail = readCrPrimaryEmail(existingEmployee);
 
   // Central Reach rejects an update whose External System ID differs from the stored one (400,
   // tested 2026-11-16). The stored id is always sent; HubSpot's Workday ID is used only when CR
@@ -314,7 +404,8 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
     payload: nextPayload,
     preservedExternalSystemId: keepExistingExternalSystemId,
     externalSystemIdMismatch,
-    preservedPrimaryEmail: Boolean(existingPrimaryEmail)
+    preservedPrimaryEmail: Boolean(existingPrimaryEmail),
+    crExternalSystemId: existingExternalSystemId
   };
 }
 
@@ -333,25 +424,6 @@ async function updateEmployeeByContactId(contactId, payload) {
     operation: "update",
     crContactId: normalizedId
   };
-}
-
-async function updateEmployeeByExternalSystemId(payload) {
-  let response;
-  try {
-    response = await crRequest("/contacts/employee/byExternalSystemId", {
-      method: "PUT",
-      body: payload
-    });
-  } catch (error) {
-    // AWS behavior treats not-found by external id as "no match", not a hard failure.
-    if (externalIdLookupMissed(error)) {
-      return { found: false, crContactId: null };
-    }
-
-    throw error;
-  }
-
-  return readExternalIdLookup(response, "employee");
 }
 
 async function createEmployee(payload) {
@@ -439,30 +511,71 @@ function metadataPutBody(fieldId, value) {
   return { inputValue: normalizedValue };
 }
 
-async function updateContactLabels(contactId, labelIds) {
-  const normalizedLabelIds = mergeUniqueNumericIds(labelIds);
-  if (!normalizedLabelIds.length) {
-    return { operation: "skip_empty" };
+function readLabelIds(data) {
+  const list = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.labels)
+      ? data.labels
+      : Array.isArray(data?.labelIds)
+        ? data.labelIds
+        : Array.isArray(data?.results)
+          ? data.results
+          : null;
+  if (!list) {
+    return null;
   }
+  // Only labelId, or a plain number, is read as a label ID. The answer shape is not confirmed
+  // yet, and a wrong guess would post the wrong labels.
+  const ids = [];
+  for (const item of list) {
+    const raw = item && typeof item === "object" ? item.labelId : item;
+    const id = typeof raw === "number" || typeof raw === "string" ? Number(raw) : NaN;
+    if (!Number.isInteger(id) || id <= 0 || String(raw).trim() === "") {
+      return null;
+    }
+    ids.push(id);
+  }
+  return ids;
+}
 
+async function postContactLabels(contactId, labelIds) {
   try {
     await crRequest(`/contacts/${contactId}/labels`, {
       method: "POST",
-      body: { labels: normalizedLabelIds.map((labelId) => ({ labelId })) }
+      body: { labels: labelIds.map((labelId) => ({ labelId })) }
     });
     return { operation: "updated", bodyShape: "labels[]" };
   } catch (error) {
     if (error?.response?.status !== 400) {
       throw error;
     }
-
     await crRequest(`/contacts/${contactId}/labels`, {
       method: "POST",
-      body: { labelIds: normalizedLabelIds }
+      body: { labelIds }
     });
-
     return { operation: "updated", bodyShape: "labelIds[]" };
   }
+}
+
+async function updateContactLabels(contactId, labelIds) {
+  const required = mergeUniqueNumericIds(labelIds);
+  if (!required.length) {
+    return { operation: "skip_empty" };
+  }
+
+  const currentBody = await crRequest(`/contacts/${contactId}/labels`, { method: "GET" });
+  const current = readLabelIds(currentBody);
+  if (!current) {
+    const failed = new Error("CentralReach label read could not be read as label ids");
+    failed.code = "CR_LABEL_READ_FAILED";
+    throw failed;
+  }
+  const union = mergeUniqueNumericIds([...current, ...required]);
+  const missing = required.filter((id) => !current.includes(id));
+  if (!missing.length) {
+    return { operation: "skip_present" };
+  }
+  return postContactLabels(contactId, union);
 }
 
 async function clearMetadataField(contactId, fieldId) {
@@ -600,29 +713,11 @@ export async function createOrUpdateEmployee(payload) {
     throw missing;
   }
 
-  const byExternalResult = await updateEmployeeByExternalSystemId(employeePayload);
-  if (byExternalResult.found) {
+  if (putOnlyMode || !allowEmployeeCreate) {
     return {
-      operation: "update",
-      crContactId: byExternalResult.crContactId
-    };
-  }
-
-  if (putOnlyMode) {
-    return {
-      operation: "blocked",
+      operation: "create_turned_off",
       crContactId: null,
-      reason:
-        "PUT_ONLY_MODE is on, so this run will not create an employee."
-    };
-  }
-
-  if (!allowEmployeeCreate) {
-    return {
-      operation: "blocked",
-      crContactId: null,
-      reason:
-        "ALLOW_EMPLOYEE_CREATE is false: create disabled. Enable ALLOW_EMPLOYEE_CREATE or provide an existing employee_id."
+      reason: EMPLOYEE_CREATE_TURNED_OFF
     };
   }
 
@@ -635,7 +730,7 @@ export async function createOrUpdateEmployee(payload) {
     const status = error?.response?.status;
     if (status === 400 || status === 409) {
       return {
-        operation: "blocked",
+        operation: "create_rejected",
         crContactId: null,
         reason: extractCreateErrorReason(error)
       };

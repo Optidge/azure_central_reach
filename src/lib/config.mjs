@@ -31,7 +31,8 @@ const REQUIRED_ENV_NAMES = [
   "STATE_TTL_ATTR",
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
-  "EMPLOYEE_SYNC_QUEUE_NAME"
+  "EMPLOYEE_SYNC_QUEUE_NAME",
+  "SYNC_RECORD_GATE_PROPERTY"
 ];
 
 const REQUIRED_INTAKE_ENV_NAMES = [
@@ -48,7 +49,8 @@ const REQUIRED_INTAKE_ENV_NAMES = [
   "COSMOS_CONTAINER_ID",
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
-  "EMPLOYEE_SYNC_QUEUE_NAME"
+  "EMPLOYEE_SYNC_QUEUE_NAME",
+  "SYNC_RECORD_GATE_PROPERTY"
 ];
 
 export function getRequiredEnv(name) {
@@ -115,6 +117,19 @@ export function hubspotBtRbtObjectTypeId() {
 // deliberate end-to-end test run.
 export function includeTestRecords() {
   return getOptionalEnv("INCLUDE_TEST_RECORDS", "false").toLowerCase() === "true";
+}
+
+// Required app setting. "none" turns the gate off on purpose. Anything else is the
+// HubSpot checkbox property a record must have set to true.
+export function syncRecordGateProperty(value = process.env.SYNC_RECORD_GATE_PROPERTY) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    throw new Error("Missing required environment variable: SYNC_RECORD_GATE_PROPERTY");
+  }
+  if (raw.toLowerCase() === "none") {
+    return null;
+  }
+  return raw;
 }
 
 // Central Reach has no sandbox, so an employee create is always a production write. It needs both
@@ -281,7 +296,8 @@ export function getConfig() {
       employeeIdProperty: getOptionalEnv("HUBSPOT_EMPLOYEE_ID_PROPERTY", "employee_id")
     },
     sync: {
-      includeTestRecords: includeTestRecords()
+      includeTestRecords: includeTestRecords(),
+      recordGateProperty: syncRecordGateProperty()
     },
     limits: {
       maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),

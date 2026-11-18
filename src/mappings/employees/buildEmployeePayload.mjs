@@ -3,6 +3,7 @@ import {
   CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS
 } from "../../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../../constants/hubspot.mjs";
+import { readDate } from "../../lib/dates.mjs";
 
 const US_STATE_NAME_TO_CODE = {
   ALABAMA: "AL",
@@ -79,23 +80,6 @@ function normalizePhone(value) {
   return digits || null;
 }
 
-function normalizeDate(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) {
-    return null;
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return raw;
-  }
-
-  const parsed = new Date(raw);
-  if (!Number.isFinite(parsed.getTime())) {
-    return null;
-  }
-  return parsed.toISOString().slice(0, 10);
-}
-
 function normalizeStateCode(value) {
   const raw = String(value ?? "").trim();
   if (!raw) {
@@ -106,21 +90,6 @@ function normalizeStateCode(value) {
   }
   const normalizedName = raw.replace(/\./g, "").replace(/\s+/g, " ").toUpperCase();
   return US_STATE_NAME_TO_CODE[normalizedName] || null;
-}
-
-function splitFullName(value) {
-  const full = String(value ?? "").trim();
-  if (!full) {
-    return { firstName: null, lastName: null };
-  }
-  const parts = full.split(/\s+/).filter(Boolean);
-  if (!parts.length) {
-    return { firstName: null, lastName: null };
-  }
-  return {
-    firstName: parts[0] || null,
-    lastName: parts.length > 1 ? parts.slice(1).join(" ") : null
-  };
 }
 
 function mapGender(value) {
@@ -134,12 +103,25 @@ function mapGender(value) {
   return null;
 }
 
-// Guide [GER-BCBA] and [GER-BT], "External System ID · HS → CR": the Workday ID is the Central Reach
-// External System ID. It is set on a create. Central Reach rejects a changed id on an update, so a
-// linked employee always keeps the id CR holds (see buildEmployeePayloadForContactId).
-function externalSystemIdFields(properties) {
-  const workdayId = trimOrNull(properties.workday_id);
-  return workdayId ? { externalSystemId: workdayId } : {};
+// Guide [G17]: send workday_id, or the HubSpot record ID when workday_id is blank.
+// A linked update replaces this with the id Central Reach already holds.
+export function externalSystemIdForCreate(properties, recordId) {
+  const workdayId = trimOrNull(properties?.workday_id);
+  if (workdayId) {
+    return workdayId;
+  }
+  return String(recordId ?? "").trim();
+}
+
+function employeeDateFields(properties) {
+  if (!Object.prototype.hasOwnProperty.call(properties || {}, "date_of_birth")) {
+    return { dateOfBirth: null, dateOfBirthStatus: "missing" };
+  }
+  const read = readDate(properties.date_of_birth);
+  if (read === "blank" || read === "unreadable") {
+    return { dateOfBirth: null, dateOfBirthStatus: read };
+  }
+  return { dateOfBirth: read, dateOfBirthStatus: "date" };
 }
 
 function buildHubspotRecordUrl({ portalId, objectTypeId, recordId }) {
@@ -197,16 +179,17 @@ function requiredBcbaLabels({ stateCode }) {
 
 function buildBtRbtPayload({ record, config }) {
   const properties = record?.properties || {};
-  const { firstName, lastName } = splitFullName(properties.bt_name);
+  const recordId = properties.hs_object_id || record?.id;
+  const dateFields = employeeDateFields(properties);
   const stateCode = normalizeStateCode(properties.location_home);
   const btRbtType = String(properties.bt_rbt_type || "").trim().toUpperCase() || null;
 
   const employeePayload = {
-    ...externalSystemIdFields(properties),
-    firstName,
-    lastName,
+    externalSystemId: externalSystemIdForCreate(properties, recordId),
+    firstName: trimOrNull(properties.first_name),
+    lastName: trimOrNull(properties.last_name),
     gender: mapGender(properties.gender),
-    dateOfBirth: normalizeDate(properties.date_of_birth),
+    dateOfBirth: dateFields.dateOfBirth,
     primaryEmail: cleanEmail(properties.email),
     addressLine1: trimOrNull(properties.street_home),
     addressLine2: trimOrNull(properties.home_apt),
@@ -256,21 +239,24 @@ function buildBtRbtPayload({ record, config }) {
     warnings,
     requiredLabelIds: requiredBtRbtLabels({ btRbtType, stateCode }),
     stateCode,
-    employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BT_RBT
+    employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
+    emailField: "email",
+    dateOfBirthStatus: dateFields.dateOfBirthStatus
   };
 }
 
 function buildBcbaPayload({ record, config }) {
   const properties = record?.properties || {};
-  const { firstName, lastName } = splitFullName(properties.bcba_name);
+  const recordId = properties.hs_object_id || record?.id;
+  const dateFields = employeeDateFields(properties);
   const stateCode = normalizeStateCode(properties.home_state);
 
   const employeePayload = {
-    ...externalSystemIdFields(properties),
-    firstName,
-    lastName,
-    dateOfBirth: normalizeDate(properties.date_of_birth),
-    primaryEmail: cleanEmail(properties.work_email),
+    externalSystemId: externalSystemIdForCreate(properties, recordId),
+    firstName: trimOrNull(properties.first_name),
+    lastName: trimOrNull(properties.last_name),
+    dateOfBirth: dateFields.dateOfBirth,
+    primaryEmail: cleanEmail(properties.ucaba_email_address),
     addressLine1: trimOrNull(properties.address),
     addressLine2: trimOrNull(properties.home_apt),
     city: trimOrNull(properties.city_work),
@@ -314,7 +300,9 @@ function buildBcbaPayload({ record, config }) {
     warnings,
     requiredLabelIds: requiredBcbaLabels({ stateCode }),
     stateCode,
-    employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BCBA
+    employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BCBA,
+    emailField: "ucaba_email_address",
+    dateOfBirthStatus: dateFields.dateOfBirthStatus
   };
 }
 

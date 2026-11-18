@@ -9,6 +9,7 @@ import {
 const EXCLUDED_STAGES = new Set(CASE_EXCLUDED_STAGE_IDS);
 
 export const SKIP_REASONS = Object.freeze({
+  RECORD_GATE: "record_gate",
   TEST_RECORD: "test_record",
   EXCLUDED_STAGE: "excluded_stage",
   ENTRY_NOT_YES: "entry_not_yes"
@@ -29,7 +30,17 @@ export function isTestRecord(value) {
   return value === true || String(value ?? "").trim().toLowerCase() === "true";
 }
 
-function decide({ properties, linked, includeTestRecords, excludedStage, entryIsYes }) {
+function decide({
+  properties,
+  linked,
+  includeTestRecords,
+  excludedStage,
+  entryIsYes,
+  recordGateProperty = null
+}) {
+  if (recordGateProperty && !isTestRecord(properties?.[recordGateProperty])) {
+    return { eligible: false, reason: SKIP_REASONS.RECORD_GATE };
+  }
   if (!includeTestRecords && isTestRecord(properties?.[TEST_RECORD_PROPERTY])) {
     return { eligible: false, reason: SKIP_REASONS.TEST_RECORD };
   }
@@ -44,22 +55,34 @@ function decide({ properties, linked, includeTestRecords, excludedStage, entryIs
 
 // Requirement 1: create only when the entry property is Yes and no CR record is linked.
 // Requirement 2: a linked Case keeps syncing whatever the entry value is.
-export function caseSyncEligibility({ properties, linked, includeTestRecords = false }) {
+export function caseSyncEligibility({
+  properties,
+  linked,
+  includeTestRecords = false,
+  recordGateProperty = null
+}) {
   return decide({
     properties,
     linked,
     includeTestRecords,
+    recordGateProperty,
     excludedStage: EXCLUDED_STAGES.has(String(properties?.dealstage ?? "").trim()),
     entryIsYes: caseEntryIsYes(properties?.[CASE_ENTRY_PROPERTY])
   });
 }
 
 // Same rules for BCBA and BT/RBT. There is no stage exclusion for employees.
-export function employeeSyncEligibility({ properties, linked, includeTestRecords = false }) {
+export function employeeSyncEligibility({
+  properties,
+  linked,
+  includeTestRecords = false,
+  recordGateProperty = null
+}) {
   return decide({
     properties,
     linked,
     includeTestRecords,
+    recordGateProperty,
     excludedStage: false,
     entryIsYes: employeeEntryIsYes(properties?.[EMPLOYEE_ENTRY_PROPERTY])
   });

@@ -15,6 +15,7 @@ import {
   createCentralReachClient,
   createOrUpdateClient,
   createOrUpdateEmployee,
+  findEmployeeByExternalSystemId,
   externalIdLookupMissed,
   extractCreateErrorReason,
   readExternalIdLookup
@@ -127,20 +128,16 @@ test("Hybrid minimum changes: an unclear lookup answer never leads to a create",
   await assert.rejects(createOrUpdateClient({ payload: { ExternalSystemId: "deal-1" } }));
   assert.equal(cr.count("POST /contacts/client"), 0);
 
-  // A success answer with no id and no "not found" text is unknown.
+  // A 200 employee lookup with no contact.contactId is unknown and must not create.
   cr = fakeCentralReach({
-    "PUT /contacts/employee/byExternalSystemId": () => ({ result: "ok" })
+    "GET /contacts/employee/byExternalSystemId?ExternalSystemId=1": () => ({ result: "ok" })
   });
   await assert.rejects(
-    createOrUpdateEmployee({
-      payload: { externalSystemId: "1" },
-      employeeType: "bt_rbt",
-      allowEmployeeCreate: true,
-      putOnlyMode: false
-    }),
+    findEmployeeByExternalSystemId("1"),
     (error) => error.code === "CR_LOOKUP_UNKNOWN"
   );
   assert.equal(cr.count("POST /contacts/employee"), 0);
+  assert.equal(cr.calls.some((call) => call.method === "PUT"), false);
 });
 
 test("external-id lookup classification", () => {
@@ -195,7 +192,7 @@ test("R11: a rejected employee create reports field names and codes, never Centr
     allowEmployeeCreate: true,
     putOnlyMode: false
   });
-  assert.equal(blocked.operation, "blocked");
+  assert.equal(blocked.operation, "create_rejected");
   assert.equal(blocked.reason, reason);
 });
 
@@ -214,7 +211,7 @@ test("CentralReach 409 (record already exists) blocks the employee create instea
     allowEmployeeCreate: true,
     putOnlyMode: false
   });
-  assert.equal(result.operation, "blocked");
+  assert.equal(result.operation, "create_rejected");
   assert.equal(cr.count("POST /contacts/employee"), 1);
 });
 
@@ -244,6 +241,7 @@ function employeeDeps(overrides = {}) {
     }),
     validateEmployeePayload: () => ({ isValid: true, errors: [] }),
     getEmployeeByContactId: async () => ({}),
+    findEmployeeByExternalSystemId: async () => ({ found: false, crContactId: null }),
     buildEmployeePayloadForContactId: (payload) => ({ payload }),
     createOrUpdateEmployee: async () => {
       calls.upserts += 1;
@@ -373,17 +371,12 @@ test("[G11] Monitoring: every employee failure is written to HubSpot as an error
   const { deps, calls } = employeeDeps({
     deps: { validateEmployeePayload: () => ({ isValid: false, errors: ["externalSystemId is required"] }) }
   });
-  await assert.rejects(
-    runEmployeeSyncWorkflow({ recordId: "2", employeeType: "bcba" }, deps),
-    /PayloadValidationError/
-  );
+  const result = await runEmployeeSyncWorkflow({ recordId: "2", employeeType: "bcba" }, deps);
+  assert.equal(result.status, "error");
   assert.equal(calls.writebacks.length, 1);
   assert.equal(calls.writebacks[0].last_sync_status, "error");
-  assert.equal(
-    calls.writebacks[0].last_sync_error,
-    "PayloadValidationError: externalSystemId is required"
-  );
-  assert.equal(calls.writebacks[0].integration_last_write, undefined);
+  assert.equal(calls.writebacks[0].last_sync_error, "externalSystemId is required");
+  assert.equal(typeof calls.writebacks[0].integration_last_write, "string");
   // No CR id is known, so the fail state uses the short lifetime.
   assert.equal(calls.stateWrites.at(-1).ttlSeconds, 3600);
 });
