@@ -2,6 +2,8 @@
 
 For Grok and GPT Pro. Read-only review. Report in chat. Change nothing.
 
+> **Completed 2026-11-17.** Both reviews were returned and verified. Results are in [ARCHITECTURE-REVIEW.md](ARCHITECTURE-REVIEW.md), "Final review, round 2". This brief is kept as the record of what was asked.
+
 ## What you are reviewing
 
 An Azure Functions integration (Node, ESM) for United Care ABA. HubSpot workflows send signed, ID-only webhooks. The Function App queues each ID on Service Bus. Queue workers read the HubSpot record, check eligibility, map fields and write to Central Reach (CR). An hourly poller is a safety net. Cosmos DB holds sync state and locks.
