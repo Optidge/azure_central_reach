@@ -20,7 +20,18 @@ const EMPLOYEE_CONTACT_FORMS = {
   [HUBSPOT_EMPLOYEE_TYPES.BCBA]: "Admin"
 };
 
-export function getEmployeeContactForm(employeeType) {
+// CONTRACT P.5 (d): the contact form of an employee create (rule 5.9, row 5.13).
+//   getEmployeeContactForm(employeeType, workStates)
+//   employeeType  "bt_rbt" or "bcba" (HUBSPOT_EMPLOYEE_TYPES)
+//   workStates    the mapper's workStates (src/mappings/employees/buildEmployeePayload.mjs):
+//                 upper-case two-letter state codes, for example ["CO", "NY"]; empty when
+//                 HubSpot `location` is blank
+// Returns the ContactForm name, or null for an unknown employee type.
+// The worker passes workStates to createOrUpdateEmployee, which passes it here on a create. It is
+// never part of the request body. Until row 5.13 is built workStates is not read: a BT/RBT gets
+// "Behavior Technician NY" and a BCBA gets "Admin".
+export function getEmployeeContactForm(employeeType, workStates = []) {
+  void workStates;
   const normalizedType = String(employeeType || "").trim();
   return EMPLOYEE_CONTACT_FORMS[normalizedType] || null;
 }
@@ -306,6 +317,15 @@ async function updateClientByExternalSystemId(payload) {
   return readExternalIdLookup(response, "client");
 }
 
+// CONTRACT P.5 (f): createOrUpdateClient keeps its signature while row 3.14 changes what it does.
+//   createOrUpdateClient({ payload, existingContactId })
+//   payload            the mapped client payload (buildClientPayload.mjs), without the
+//                      dateOfBirthStatus note. It holds ExternalSystemId and ContactForm; from
+//                      row 3.14 this function leaves both out of an update request (BR22).
+//   existingContactId  the CR ID the worker knows, or null / blank when the Case is not linked
+// Returns { operation: "create" | "update", crContactId }. Throws when the outcome is not clear:
+// CR_CREATE_OUTCOME_UNKNOWN for a create whose answer never arrived, CR_LOOKUP_UNKNOWN or
+// CR_LOOKUP_UNREADABLE for the lookup. It never creates after an unclear lookup.
 export async function createOrUpdateClient(payloadOrOptions) {
   const isOptionsObject =
     payloadOrOptions &&
@@ -470,9 +490,9 @@ async function updateEmployeeByContactId(contactId, payload) {
   };
 }
 
-async function createEmployee(payload) {
+async function createEmployee(payload, workStates) {
   const createPayload = { ...payload };
-  const contactForm = getEmployeeContactForm(payload?.employeeType);
+  const contactForm = getEmployeeContactForm(payload?.employeeType, workStates);
   delete createPayload.employeeId;
   delete createPayload.contactId;
   delete createPayload.employeeType;
@@ -601,8 +621,17 @@ async function postContactLabels(contactId, labelIds) {
   }
 }
 
-async function updateContactLabels(contactId, labelIds) {
-  const required = mergeUniqueNumericIds(labelIds);
+// Contract P.5 (e), written out above updateClientMetadata. managedLabelIds, lastLabelPost and
+// contactCreatedThisRun are passed through and not read until rows L.1 to L.3 are built: with an
+// empty managed list this is the add-only sender.
+async function updateContactLabels(
+  contactId,
+  { requiredLabelIds, managedLabelIds, lastLabelPost, contactCreatedThisRun }
+) {
+  void managedLabelIds;
+  void lastLabelPost;
+  void contactCreatedThisRun;
+  const required = mergeUniqueNumericIds(requiredLabelIds);
   if (!required.length) {
     return { operation: "skip_empty" };
   }
@@ -696,6 +725,44 @@ async function updateMetadataField(contactId, fieldId, value) {
   }
 }
 
+// CONTRACT P.5 (e): the label sender (rule 5.6, rows L.1 to L.4). The workers call it through
+// updateClientMetadata, for clients and for employees.
+//   updateClientMetadata(contactId, metadataValues, options)
+// Label options, all passed by the worker:
+//   labelIds               the mapper's requiredLabelIds: the labels the contact must hold now.
+//                          The option keeps its old name.
+//   managedLabelIds        the mapper's managedLabelIds. Default []: nothing is removed.
+//   lastLabelPost          the last label POST the worker saved in the link record under
+//                          `lastLabelPost`: { contactId, labelIds: [numbers], postedAt: ISO time },
+//                          or null when none is saved. The worker passes null when the saved
+//                          contactId is not the contact being synced (the CR ID changed).
+//   contactCreatedThisRun  true when an empty label read may be taken as "no labels" (row L.2):
+//                          this run created the contact, or the link record still holds
+//                          `labelsPending: true`. The worker sets labelsPending when the
+//                          integration creates the contact or links the record to its own earlier
+//                          create, and clears it when a label POST is confirmed. Without it, a
+//                          create that timed out would leave a contact whose empty read is retried
+//                          until the record ends as `error`.
+// The answer's labelResult:
+//   operation       "skip_empty" (no required label: no CentralReach call), "skip_present"
+//                   (nothing to change: no POST) or "updated" (a POST was sent)
+//   postedLabelIds  the whole set posted in this run, as numbers; null when no POST was sent
+//   postedAt        the ISO time of that POST; null when no POST was sent
+//   confirmed       true when a read shows the set CentralReach must hold; false when the read
+//                   does not show it yet
+// The set to post is: what CentralReach holds, minus managed, plus required. The catalog check of
+// row L.1 runs on that set, after the managed labels are taken out, so a remove-only ID that
+// CentralReach still holds never blocks a post.
+// Inside the 150-second window after lastLabelPost the sender posts nothing (row L.3). It works
+// out the set from the saved post instead of the read: saved labelIds, minus managed, plus
+// required. If that set differs from the saved labelIds, the required labels changed after the
+// post: confirmed is false, so the run is retried and posts after the window. If it equals the
+// saved labelIds: confirmed is true when the read shows them and false when it does not.
+// postedLabelIds, postedAt and confirmed are returned from row L.3 on. The worker then saves
+// { labelIds: postedLabelIds, postedAt } as lastLabelPost whenever postedLabelIds is not null,
+// and ends the run with the temporary failure CR_LABEL_POST_UNCONFIRMED only when confirmed is
+// exactly false. The label step runs before the metadata fields; when it throws, no field is
+// written. Error codes: contract (g) in src/lib/retry.mjs.
 export async function updateClientMetadata(contactId, metadataValues, options = {}) {
   const normalizedContactId = String(contactId || "").trim();
   if (!normalizedContactId) {
@@ -703,7 +770,12 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
   }
 
   const values = metadataValues && typeof metadataValues === "object" ? metadataValues : {};
-  const labelResult = await updateContactLabels(normalizedContactId, options.labelIds || []);
+  const labelResult = await updateContactLabels(normalizedContactId, {
+    requiredLabelIds: options.labelIds || [],
+    managedLabelIds: options.managedLabelIds || [],
+    lastLabelPost: options.lastLabelPost || null,
+    contactCreatedThisRun: Boolean(options.contactCreatedThisRun)
+  });
   const clearFieldIds = new Set((options.clearFieldIds || []).map((value) => Number(value)));
   const results = [];
 
@@ -759,6 +831,8 @@ export async function createOrUpdateEmployee(payload) {
       ? true
       : Boolean(options.putOnlyMode);
   const employeeType = String(options.employeeType || "").trim();
+  // Contract P.5 (d): used for the contact form of a create only.
+  const workStates = Array.isArray(options.workStates) ? options.workStates : [];
 
   if (!employeePayload) {
     throw new Error("CentralReach employee payload must be an object");
@@ -784,10 +858,13 @@ export async function createOrUpdateEmployee(payload) {
   }
 
   try {
-    return await createEmployee({
-      ...employeePayload,
-      ...(employeeType ? { employeeType } : {})
-    });
+    return await createEmployee(
+      {
+        ...employeePayload,
+        ...(employeeType ? { employeeType } : {})
+      },
+      workStates
+    );
   } catch (error) {
     const status = error?.response?.status;
     if (status === 400 || status === 409) {

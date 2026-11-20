@@ -1,0 +1,870 @@
+{
+  "takenOn": "2026-11-20",
+  "source": "GET /contacts/labels and GET /contacts/metadata-configuration (read-only). Names and IDs only.",
+  "labels": [
+    {
+      "labelId": 1052531,
+      "name": "Funding Source ",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052532,
+      "name": "Medicaid NY",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1052533,
+      "name": "GHI",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1052534,
+      "name": "UHC",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1052541,
+      "name": "Employment Status ",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052545,
+      "name": "New Employee On-boarding",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052547,
+      "name": "Needs credentialing",
+      "parentLabelId": 1052545
+    },
+    {
+      "labelId": 1052548,
+      "name": "Job Title",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052549,
+      "name": "Admin",
+      "parentLabelId": 1052618
+    },
+    {
+      "labelId": 1052612,
+      "name": "Credentials",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052613,
+      "name": "Departments",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052614,
+      "name": "Case Stage",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052615,
+      "name": "Client Service Type",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052616,
+      "name": "Client Service Location",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052618,
+      "name": "All Employees",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052619,
+      "name": "All Clients",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1052620,
+      "name": "Anthem BCBS",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1052621,
+      "name": "Active Employee",
+      "parentLabelId": 1052541
+    },
+    {
+      "labelId": 1052622,
+      "name": "Inactive Employee",
+      "parentLabelId": 1052541
+    },
+    {
+      "labelId": 1052629,
+      "name": "BCBA LBA NY",
+      "parentLabelId": 1130668
+    },
+    {
+      "labelId": 1052630,
+      "name": "Behavior Technician NY",
+      "parentLabelId": 1131825
+    },
+    {
+      "labelId": 1052631,
+      "name": "RBT NY",
+      "parentLabelId": 1131825
+    },
+    {
+      "labelId": 1052640,
+      "name": "Scheduler",
+      "parentLabelId": 1052613
+    },
+    {
+      "labelId": 1052641,
+      "name": "Biller",
+      "parentLabelId": 1052613
+    },
+    {
+      "labelId": 1052642,
+      "name": "Human Resources",
+      "parentLabelId": 1052613
+    },
+    {
+      "labelId": 1052643,
+      "name": "Clinical",
+      "parentLabelId": 1052613
+    },
+    {
+      "labelId": 1052646,
+      "name": " Ongoing ",
+      "parentLabelId": 1125427
+    },
+    {
+      "labelId": 1052647,
+      "name": "Discharged ",
+      "parentLabelId": 1121488
+    },
+    {
+      "labelId": 1052650,
+      "name": "Paused",
+      "parentLabelId": 1121488
+    },
+    {
+      "labelId": 1052654,
+      "name": "Social Skills Group",
+      "parentLabelId": 1052615
+    },
+    {
+      "labelId": 1052655,
+      "name": "Clinic",
+      "parentLabelId": 1052616
+    },
+    {
+      "labelId": 1052656,
+      "name": "Home",
+      "parentLabelId": 1052616
+    },
+    {
+      "labelId": 1052657,
+      "name": "Pending IA Auth",
+      "parentLabelId": 1142656
+    },
+    {
+      "labelId": 1052663,
+      "name": "Restaffing-BCBA Needed",
+      "parentLabelId": 1052646
+    },
+    {
+      "labelId": 1052664,
+      "name": "Restaffing- Paused (no BT)",
+      "parentLabelId": 1125427
+    },
+    {
+      "labelId": 1052688,
+      "name": "School",
+      "parentLabelId": 1052616
+    },
+    {
+      "labelId": 1056433,
+      "name": "Clinical Director ",
+      "parentLabelId": 1052548
+    },
+    {
+      "labelId": 1082206,
+      "name": "IA In Process",
+      "parentLabelId": 1142656
+    },
+    {
+      "labelId": 1082497,
+      "name": "Aetna NY",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1082498,
+      "name": "Cigna NY",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1082499,
+      "name": "NY Client",
+      "parentLabelId": 1052619
+    },
+    {
+      "labelId": 1092164,
+      "name": "GRAD Student- LBA NY ",
+      "parentLabelId": 1130668
+    },
+    {
+      "labelId": 1103437,
+      "name": "Billing Hold Medicaid affiliation",
+      "parentLabelId": 1052545
+    },
+    {
+      "labelId": 1107647,
+      "name": "NY Medicaid",
+      "parentLabelId": 1103437
+    },
+    {
+      "labelId": 1107648,
+      "name": "Carelon ",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1107649,
+      "name": "Aetna",
+      "parentLabelId": 1052545
+    },
+    {
+      "labelId": 1107650,
+      "name": "Cigna",
+      "parentLabelId": 1052545
+    },
+    {
+      "labelId": 1107651,
+      "name": "CO Medicaid",
+      "parentLabelId": 1103437
+    },
+    {
+      "labelId": 1107686,
+      "name": "NJ Employee",
+      "parentLabelId": 1052618
+    },
+    {
+      "labelId": 1107687,
+      "name": "CO Employee",
+      "parentLabelId": 1052618
+    },
+    {
+      "labelId": 1107692,
+      "name": "RBT CO",
+      "parentLabelId": 1131825
+    },
+    {
+      "labelId": 1108700,
+      "name": "Learning Tree Reviews ",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1108702,
+      "name": "Quarter 2 Review 2026",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1108704,
+      "name": "Quarter 3 Review 2026",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1108705,
+      "name": "Quarter 4 Review 2026",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1110810,
+      "name": "Quarter 1 Review 2026",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1119435,
+      "name": "Case Owner",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1119436,
+      "name": "Allata G.",
+      "parentLabelId": 1119435
+    },
+    {
+      "labelId": 1119438,
+      "name": "Kinaya A.",
+      "parentLabelId": 1119435
+    },
+    {
+      "labelId": 1119439,
+      "name": "Lauryn W.",
+      "parentLabelId": 1119435
+    },
+    {
+      "labelId": 1121488,
+      "name": "In-Active Client",
+      "parentLabelId": 1052614
+    },
+    {
+      "labelId": 1121490,
+      "name": "Pending Ongoing Auth ",
+      "parentLabelId": 1142656
+    },
+    {
+      "labelId": 1121491,
+      "name": "Initial Assessment ",
+      "parentLabelId": 1142656
+    },
+    {
+      "labelId": 1123201,
+      "name": "Reviewed this month",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1123202,
+      "name": "COC needed",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1123203,
+      "name": "parent training data needed",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1123204,
+      "name": "Mastered programs: needs updating",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1123206,
+      "name": "Targets need instructions ",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1123208,
+      "name": "Learning Opportunity Increase needed",
+      "parentLabelId": 1108700
+    },
+    {
+      "labelId": 1124245,
+      "name": "BCBA LBA NJ ",
+      "parentLabelId": 1130668
+    },
+    {
+      "labelId": 1124246,
+      "name": "BCBA Colorado ",
+      "parentLabelId": 1130668
+    },
+    {
+      "labelId": 1124247,
+      "name": "Medicaid NJ ",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1124248,
+      "name": "Medicaid Colorado ",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1124249,
+      "name": "Cigna Colorado ",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1125427,
+      "name": "Active Client",
+      "parentLabelId": 1052614
+    },
+    {
+      "labelId": 1129264,
+      "name": "Inactive Insurance",
+      "parentLabelId": 1052650
+    },
+    {
+      "labelId": 1130668,
+      "name": "BCBA ",
+      "parentLabelId": 1052612
+    },
+    {
+      "labelId": 1131825,
+      "name": "Behavior Technician/ RBT",
+      "parentLabelId": 1052612
+    },
+    {
+      "labelId": 1132634,
+      "name": "IA Complete",
+      "parentLabelId": 1142656
+    },
+    {
+      "labelId": 1132635,
+      "name": "Service Ready",
+      "parentLabelId": 1125427
+    },
+    {
+      "labelId": 1132637,
+      "name": "First three days",
+      "parentLabelId": 1052646
+    },
+    {
+      "labelId": 1132638,
+      "name": "Ongoing- 2nd BT needed",
+      "parentLabelId": 1052646
+    },
+    {
+      "labelId": 1132640,
+      "name": "Reasessment",
+      "parentLabelId": 1052646
+    },
+    {
+      "labelId": 1132641,
+      "name": "Diagnosis needed",
+      "parentLabelId": 1052650
+    },
+    {
+      "labelId": 1132647,
+      "name": "NJ Client ",
+      "parentLabelId": 1052619
+    },
+    {
+      "labelId": 1132648,
+      "name": "CO Client",
+      "parentLabelId": 1052619
+    },
+    {
+      "labelId": 1132650,
+      "name": "Behavior Technician CO ",
+      "parentLabelId": 1131825
+    },
+    {
+      "labelId": 1132651,
+      "name": "RBT NJ ",
+      "parentLabelId": 1131825
+    },
+    {
+      "labelId": 1132652,
+      "name": "Behavior Technician NJ",
+      "parentLabelId": 1131825
+    },
+    {
+      "labelId": 1132653,
+      "name": "Salaried ",
+      "parentLabelId": 1052621
+    },
+    {
+      "labelId": 1132654,
+      "name": "Carelon",
+      "parentLabelId": 1052545
+    },
+    {
+      "labelId": 1132655,
+      "name": "NY Employee",
+      "parentLabelId": 1052618
+    },
+    {
+      "labelId": 1132951,
+      "name": "Payment Plan ",
+      "parentLabelId": 1052531
+    },
+    {
+      "labelId": 1138957,
+      "name": "Billing Hold- Clinical- EVV test",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1142656,
+      "name": "Active Client IA ",
+      "parentLabelId": 1052614
+    },
+    {
+      "labelId": 1156741,
+      "name": "Staffing Status",
+      "parentLabelId": 0
+    },
+    {
+      "labelId": 1156742,
+      "name": "Pending 97151 Services",
+      "parentLabelId": 1156741
+    },
+    {
+      "labelId": 1156743,
+      "name": "97151 Services",
+      "parentLabelId": 1156741
+    },
+    {
+      "labelId": 1156746,
+      "name": "Staffed 97153",
+      "parentLabelId": 1156741
+    },
+    {
+      "labelId": 1156747,
+      "name": "X 97153",
+      "parentLabelId": 1156741
+    },
+    {
+      "labelId": 1157030,
+      "name": "NM Employee",
+      "parentLabelId": 1052618
+    },
+    {
+      "labelId": 1157031,
+      "name": "VA Employee",
+      "parentLabelId": 1052618
+    }
+  ],
+  "metadataFields": [
+    {
+      "fieldId": 126205,
+      "fieldName": "BCBA Certification #",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126207,
+      "fieldName": "Maladaptive Behaviors",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 126208,
+      "fieldName": "CAQH #",
+      "type": "decimal",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126209,
+      "fieldName": "Client Availability",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 126210,
+      "fieldName": "Current Primary Insurance",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 126211,
+      "fieldName": "Employee Availability",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126212,
+      "fieldName": "Employee Availability EXTRA",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126213,
+      "fieldName": "Highest Degree Obtained",
+      "type": "single",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126214,
+      "fieldName": "Known Allergies",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 126215,
+      "fieldName": "License#",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126216,
+      "fieldName": "Medicaid ID # NY",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126217,
+      "fieldName": "NPI",
+      "type": "input",
+      "contactType": "Generic"
+    },
+    {
+      "fieldId": 126218,
+      "fieldName": "NPI Number",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126219,
+      "fieldName": "Previous Therapy History",
+      "type": "textarea",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 126220,
+      "fieldName": "Primary Care Physician",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 126221,
+      "fieldName": "RBT #",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 126222,
+      "fieldName": "Referral Source",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 131151,
+      "fieldName": "Referring Physician, Credentials & NPI ",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 131195,
+      "fieldName": "Date of Most Recent ASD Diagnosis ",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 131308,
+      "fieldName": "*** Supervising BCBA ***",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 131313,
+      "fieldName": "BT #1 name ",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 131314,
+      "fieldName": "*** Intial Assessment BCBA***",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 131316,
+      "fieldName": "Primary Insurance ID ",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 132303,
+      "fieldName": "Comorbid Diagnosis",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 132304,
+      "fieldName": "Work Schedule #1",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 132431,
+      "fieldName": "Approved Auth Hours ",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 133819,
+      "fieldName": "Work address",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 133826,
+      "fieldName": "Severity Level",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 134331,
+      "fieldName": "Total Assigned Hours (97153)",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 134444,
+      "fieldName": "Credentialed with Medicaid NY",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 134445,
+      "fieldName": "Credentialed with Aetna ",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 134446,
+      "fieldName": "Credentialed with Medicaid CO",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 134466,
+      "fieldName": "Credentialed with Cigna",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 134672,
+      "fieldName": "Auth Period",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 136052,
+      "fieldName": "***  Grad Permit Holder***",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 137667,
+      "fieldName": "Policy Holder DOB",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 137697,
+      "fieldName": "Service  Location Address",
+      "type": "textarea",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138069,
+      "fieldName": "Personal Email",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 138090,
+      "fieldName": "Policy Holder Name",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138091,
+      "fieldName": "Service Location Address 2",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138092,
+      "fieldName": "BT #2 Name",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138093,
+      "fieldName": "Work Schedule #2",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138112,
+      "fieldName": "Medicaid ID # NJ",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 138113,
+      "fieldName": "Medicaid ID # CO",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 138378,
+      "fieldName": "Important Information- Parent",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138701,
+      "fieldName": "Date of Most Recent ASD Diagnosis Medicaid FFS NY",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138702,
+      "fieldName": "HubSpot Link to Case Record",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 138703,
+      "fieldName": "HubSpot Link to Record",
+      "type": "input",
+      "contactType": "Employee"
+    },
+    {
+      "fieldId": 138851,
+      "fieldName": "Care Coordinator",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 140494,
+      "fieldName": "Supplies Sent",
+      "type": "yesno",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 140495,
+      "fieldName": "New meta data field",
+      "type": "input"
+    },
+    {
+      "fieldId": 141233,
+      "fieldName": "Referring Physician Medicaid ID State and ID #",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 142212,
+      "fieldName": "Previous Info",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 144600,
+      "fieldName": "Secondary Insurance",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 144601,
+      "fieldName": "Secondary Insurance ID",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 144602,
+      "fieldName": "*** Reassessment BCBA***",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 144603,
+      "fieldName": "Test",
+      "type": "input"
+    },
+    {
+      "fieldId": 144793,
+      "fieldName": "Diagnosis",
+      "type": "input",
+      "contactType": "Client"
+    },
+    {
+      "fieldId": 147882,
+      "fieldName": "Active Case Count",
+      "type": "input",
+      "contactType": "Employee"
+    }
+  ]
+}

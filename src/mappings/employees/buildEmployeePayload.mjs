@@ -238,6 +238,8 @@ function buildBtRbtPayload({ record, config }) {
     metadataValues,
     warnings,
     requiredLabelIds: requiredBtRbtLabels({ btRbtType, stateCode }),
+    managedLabelIds: [],
+    workStates: [],
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
     emailField: "email",
@@ -299,6 +301,8 @@ function buildBcbaPayload({ record, config }) {
     metadataValues,
     warnings,
     requiredLabelIds: requiredBcbaLabels({ stateCode }),
+    managedLabelIds: [],
+    workStates: [],
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BCBA,
     emailField: "ucaba_email_address",
@@ -306,6 +310,34 @@ function buildBcbaPayload({ record, config }) {
   };
 }
 
+// CONTRACT P.5 (a): labels. Every mapper returns two lists of CentralReach label IDs (rule 5.6).
+//   requiredLabelIds  the labels the record must hold now. The base labels are always in it.
+//   managedLabelIds   every label the integration maps for this kind of record, required now or
+//                     not. Empty until Stage 5 fills it (rows 5.4 to 5.8, 5.11, 5.12).
+// The worker passes both to the label sender (contract (e) in src/lib/centralReachClient.mjs).
+// The sender posts: what CentralReach holds, minus managed, plus required. With an empty managed
+// list nothing is ever removed. Every ID in requiredLabelIds must be in
+// CENTRAL_REACH_SENDABLE_LABEL_IDS (src/constants/centralReach.mjs). A remove-only ID may be in
+// managedLabelIds and never in requiredLabelIds.
+//
+// CONTRACT P.5 (d): work states and the contact form (rule 5.9, row 5.13).
+//   workStates  the record's Work State(s) from HubSpot `location`, as upper-case two-letter
+//               state codes with no duplicates, for example ["CO", "NY"]. Empty when `location`
+//               is blank. Empty until row 5.13 fills it. Returned for BT/RBT and for BCBA.
+//               Only Colorado, New Jersey and New York have a code today. Any other `location`
+//               option is left out of workStates, and the mapper adds a warning that names the
+//               property, never the value. It is not an error: the record still syncs, gets no
+//               state label for that option, and rule 5.9 picks the form from the codes left.
+// The worker passes workStates to createOrUpdateEmployee on a create, and getEmployeeContactForm
+// (src/lib/centralReachClient.mjs) picks the form from the employee type and these codes.
+//
+// CONTRACT P.5 (c), employee side: an input that could not be read (rule 5.8). The worker fills
+// every field of knownMetadataFieldIds (employeeProperties.mjs) that the mapper leaves out with a
+// blank, and a blank can become a clear. So leaving a key out is not enough here: the worker
+// names the field ID in its omitFieldIds list (src/workflows/employeeSyncWorkflow.mjs), and that
+// field is then not sent and not cleared. Row 3.18: the worker also keeps the field's saved hash
+// in the link record and leaves the field out of the changed fields, so a later blank in HubSpot
+// still sends the clear.
 export function buildEmployeePayload({ record, employeeType, config }) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return buildBtRbtPayload({ record, config });

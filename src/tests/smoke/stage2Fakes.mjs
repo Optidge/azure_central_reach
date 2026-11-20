@@ -4,6 +4,7 @@
 // - hubspotRecord: one HubSpot record that remembers what the integration wrote back.
 // - fakeCentralReach: CentralReach at the HTTP level, so centralReachClient.mjs runs for real.
 import axios from "axios";
+import { CENTRAL_REACH_SENDABLE_LABEL_IDS } from "../../constants/centralReach.mjs";
 import { createCentralReachClient } from "../../lib/centralReachClient.mjs";
 
 export const SANDBOX_PORTAL = "52311591";
@@ -169,6 +170,19 @@ const CR_ROUTES = [
     handle: () => ({})
   },
   {
+    // The live label catalog (row L.1). `cr.catalog` is a list of label IDs. When a test does not
+    // set it, the catalog holds every sendable label and every label a fake contact holds.
+    method: "GET",
+    pattern: /^\/contacts\/labels$/,
+    name: () => "GET /contacts/labels",
+    handle: ({ labels, catalog }) => {
+      const ids = catalog ?? [
+        ...new Set([...CENTRAL_REACH_SENDABLE_LABEL_IDS, ...Array.from(labels.values()).flat()])
+      ];
+      return { labels: ids.map((labelId) => ({ labelId, name: `Label ${labelId}`, parentLabelId: null })) };
+    }
+  },
+  {
     method: "GET",
     pattern: /^\/contacts\/(\w+)\/labels$/,
     name: () => "GET /contacts/{id}/labels",
@@ -223,6 +237,8 @@ export function fakeCentralReach() {
     employees: contacts.employee,
     clients: contacts.client,
     labels,
+    // The label catalog as a list of IDs, or null for the default (see the catalog route).
+    catalog: null,
     // Called with the route name before each request is handled.
     onRequest: null,
     // The next `times` calls to this route fail. With `afterHandling` the request is applied
@@ -272,6 +288,7 @@ export function fakeCentralReach() {
       match,
       body,
       labels,
+      catalog: cr.catalog,
       contactsOf: (kind) => contacts[kind],
       nextId: () => {
         counter += 1;

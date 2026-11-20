@@ -521,6 +521,7 @@ export async function findHubSpotRecordsByEmployeeId({
   return found;
 }
 
+// Returns one row per associated record: { toObjectId, types: [{ typeId, category }] }.
 export async function listAssociations({ fromObjectType, fromId, toObjectType, maxPages = 20 }) {
   assertHubSpotReady();
   const fromType = String(fromObjectType || "").trim();
@@ -553,14 +554,21 @@ export async function listAssociations({ fromObjectType, fromId, toObjectType, m
       throw error;
     }
 
-    const page = Array.isArray(response?.data?.results) ? response.data.results : [];
+    // Rule 5.8: an answer with no results list is a failed read. It is never read as "no
+    // associations", which would look like "no staff on this Case".
+    const page = response?.data?.results;
+    if (!Array.isArray(page)) {
+      throw new HubSpotReadError(`associations:${toType}`, response?.status);
+    }
     for (const row of page) {
-      const typeIds = (Array.isArray(row?.associationTypes) ? row.associationTypes : [])
-        .map((item) => Number(item?.typeId))
-        .filter((value) => Number.isFinite(value));
+      // The category is kept: a role is a USER_DEFINED type, and a HUBSPOT_DEFINED type can
+      // carry the same type ID.
+      const types = (Array.isArray(row?.associationTypes) ? row.associationTypes : [])
+        .map((item) => ({ typeId: Number(item?.typeId), category: item?.category ?? null }))
+        .filter((type) => Number.isFinite(type.typeId));
       collected.push({
         toObjectId: String(row?.toObjectId ?? ""),
-        typeIds
+        types
       });
     }
 

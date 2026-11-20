@@ -29,6 +29,7 @@ import {
 } from "../lib/retry.mjs";
 import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { associationsForComparison } from "../constants/staffingAssociations.mjs";
+import { caseRequestProperties } from "../mappings/client/clientProperties.mjs";
 import { buildClientPayload } from "../mappings/client/buildClientPayload.mjs";
 import { buildClientMetadata } from "../mappings/client/buildClientMetadata.mjs";
 import { validateClientPayload } from "../mappings/client/validateClientPayload.mjs";
@@ -45,69 +46,6 @@ import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
 const CLIENT_LINK_PK = "sync:client";
 const CLIENT_ATTEMPT_PK = "sync-attempt:client";
 const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
-
-const REQUIRED_DEAL_PROPERTIES = [
-  "hs_object_id",
-  "hs_lastmodifieddate",
-  "dealstage",
-  "enter_in_central_reach",
-  "test_record",
-  "integration_last_write",
-  "updated_by_integration",
-  "last_sync_hash",
-  "last_sync_at",
-  "last_sync_status",
-  "last_sync_error",
-  "phi_first_name__cloned_",
-  "phi_last_name",
-  "phi_date_of_birth",
-  "phi_gender",
-  "email",
-  "phone",
-  "phone_number__second_",
-  "if_services_will_be_in_more_than_one_location__list_the_other_addres",
-  "street_address",
-  "home_apt",
-  "location_city",
-  "location_central_reach",
-  "location",
-  "postal_code",
-  "guardian_first_name",
-  "guardian_last_name",
-  "allergies",
-  "maladaptive_behaviors__clinical",
-  "comorbid_diagnosis__clinical",
-  "current_primary_bt",
-  "current_primary_bt_2",
-  "bt_work_schedule_confirmed",
-  "bt_work_schedule_2_confirmed",
-  "client_availability_completed",
-  "assigned_hours",
-  "authorized_hours",
-  "auth_start_date",
-  "auth_end_date",
-  "physician_name",
-  "npi_number",
-  "physician_name__commercial",
-  "npi_number__commercial",
-  "most_recent_asd_diagnosis_date_medicaid",
-  "most_recent_asd_diagnosis_date_1",
-  "most_recent_asd_diagnosis_date_2",
-  "supervising_bcba",
-  "initial_assessment_bcba",
-  "policy_holder_name",
-  "phi__policy_holder_dob",
-  "severity_level_clinical",
-  "n1_what_type_of_insurance",
-  "n2_what_type_of_insurance",
-  "insurance_primary",
-  "insurance_1__other__summary",
-  "insurance_id_1",
-  "insurance_id_2",
-  "insurance_id_3",
-  "insurance_id_4",
-  "central_reach_link_to_client"
-];
 
 function hashPayload(payload) {
   return hashMappedState(payload);
@@ -168,6 +106,12 @@ function centralReachPayload(mapped) {
   const payload = { ...(mapped || {}) };
   delete payload.dateOfBirthStatus;
   return payload;
+}
+
+// Contract P.5 (a) in src/mappings/client/buildClientMetadata.mjs: the mapper returns
+// requiredLabelIds and managedLabelIds. labelIds is the old name of the required list.
+function requiredLabels(metadata) {
+  return metadata?.requiredLabelIds ?? metadata?.labelIds;
 }
 
 function linkProperties(crContactIdProperty, contactId) {
@@ -259,7 +203,7 @@ export async function runClientSyncWorkflow(
     }
 
     const recordGateProperty = config.sync?.recordGateProperty || null;
-    const propertyList = [...REQUIRED_DEAL_PROPERTIES, crContactIdProperty];
+    const propertyList = [...caseRequestProperties(), crContactIdProperty];
     if (recordGateProperty && !propertyList.includes(recordGateProperty)) {
       propertyList.push(recordGateProperty);
     }
@@ -382,7 +326,7 @@ export async function runClientSyncWorkflow(
     const comparable = buildComparableState({
       core: payload,
       metadata: metadata.metadataValues,
-      labels: metadata.labelIds,
+      labels: requiredLabels(metadata),
       relationships,
       includeRelationships
     });
@@ -457,10 +401,17 @@ export async function runClientSyncWorkflow(
     let metadataSyncSummary = null;
     if (syncResult.operation !== "noop" && syncResult.crContactId) {
       const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadata.metadataValues);
+      // Contract P.5 (e) in src/lib/centralReachClient.mjs. Row L.3 saves lastLabelPost.
       metadataSyncSummary = await pushMetadata(
         syncResult.crContactId,
         metadata.metadataValues,
-        { labelIds: metadata.labelIds, clearFieldIds }
+        {
+          labelIds: requiredLabels(metadata),
+          managedLabelIds: metadata.managedLabelIds ?? [],
+          lastLabelPost: prior.lastLabelPost ?? null,
+          contactCreatedThisRun: syncResult.operation === "create",
+          clearFieldIds
+        }
       );
       if ((metadataSyncSummary?.failedCount || 0) > 0) {
         throw metadataWriteFailedError(metadataSyncSummary);
@@ -483,7 +434,7 @@ export async function runClientSyncWorkflow(
       buildComparableState({
         core: confirmedPayload,
         metadata: confirmedMetadata.metadataValues,
-        labels: confirmedMetadata.labelIds,
+        labels: requiredLabels(confirmedMetadata),
         relationships,
         includeRelationships
       })

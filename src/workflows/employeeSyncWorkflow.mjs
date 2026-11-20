@@ -38,6 +38,10 @@ import {
 } from "../lib/retry.mjs";
 import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { buildEmployeePayload } from "../mappings/employees/buildEmployeePayload.mjs";
+import {
+  employeeRequestProperties,
+  knownMetadataFieldIds
+} from "../mappings/employees/employeeProperties.mjs";
 import { validateEmployeePayload } from "../mappings/employees/validateEmployeePayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
 import {
@@ -62,75 +66,6 @@ import { employeeSyncEligibility } from "../lib/syncEligibility.mjs";
 const EMPLOYEE_LINK_PK = "sync:employee";
 const EMPLOYEE_ATTEMPT_PK = "sync-attempt:employee";
 
-const BT_RBT_PROPERTIES = [
-  "hs_object_id",
-  "employee_id",
-  "hs_lastmodifieddate",
-  "updated_by_integration",
-  "integration_last_write",
-  "last_sync_hash",
-  "last_sync_at",
-  "last_sync_status",
-  "last_sync_error",
-  "entered_in_centralreach",
-  "test_record",
-  "workday_id",
-  "first_name",
-  "last_name",
-  "bt_name",
-  "date_of_birth",
-  BT_RBT_CHECKLIST_PROPERTY,
-  "gender",
-  "email",
-  "street_home",
-  "home_apt",
-  "location_city",
-  "location_home",
-  "postal_code",
-  "postal_code_home",
-  "employee_phone",
-  "bt_rbt_type",
-  "active_cases_count",
-  "street_address__work_",
-  "city__work_",
-  "state__work_",
-  "postal_code__work_",
-  "central_reach_link_to_rt_rbt"
-];
-
-const BCBA_PROPERTIES = [
-  "hs_object_id",
-  "employee_id",
-  "hs_lastmodifieddate",
-  "updated_by_integration",
-  "integration_last_write",
-  "last_sync_hash",
-  "last_sync_at",
-  "last_sync_status",
-  "last_sync_error",
-  "entered_in_centralreach",
-  "test_record",
-  "workday_id",
-  "first_name",
-  "last_name",
-  "bcba_name",
-  "date_of_birth",
-  "email",
-  "ucaba_email_address",
-  "work_email",
-  BCBA_CHECKLIST_PROPERTY,
-  "address",
-  "home_apt",
-  "city_work",
-  "home_state",
-  "employee_phone",
-  "medicaid_id__ny",
-  "medicaid_id__nj",
-  "medicaid_id__co",
-  "credentialed_insurances__ny",
-  "central_reach_record_link"
-];
-
 function ensureRecordId(recordId) {
   const normalized = String(recordId || "").trim();
   if (!normalized) {
@@ -152,24 +87,6 @@ function ensureEmployeeType(employeeType) {
 
 function hashPayload(payload) {
   return hashMappedState(payload);
-}
-
-function knownMetadataFieldIds(employeeType) {
-  if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
-    return [
-      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS,
-      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.ACTIVE_CASE_COUNT,
-      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD
-    ];
-  }
-  return [
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NJ,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
-  ];
 }
 
 function asReadFailure(error, scope) {
@@ -315,10 +232,7 @@ export async function runEmployeeSyncWorkflow(
     normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
       ? BT_RBT_CHECKLIST_PROPERTY
       : BCBA_CHECKLIST_PROPERTY;
-  const properties =
-    normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
-      ? [...BT_RBT_PROPERTIES, employeeIdProperty]
-      : [...BCBA_PROPERTIES, employeeIdProperty];
+  const properties = [...employeeRequestProperties(normalizedEmployeeType), employeeIdProperty];
   if (recordGateProperty && !properties.includes(recordGateProperty)) {
     properties.push(recordGateProperty);
   }
@@ -641,6 +555,8 @@ export async function runEmployeeSyncWorkflow(
           syncResult = await upsertEmployee({
             payload: outboundPayload,
             employeeType: normalizedEmployeeType,
+            // Contract P.5 (d): the work states pick the contact form of the create.
+            workStates: mapped.workStates,
             existingContactId: null,
             allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate),
             putOnlyMode: config.features?.putOnlyMode !== false
@@ -711,6 +627,8 @@ export async function runEmployeeSyncWorkflow(
       }
     }
 
+    // Contract P.5 (c) in src/mappings/employees/buildEmployeePayload.mjs: a field whose input
+    // could not be read is named here, so it is not compared, not sent and not cleared.
     const omitFieldIds = mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
       ? [
           CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
@@ -838,8 +756,12 @@ export async function runEmployeeSyncWorkflow(
     const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
     if (contactId && (Object.keys(metadataForCompare).length > 0 || labelIds.length > 0)) {
       const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadataForCompare);
+      // Contract P.5 (e) in src/lib/centralReachClient.mjs. Row L.3 saves lastLabelPost.
       metadataSyncSummary = await pushMetadata(contactId, metadataForCompare, {
         labelIds,
+        managedLabelIds: mapped.managedLabelIds ?? [],
+        lastLabelPost: prior.lastLabelPost ?? null,
+        contactCreatedThisRun: createdThisRun,
         clearFieldIds
       });
       if ((metadataSyncSummary?.failedCount || 0) > 0) {

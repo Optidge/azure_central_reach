@@ -306,9 +306,10 @@ test("[2.6] the portal table is read when a function runs, not when a module loa
 
 test("[2.6] excluded association IDs follow the portal", () => {
   // 187 is excluded only in the sandbox, 20 only in production.
+  // Row P.2: the input rows have the shape listAssociations returns.
   const rows = [
-    { toObjectId: "1", typeIds: [187] },
-    { toObjectId: "2", typeIds: [20] }
+    { toObjectId: "1", types: [{ typeId: 187, category: "HUBSPOT_DEFINED" }] },
+    { toObjectId: "2", types: [{ typeId: 20, category: "HUBSPOT_DEFINED" }] }
   ];
   const sandbox = associationsForComparison(
     rows,
@@ -323,9 +324,10 @@ test("[2.6] excluded association IDs follow the portal", () => {
 });
 
 test("[2.6] the Case worker drops the excluded association types of its own portal", async () => {
+  // Row P.2: the fake answers in the shape listAssociations returns.
   const associations = async () => [
-    { toObjectId: "1", typeIds: [187] },
-    { toObjectId: "2", typeIds: [20] }
+    { toObjectId: "1", types: [{ typeId: 187, category: "HUBSPOT_DEFINED" }] },
+    { toObjectId: "2", types: [{ typeId: 20, category: "HUBSPOT_DEFINED" }] }
   ];
   const relationshipHashes = async (portalId) => {
     const { container, cr } = setup();

@@ -25,20 +25,13 @@ test("association sets ignore order and excluded role types", () => {
   // Stage 2 (row 2.6): the excluded types are passed in from the portal table. These rows use
   // production ids (unlabeled BT/RBT 64, unlabeled BCBA 20).
   const excluded = hubspotPortalSettings("50317927").excludedStaffingAssociationTypeIds;
-  const first = associationsForComparison(
-    [
-      { toObjectId: "20", typeIds: [76, 64] },
-      { toObjectId: "10", typeIds: [82, 20] }
-    ],
-    excluded
-  );
-  const second = associationsForComparison(
-    [
-      { toObjectId: "10", typeIds: [20, 82] },
-      { toObjectId: "20", typeIds: [64, 76] }
-    ],
-    excluded
-  );
+  // Row P.2: the input rows have the shape listAssociations returns.
+  const row = (toObjectId, typeIds) => ({
+    toObjectId,
+    types: typeIds.map((typeId) => ({ typeId, category: "USER_DEFINED" }))
+  });
+  const first = associationsForComparison([row("20", [76, 64]), row("10", [82, 20])], excluded);
+  const second = associationsForComparison([row("10", [20, 82]), row("20", [64, 76])], excluded);
   assert.deepEqual(first.map((row) => row.typeIds), [[76], [82]]);
   const left = buildComparableState({
     core: { FirstName: "A" },

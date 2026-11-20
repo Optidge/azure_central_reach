@@ -22,19 +22,49 @@ export const FAILURE_KINDS = Object.freeze({
 });
 
 // Error codes set by this integration.
+//
+// CONTRACT P.5 (g): the codes the CentralReach client (src/lib/centralReachClient.mjs, rows L.1
+// to L.4 and 3.14) and the workers may set on an error, and how each is sorted. A code that is
+// not listed here is sorted by its HTTP status, and with no status it is temporary. A new code
+// goes in one of these two sets first.
+//   Label sender, temporary (retried on the normal schedule, then "Retries used up"):
+//     CR_LABEL_NOT_IN_CATALOG     an ID in the set to post is not in CentralReach's live label
+//                                 catalog: nothing is posted (row L.1)
+//     CR_LABEL_READ_EMPTY         the label read came back empty for a contact this run did not
+//                                 create: nothing is posted (row L.2)
+//     CR_LABEL_POST_UNCONFIRMED   the read does not show the posted set yet. Set by the worker,
+//                                 after it saved the label POST in the link record (row L.3)
+//   Label sender, permanent (`error` on the record, no retry):
+//     CR_LABEL_NOT_SENDABLE       a required label is outside CENTRAL_REACH_SENDABLE_LABEL_IDS,
+//                                 a code defect: nothing is posted (row L.1)
+//     CR_LABEL_CATALOG_UNREADABLE the label catalog answered in a shape the code cannot read
+//                                 (Stage 2 decision 4; built with unreadableAnswerError)
+//     CR_LABEL_READ_FAILED        the contact's label read answered in a shape the code cannot
+//                                 read (built in Stage 2)
+//   Sorted by status, no code needed: a failed label read or catalog read; a 400 on the label
+//   POST, which is permanent like every CentralReach 4xx except 401, 408 and 429 (row L.4).
+//   Client lookup (row 3.14), both built in Stage 2: CR_LOOKUP_UNKNOWN (an answer that is not 200
+//   or 404: temporary, never a create) and CR_LOOKUP_UNREADABLE (a 200 with no contact ID:
+//   permanent, never a create).
 const TEMPORARY_CODES = new Set([
   "SYNC_IN_PROGRESS", // another run holds the record
   "SYNC_STALE", // the record changed during the run
   "CR_LOOKUP_UNKNOWN", // a lookup answered something other than 200 or 404
-  "HUBSPOT_READ_FAILED", // HubSpot refused a read with 401 or 403
-  "CR_AUTH_FAILED" // the CentralReach token request failed, with any status
+  "HUBSPOT_READ_FAILED", // HubSpot refused a read with 401 or 403, or answered with no list
+  "CR_AUTH_FAILED", // the CentralReach token request failed, with any status
+  "CR_LABEL_NOT_IN_CATALOG",
+  "CR_LABEL_READ_EMPTY",
+  "CR_LABEL_POST_UNCONFIRMED"
 ]);
 const PERMANENT_CODES = new Set([
   "CR_EXTERNAL_ID_REQUIRED",
   // CentralReach answered in a shape the code cannot read.
   "CR_EMPLOYEE_READ_FAILED",
   "CR_LABEL_READ_FAILED",
-  "CR_LOOKUP_UNREADABLE"
+  "CR_LOOKUP_UNREADABLE",
+  "CR_LABEL_CATALOG_UNREADABLE",
+  // A code defect in a mapper: retrying cannot fix it.
+  "CR_LABEL_NOT_SENDABLE"
 ]);
 
 function sleep(ms) {

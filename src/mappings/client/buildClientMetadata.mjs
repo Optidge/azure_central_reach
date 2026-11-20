@@ -147,7 +147,45 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
   return `https://app.hubspot.com/contacts/${portalId}/record/${dealObjectTypeId}/${dealId}`;
 }
 
-export function buildClientMetadata({ deal, portalId }) {
+// CONTRACT P.5 (a): labels. Every mapper returns two lists of CentralReach label IDs (rule 5.6).
+//   requiredLabelIds  the labels the Case must hold now. All Clients is always in it.
+//   managedLabelIds   every label the integration maps for a Case, required now or not. Empty
+//                     until Stage 4 fills it (rows 4.19 to 4.21). Row 4.21 also puts the
+//                     remove-only IDs in it; they are never in requiredLabelIds.
+//   labelIds          the old name of requiredLabelIds, the same list. Old tests still read it.
+// The worker reads requiredLabelIds and managedLabelIds and passes both to the label sender
+// (contract (e) in src/lib/centralReachClient.mjs). Every ID in requiredLabelIds must be in
+// CENTRAL_REACH_SENDABLE_LABEL_IDS (src/constants/centralReach.mjs).
+//
+// CONTRACT P.5 (b): staff names and the owner are inputs. The mapper reads no association and
+// calls no API. The worker (src/workflows/clientSyncWorkflow.mjs, rows 4.14 and 4.16) reads them
+// and passes them in.
+//   staffNames  the staff on the Case by role:
+//                 { initialAssessmentBcba, reEvaluationBcba, primaryBt1, primaryBt2 }
+//               The role names are those of staffingRoleAssociationTypeIds in src/lib/config.mjs.
+//               Each role holds a list of { recordId, firstName, lastName }, one per staff record
+//               in that role, and an empty list when nobody holds the role. The mapper builds the
+//               text for fields 131314, 144602, 131313 and 138092 (row 4.14).
+//   ownerName   the Case owner's name as text, for field 138851 (row 4.16). null or "" when the
+//               Case has no owner.
+// Until rows 4.14 and 4.16 are built the mapper ignores both inputs and maps as before.
+//
+// CONTRACT P.5 (c): an input that could not be read (rule 5.8) never becomes a blank.
+//   omitFieldIds  CentralReach metadata field IDs whose input could not be read in this run, for
+//                 example 138851 when the owner call is refused. The mapper leaves those keys out
+//                 of metadataValues, so the field is not sent.
+// What the worker must do for an omitted field (row 3.18): keep the field's saved hash in the
+// link record as it was, and leave the field out of the changed fields. If the saved hash were
+// dropped, a later blank in HubSpot would send no clear and CentralReach would keep the old value.
+// The Case worker maps twice in one run: before the writes, and again after the confirm read.
+// Both mappings get the same staffNames, ownerName and omitFieldIds. If they differ, the two
+// hashes differ and the run ends as "changed during the run" after the CentralReach writes.
+// An input that is not passed at all (undefined) was not read either: once rows 4.14 and 4.16 are
+// built, the mapper leaves that input's fields out in the same way. A failed association or staff
+// name read is different: it stops the run in the worker and never reaches the mapper.
+export function buildClientMetadata({ deal, portalId, staffNames, ownerName, omitFieldIds = [] }) {
+  void staffNames;
+  void ownerName;
   const dealProps = deal?.properties || {};
 
   const metadataValues = {
@@ -206,10 +244,17 @@ export function buildClientMetadata({ deal, portalId }) {
     )
   };
 
+  for (const fieldId of omitFieldIds) {
+    delete metadataValues[fieldId];
+  }
+
+  const requiredLabelIds = requiredClientLabelIdsForState(
+    dealProps.location_central_reach || dealProps.location
+  );
   return {
-    labelIds: requiredClientLabelIdsForState(
-      dealProps.location_central_reach || dealProps.location
-    ),
+    requiredLabelIds,
+    managedLabelIds: [],
+    labelIds: requiredLabelIds,
     metadataValues
   };
 }
