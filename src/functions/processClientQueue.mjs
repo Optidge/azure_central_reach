@@ -9,9 +9,12 @@ import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
 
 const ALLOWED_SOURCES = new Set([
   "intakePoller",
+  "dailySweep",
   "clientSyncHttpTest",
   "manualClientSyncTest",
   "hubspotWorkflow",
+  // No sender uses this name since Stage 3 (row 3.2). It stays so that a message queued or
+  // scheduled for a retry by an older build still completes.
   "linkedRecheck"
 ]);
 

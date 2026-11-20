@@ -5,6 +5,13 @@
  * Not loaded by this repo (omit from Azure for this app): HUBSPOT_FIELD_ADMIN_TOKEN,
  * HUBSPOT_SETTINGS_CLIENT_SECRET, HUBSPOT_FIELD_ADMIN_USER_IDS, HUBSPOT_PUBLIC_BASE_URL,
  * FIELD_MAPPING_DEMO_MODE, ALLOW_UNVERIFIED_TYPED_METADATA_WRITES.
+ *
+ * Retired in Stage 3 (rows 3.2 and 3.11), no longer read: MAX_DEALS_PER_RUN, MAX_BT_RBT_PER_RUN,
+ * MAX_BCBA_PER_RUN, MAX_SEARCH_REQUESTS_PER_SECTION, LOOKBACK_MINUTES, LINKED_RECHECK_ENABLED,
+ * DEDUPE_TTL_SECONDS, HUBSPOT_WEBHOOK_COALESCE_SECONDS, STATE_PROVIDER, STATE_TTL_ATTR.
+ *
+ * Optional, read outside this file: INTAKE_POLLER_SCHEDULE (src/functions/intakePoller.mjs), the
+ * poller's six-field NCRONTAB schedule. Hourly when it is not set.
  * See README.md → Configuration Notes for optional keys that are read elsewhere in src/.
  */
 const REQUIRED_ENV_NAMES = [
@@ -16,19 +23,13 @@ const REQUIRED_ENV_NAMES = [
   "CR_TOKEN_URL",
   "HUBSPOT_BASE_URL",
   "HUBSPOT_CR_CONTACT_ID_PROPERTY",
-  "MAX_DEALS_PER_RUN",
-  "MAX_BT_RBT_PER_RUN",
-  "MAX_BCBA_PER_RUN",
-  "DEDUPE_TTL_SECONDS",
   "LEASE_TTL_SECONDS",
   "SUCCESS_TTL_SECONDS",
   "FAIL_TTL_SECONDS",
-  "STATE_PROVIDER",
   "COSMOS_ENDPOINT",
   "COSMOS_KEY",
   "COSMOS_DATABASE_ID",
   "COSMOS_CONTAINER_ID",
-  "STATE_TTL_ATTR",
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
   "EMPLOYEE_SYNC_QUEUE_NAME",
@@ -39,10 +40,6 @@ const REQUIRED_ENV_NAMES = [
 const REQUIRED_INTAKE_ENV_NAMES = [
   "HUBSPOT_PRIVATE_APP_TOKEN",
   "HUBSPOT_BASE_URL",
-  "MAX_BT_RBT_PER_RUN",
-  "MAX_BCBA_PER_RUN",
-  "MAX_DEALS_PER_RUN",
-  "DEDUPE_TTL_SECONDS",
   "LEASE_TTL_SECONDS",
   "COSMOS_ENDPOINT",
   "COSMOS_KEY",
@@ -287,21 +284,16 @@ export function getIntakePollerConfig() {
       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
       hubspotPortalId: portal.portalId,
       btRbtObjectTypeId: portal.btRbtObjectTypeId,
-      bcbaObjectTypeId: portal.bcbaObjectTypeId
-    },
-    limits: {
-      maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
-      maxBtRbtPerRun: Number(getRequiredEnv("MAX_BT_RBT_PER_RUN")),
-      maxBcbaPerRun: Number(getRequiredEnv("MAX_BCBA_PER_RUN")),
-      maxSearchRequestsPerRun: Number(getOptionalEnv("MAX_SEARCH_REQUESTS_PER_SECTION", "1")),
-      lookbackMinutes: Number(getOptionalEnv("LOOKBACK_MINUTES", "15")),
-      linkedRecheckEnabled:
-        String(getOptionalEnv("LINKED_RECHECK_ENABLED", "true")).toLowerCase() !== "false",
+      bcbaObjectTypeId: portal.bcbaObjectTypeId,
+      // The properties that hold the CR ID. A record is linked when its property is filled.
       crContactIdProperty: getOptionalEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY", "client_id_number"),
       employeeIdProperty: getOptionalEnv("HUBSPOT_EMPLOYEE_ID_PROPERTY", "employee_id")
     },
+    sync: {
+      // The poller and the daily sweep search inside the record gate (BUILD-PLAN row 3.4).
+      recordGateProperty: syncRecordGateProperty()
+    },
     ttl: {
-      dedupeTtlSeconds: Number(getRequiredEnv("DEDUPE_TTL_SECONDS")),
       leaseTtlSeconds: Number(getRequiredEnv("LEASE_TTL_SECONDS"))
     },
     state: {
@@ -343,20 +335,12 @@ export function getConfig() {
       includeTestRecords: includeTestRecords(),
       recordGateProperty: syncRecordGateProperty()
     },
-    limits: {
-      maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
-      maxBtRbtPerRun: Number(getRequiredEnv("MAX_BT_RBT_PER_RUN")),
-      maxBcbaPerRun: Number(getRequiredEnv("MAX_BCBA_PER_RUN"))
-    },
     ttl: {
-      dedupeTtlSeconds: Number(getRequiredEnv("DEDUPE_TTL_SECONDS")),
       leaseTtlSeconds: Number(getRequiredEnv("LEASE_TTL_SECONDS")),
       successTtlSeconds: Number(getRequiredEnv("SUCCESS_TTL_SECONDS")),
-      failTtlSeconds: Number(getRequiredEnv("FAIL_TTL_SECONDS")),
-      stateTtlAttr: getRequiredEnv("STATE_TTL_ATTR")
+      failTtlSeconds: Number(getRequiredEnv("FAIL_TTL_SECONDS"))
     },
     state: {
-      provider: getRequiredEnv("STATE_PROVIDER"),
       cosmosEndpoint: getRequiredEnv("COSMOS_ENDPOINT"),
       cosmosKey: getRequiredEnv("COSMOS_KEY"),
       cosmosDatabaseId: getRequiredEnv("COSMOS_DATABASE_ID"),

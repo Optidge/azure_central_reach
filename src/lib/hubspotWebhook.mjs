@@ -27,10 +27,6 @@ export function readWebhookSettings(env = process.env) {
   const webhookUri = readFrom(env, "HUBSPOT_WEBHOOK_URI");
   const portal = readPortal(env);
   const serviceBusConnectionString = readFrom(env, "SERVICE_BUS_CONNECTION_STRING");
-  const parsedCoalesce = Number(readFrom(env, "HUBSPOT_WEBHOOK_COALESCE_SECONDS") || "30");
-  const coalesceSeconds = Number.isFinite(parsedCoalesce) && parsedCoalesce > 0
-    ? parsedCoalesce
-    : 0;
 
   return {
     clientSecret,
@@ -41,12 +37,8 @@ export function readWebhookSettings(env = process.env) {
     btRbtObjectTypeId: portal?.btRbtObjectTypeId || "",
     bcbaObjectTypeId: portal?.bcbaObjectTypeId || "",
     portalReady: Boolean(portal),
-    coalesceSeconds,
     secretReady: isConfigured(clientSecret),
-    serviceBusReady: isConfigured(serviceBusConnectionString),
-    cosmosReady: ["COSMOS_ENDPOINT", "COSMOS_KEY", "COSMOS_DATABASE_ID", "COSMOS_CONTAINER_ID"].every(
-      (name) => isConfigured(readFrom(env, name))
-    )
+    serviceBusReady: isConfigured(serviceBusConnectionString)
   };
 }
 

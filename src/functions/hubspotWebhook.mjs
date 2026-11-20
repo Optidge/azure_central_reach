@@ -9,11 +9,8 @@ import {
   resolveWebhookTarget
 } from "../lib/hubspotWebhook.mjs";
 import { createServiceBusClient, sendClientSyncMessage, sendEmployeeSyncMessage } from "../lib/serviceBusClient.mjs";
-import { acquireLease, createStateClient } from "../lib/cosmosState.mjs";
 
-const WEBHOOK_DEDUPE_PK = "dedupe:hubspot-webhook";
 let busReady = false;
-let cosmosReady = false;
 
 function headerValue(request, name) {
   const headers = request?.headers;
@@ -50,51 +47,9 @@ function ensureServiceBus() {
   busReady = true;
 }
 
-function ensureCosmos() {
-  if (cosmosReady) {
-    return;
-  }
-  createStateClient({
-    state: {
-      cosmosEndpoint: process.env.COSMOS_ENDPOINT,
-      cosmosKey: process.env.COSMOS_KEY,
-      cosmosDatabaseId: process.env.COSMOS_DATABASE_ID,
-      cosmosContainerId: process.env.COSMOS_CONTAINER_ID
-    }
-  });
-  cosmosReady = true;
-}
-
-async function claimCoalesce({ settings, target, recordId, claim }) {
-  if (!settings.coalesceSeconds) {
-    return false;
-  }
-  const claimLease = claim || (async (input) => {
-    ensureCosmos();
-    return acquireLease(input);
-  });
-  try {
-    const claimed = await claimLease({
-      pk: WEBHOOK_DEDUPE_PK,
-      id: `${target}:${recordId}`,
-      ttlSeconds: settings.coalesceSeconds
-    });
-    return claimed === false;
-  } catch (error) {
-    safeLog(
-      "warn",
-      "HubSpot webhook coalesce check failed. Enqueueing anyway.",
-      buildErrorLog({
-        workflow: "hubspotWebhook",
-        stage: "coalesce",
-        error,
-        recordId
-      })
-    );
-    return false;
-  }
-}
-
+// The webhook only checks the signature and queues the record ID. It keeps no state: every
+// notice is queued, also a repeat for the same record, and the worker's record lock and its
+// "nothing changed" check deal with the repeats.
 export async function hubspotWebhook(request, context, dependencies = {}) {
   void context;
   const settings = dependencies.settings || readWebhookSettings();
@@ -157,23 +112,6 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
   }
 
   const recordId = resolved.dealId || resolved.recordId;
-  const coalesced = settings.cosmosReady
-    ? await claimCoalesce({
-      settings,
-      target: resolved.employeeType || resolved.target,
-      recordId,
-      claim: dependencies.claimCoalesce
-    })
-    : false;
-
-  if (coalesced) {
-    safeLog("info", "HubSpot webhook overlapped an in-flight refresh. Enqueueing again.", {
-      target: resolved.target,
-      objectTypeId: resolved.objectTypeId,
-      recordId
-    });
-  }
-
   const enqueuedAt = dependencies.enqueuedAt || new Date().toISOString();
   try {
     if (!dependencies.sendClientSyncMessage && !dependencies.sendEmployeeSyncMessage) {
@@ -224,7 +162,6 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
     jsonBody: {
       ok: true,
       accepted: true,
-      coalesced: Boolean(coalesced),
       target: resolved.target,
       objectTypeId: resolved.objectTypeId,
       recordId
