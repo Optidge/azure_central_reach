@@ -43,7 +43,7 @@ Testing agents never edit BUILD-PLAN or `src/`. They send the build chat the exa
   - **Zeke, 2026-11-20:** "While testing I'll fix the hours_bt_work_schedule_1 + hours_bt_work_schedule_2 and note for an agent once it's done." He corrects the formula in the sandbox himself during testing and tells the agent when it is done.
   - Then the agent reads round 1 back (expected 18) and records C20.
   - Production gets the same fix by Zeke before go-live, after Danny or United Care confirm the formula was not on purpose. No code change.
-- **C30 / C29 defect (guide-confirmed).** The mapper sends the "Other" summary when the carrier is blank (`carrier || otherSummary` in `buildClientMetadata.mjs`). The guide (lines 369, 370, 519, 528) uses the summary only when the carrier is Other. **Not yet sent to the build chat; Zeke has not said go.**
+- **C30 / C29 defect (guide-confirmed).** The mapper sends the "Other" summary when the carrier is blank (`carrier || otherSummary` in `buildClientMetadata.mjs`). The guide (lines 369, 370, 519, 528) uses the summary only when the carrier is Other. **Sent to the build chat on 2026-11-20 on Zeke's "Yes, send it"** (rule: blank carrier → blank, whatever the summary holds). The fix and its `[C29]`/`[C30]` tests are built there.
 - **C36.** `referral_source` is read-only on the Case and its source is unknown. The question is with Zeke.
 - **A-22.** Zeke has to confirm the BR11 reading before the final review.
 - **O-8.** The Workday ID format is pending Danny/Sara.
