@@ -1,18 +1,22 @@
+// The hourly poller and the daily sweep. Both are safety checks behind the webhooks: they find
+// records and queue their IDs; the workers decide what, if anything, is written.
+//
+// - Hourly poll, per object (Case, BT/RBT, BCBA): records that are linked, or whose Entered in
+//   CentralReach is Yes, changed at or after that object's saved checkpoint, oldest first. The
+//   checkpoint moves forward only after a whole page was queued.
+// - Daily sweep, in the first run at or after 08:00 UTC: every linked record, and every unlinked
+//   record whose status is waiting. It catches values that change with no edit.
+// - With a record gate set, every search is limited to records where the gate property is true.
+//   The Case searches leave out the four excluded stages. The worker checks each record again.
 import { getIntakePollerConfig } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
-import {
-  createHubSpotClient,
-  searchIntakeCompleteDeals,
-  searchEligibleBtRbtRecords,
-  searchEligibleBcbaRecords,
-  searchRecordsByKnownProperty
-} from "../lib/hubspotClient.mjs";
+import { createHubSpotClient, searchObjectPage } from "../lib/hubspotClient.mjs";
+import { HubSpotReadError } from "../lib/mappedState.mjs";
 import {
   createStateClient,
   acquireLease,
   releaseLease,
-  hasState,
   putState,
   getState
 } from "../lib/cosmosState.mjs";
@@ -21,83 +25,43 @@ import {
   sendClientSyncMessage,
   sendEmployeeSyncMessage
 } from "../lib/serviceBusClient.mjs";
-import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
+import {
+  CASE_ENTRY_PROPERTY,
+  CASE_EXCLUDED_STAGE_IDS,
+  EMPLOYEE_ENTRY_PROPERTY,
+  ENTRY_YES_VALUE,
+  HUBSPOT_EMPLOYEE_TYPES
+} from "../constants/hubspot.mjs";
 
+// Cosmos keys. Every item ID starts with the portal ID.
 const POLLER_LEASE_PK = "workflow:intake-poller";
-const POLLER_LEASE_ID = "active-lease";
-const DEDUPE_PK = "dedupe:client-sync";
-const EMPLOYEE_DEDUPE_PK = "dedupe:employee-sync";
+const CHECKPOINT_PK = "poller:checkpoint";
+const SWEEP_PK = "poller:sweep";
+const NEVER_EXPIRES = -1;
 
-function parseTimestamp(value) {
-  if (!value) {
-    return null;
-  }
+// Hourly poll. HubSpot's search gives at most 200 records a page.
+export const POLL_PAGE_SIZE = 100;
+export const POLL_MAX_PAGES = 10;
+const FIRST_RUN_LOOKBACK_MS = 60 * 60 * 1000;
+// A change can take a few moments to show in HubSpot's search, so the checkpoint never comes
+// closer to now than this.
+const CHECKPOINT_GUARD_MS = 5 * 60 * 1000;
 
-  const asEpoch = new Date(value).getTime();
-  return Number.isFinite(asEpoch) ? asEpoch : null;
-}
+// Daily sweep. At 60 a minute, 3,000 messages are delivered before the next run of the hourly
+// schedule. On a shorter schedule (INTAKE_POLLER_SCHEDULE) a sweep larger than the cap overlaps
+// its own next run.
+const SWEEP_START_HOUR_UTC = 8;
+const SWEEP_PAGE_SIZE = 100;
+export const SWEEP_MESSAGES_PER_MINUTE = 60;
+export const SWEEP_MAX_MESSAGES_PER_RUN = 3000;
 
-export function shouldSyncDeal(candidate) {
-  const properties = candidate?.properties || {};
-  const hsLastModifiedDate = parseTimestamp(properties.hs_lastmodifieddate);
-  const integrationLastWrite = parseTimestamp(properties.integration_last_write);
+const STATUS_PROPERTY = "last_sync_status";
+const WAITING_STATUS = "waiting";
 
-  if (!integrationLastWrite) {
-    return true;
-  }
-  if (!hsLastModifiedDate) {
-    return false;
-  }
-
-  return hsLastModifiedDate > integrationLastWrite;
-}
-
-export function shouldSyncBtRbt(candidate) {
-  return shouldSyncDeal(candidate);
-}
-
-function parseBool(value) {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "true" || normalized === "1" || normalized === "yes";
-  }
-  if (typeof value === "number") {
-    return value === 1;
-  }
-  return false;
-}
-
-export function shouldSyncBcba(candidate) {
-  const properties = candidate?.properties || {};
-  const hsLastModifiedDate = parseTimestamp(properties.hs_lastmodifieddate);
-  const integrationLastWrite = parseTimestamp(properties.integration_last_write);
-  const updatedByIntegration = parseBool(properties.updated_by_integration);
-
-  if (!integrationLastWrite) {
-    return true;
-  }
-  if (!hsLastModifiedDate) {
-    return false;
-  }
-  if (updatedByIntegration) {
-    return hsLastModifiedDate > integrationLastWrite;
-  }
-  return hsLastModifiedDate > integrationLastWrite;
-}
-
+// Kept for src/tests/smoke/hybridChangeDetection.test.mjs, which another lane owns. The linked
+// recheck that used it was removed in Stage 3 (row 3.2); the poller does not call it.
 export function isLinkedForOngoingRefresh(candidate, idProperty) {
   return Boolean(String(candidate?.properties?.[idProperty] || "").trim());
-}
-
-export function buildIntakeDedupeId(dealId, hsLastModifiedDate) {
-  return `${String(dealId)}:${String(hsLastModifiedDate)}`;
-}
-
-function buildEmployeeDedupeId(employeeType, recordId, hsLastModifiedDate) {
-  return `${String(employeeType)}:${String(recordId)}:${String(hsLastModifiedDate)}`;
 }
 
 // Every message the poller sends says which portal it is for. The poller sends only through
@@ -112,380 +76,417 @@ export function portalSenders(
   };
 }
 
-export async function runIntakePollerWorkflow(context) {
+// The three synced objects. `entryFilter` is only the search filter that finds records asking
+// for a create; the create signal itself is decided in src/lib/syncEligibility.mjs. The Case
+// property is a multi-checkbox, so its filter is "contains the token Yes" (BUILD-PLAN P.7 a).
+function pollerEntities(config, { sendClient, sendEmployee }) {
+  const employee = (employeeType, objectTypeId) => ({
+    key: employeeType,
+    objectTypeId,
+    idProperty: config.hubspot.employeeIdProperty,
+    stageFilters: [],
+    entryFilter: { propertyName: EMPLOYEE_ENTRY_PROPERTY, operator: "EQ", value: ENTRY_YES_VALUE },
+    pollSource: "employeePoller",
+    send: (recordId, message) =>
+      sendEmployee({ workflow: "employeeSync", employeeType, recordId, ...message })
+  });
+  return [
+    {
+      key: "client",
+      objectTypeId: "deals",
+      idProperty: config.hubspot.crContactIdProperty,
+      stageFilters: [
+        { propertyName: "dealstage", operator: "NOT_IN", values: CASE_EXCLUDED_STAGE_IDS }
+      ],
+      entryFilter: {
+        propertyName: CASE_ENTRY_PROPERTY,
+        operator: "CONTAINS_TOKEN",
+        value: ENTRY_YES_VALUE
+      },
+      pollSource: "intakePoller",
+      send: (recordId, message) => sendClient({ workflow: "clientSync", dealId: recordId, ...message })
+    },
+    employee(HUBSPOT_EMPLOYEE_TYPES.BT_RBT, config.hubspot.btRbtObjectTypeId),
+    employee(HUBSPOT_EMPLOYEE_TYPES.BCBA, config.hubspot.bcbaObjectTypeId)
+  ];
+}
+
+// HubSpot ORs the filter groups and ANDs the filters inside one. So each branch becomes a group,
+// and every group carries the record gate, the Case stage exclusion and the shared filters.
+function buildFilterGroups({ entity, gateProperty, branches, shared }) {
+  const always = [
+    ...(gateProperty ? [{ propertyName: gateProperty, operator: "EQ", value: "true" }] : []),
+    ...entity.stageFilters,
+    ...shared
+  ];
+  return branches.map((branch) => ({ filters: [...always, branch] }));
+}
+
+const linkedFilter = (entity) => ({ propertyName: entity.idProperty, operator: "HAS_PROPERTY" });
+
+// An answer the poller cannot use is a failed read (rule 5.8): the object stops, its place is
+// kept, and the next run tries again. It is never read as "nothing there".
+function recordIdOf(record) {
+  const id = String(record?.id ?? "").trim();
+  if (!id) {
+    throw new HubSpotReadError("search:record-id");
+  }
+  return id;
+}
+
+function modifiedMsOf(record) {
+  const modifiedMs = Date.parse(record?.properties?.hs_lastmodifieddate || "");
+  if (!Number.isFinite(modifiedMs)) {
+    throw new HubSpotReadError("search:hs_lastmodifieddate");
+  }
+  return modifiedMs;
+}
+
+// HubSpot says there is more, but gave no record to go on from.
+function requireRecords(page) {
+  if (page.results.length === 0 && page.nextAfter) {
+    throw new HubSpotReadError("search:empty-page");
+  }
+}
+
+// The last record ID of a page that is paged by record ID. It must lie after the ID the page was
+// asked to start after, or the next search would be the same one again.
+function lastIdAfter(page, afterId) {
+  const lastId = recordIdOf(page.results.at(-1));
+  if (afterId && !(Number(lastId) > Number(afterId))) {
+    throw new HubSpotReadError("search:record-order");
+  }
+  return lastId;
+}
+
+// Queues one object's changed records. A failed search or a failed send throws: the checkpoint
+// then stays at the last page that was queued in full.
+async function pollEntity({
+  entity,
+  portalId,
+  gateProperty,
+  nowMs,
+  searchPage,
+  readState,
+  saveState,
+  onQueued
+}) {
+  const key = { pk: CHECKPOINT_PK, id: `${portalId}:${entity.key}` };
+  const saveCheckpoint = (checkpointMs) =>
+    saveState({
+      ...key,
+      type: "poller-checkpoint",
+      ttlSeconds: NEVER_EXPIRES,
+      data: { checkpoint: new Date(checkpointMs).toISOString() }
+    });
+
+  let checkpointMs = Date.parse((await readState(key))?.data?.checkpoint ?? "");
+  if (!Number.isFinite(checkpointMs)) {
+    // First run: start one hour back, and save that start, so the place is kept even when
+    // this run finds nothing or fails.
+    checkpointMs = nowMs - FIRST_RUN_LOOKBACK_MS;
+    await saveCheckpoint(checkpointMs);
+  }
+
+  const moveCheckpoint = async (toMs) => {
+    if (toMs > checkpointMs) {
+      checkpointMs = toMs;
+      await saveCheckpoint(checkpointMs);
+    }
+  };
+
+  const timestampFilter = (operator, ms) => ({
+    propertyName: "hs_lastmodifieddate",
+    operator,
+    value: new Date(ms).toISOString()
+  });
+  const search = (shared, sortProperty) =>
+    searchPage({
+      objectTypeId: entity.objectTypeId,
+      filterGroups: buildFilterGroups({
+        entity,
+        gateProperty,
+        branches: [linkedFilter(entity), entity.entryFilter],
+        shared
+      }),
+      sorts: [{ propertyName: sortProperty, direction: "ASCENDING" }],
+      properties: ["hs_object_id", "hs_lastmodifieddate"],
+      limit: POLL_PAGE_SIZE
+    });
+  const enqueuedAt = new Date(nowMs).toISOString();
+  const queuePage = async (page) => {
+    for (const record of page.results) {
+      await entity.send(recordIdOf(record), {
+        source: entity.pollSource,
+        hsLastModifiedDate: record.properties.hs_lastmodifieddate,
+        enqueuedAt
+      });
+      onQueued();
+    }
+  };
+
+  // Every record that changed in exactly this millisecond, paged by record ID. A record that is
+  // written to meanwhile leaves the block and is found later under its new timestamp; the
+  // records behind it keep their place. Returns the number of pages read.
+  const queueBlock = async (blockMs) => {
+    let afterId = null;
+    for (let blockPages = 1; ; blockPages += 1) {
+      const page = await search(
+        [
+          timestampFilter("GTE", blockMs),
+          timestampFilter("LTE", blockMs),
+          ...(afterId ? [{ propertyName: "hs_object_id", operator: "GT", value: afterId }] : [])
+        ],
+        "hs_object_id"
+      );
+      requireRecords(page);
+      page.results.forEach(modifiedMsOf);
+      const lastId = page.results.length > 0 ? lastIdAfter(page, afterId) : afterId;
+      await queuePage(page);
+      if (!page.nextAfter) {
+        return blockPages;
+      }
+      afterId = lastId;
+    }
+  };
+
+  // How the next page is asked for. HubSpot's paging cursor is a position in the sorted list,
+  // and the list is not frozen between two requests: a record that is written to while the
+  // poller pages moves to the end, every record behind it moves one place up, and the cursor
+  // would step over one of them. So the cursor is never used. The next page is a new search
+  // "at or after" the last timestamp that was queued (the records that share that timestamp are
+  // queued a second time, which is harmless). A page that holds one timestamp only cannot move
+  // on that way, so that block is paged by record ID, and the search goes on after it.
+  let sinceMs = checkpointMs;
+  let pages = 0;
+  let capMs = null;
+  for (;;) {
+    const page = await search([timestampFilter("GTE", sinceMs)], "hs_lastmodifieddate");
+    pages += 1;
+    requireRecords(page);
+    const modified = page.results.map(modifiedMsOf);
+    // Oldest first, and nothing older than the search asked for. Anything else would send the
+    // next search backwards.
+    if (modified.length > 0 && (modified[0] < sinceMs || modified.at(-1) < modified[0])) {
+      throw new HubSpotReadError("search:record-order");
+    }
+    await queuePage(page);
+
+    const guardMs = nowMs - CHECKPOINT_GUARD_MS;
+    if (!page.nextAfter) {
+      // The search is at its end: everything HubSpot shows was queued. The checkpoint moves to
+      // five minutes ago, so the newest record is not queued again at every run.
+      await moveCheckpoint(guardMs);
+      break;
+    }
+
+    // The page is queued. The checkpoint moves to the earlier of its last timestamp and five
+    // minutes ago, and never backwards.
+    const firstMs = modified[0];
+    const lastMs = modified.at(-1);
+    await moveCheckpoint(Math.min(lastMs, guardMs));
+
+    if (firstMs === lastMs) {
+      pages += await queueBlock(lastMs);
+      sinceMs = lastMs + 1;
+      await moveCheckpoint(Math.min(sinceMs, guardMs));
+    } else {
+      sinceMs = lastMs;
+    }
+
+    if (pages >= POLL_MAX_PAGES) {
+      // The page cap. If it fell inside a block of records with one timestamp, keep paging
+      // until the timestamp changes; the rest waits for the next run.
+      capMs ??= lastMs;
+      if (lastMs > capMs) {
+        break;
+      }
+    }
+  }
+}
+
+// The sweep of one day: its UTC date, whether every object is finished, and per object the last
+// record ID of the last page that was queued in full. One item per portal, never expiring.
+async function loadSweep({ portalId, day, readState }) {
+  const saved = (await readState({ pk: SWEEP_PK, id: `${portalId}:daily` }))?.data;
+  return saved?.day === day ? saved : { day, done: false, entities: {} };
+}
+
+// Queues every linked record, and every unlinked record whose status is waiting, once a day.
+// A run that stops early (a failure, or the cap per run) leaves the sweep unfinished, and the
+// next hourly run goes on after the last page that was queued in full.
+async function runDailySweep({
+  entities,
+  portalId,
+  gateProperty,
+  nowMs,
+  searchPage,
+  readState,
+  saveState,
+  onEntityError
+}) {
+  const result = { ran: false, done: false, queued: 0 };
+  const now = new Date(nowMs);
+  if (now.getUTCHours() < SWEEP_START_HOUR_UTC) {
+    return result;
+  }
+  const sweep = await loadSweep({ portalId, day: now.toISOString().slice(0, 10), readState });
+  result.done = sweep.done;
+  if (sweep.done) {
+    return result;
+  }
+  result.ran = true;
+
+  const isFinished = (entity) => sweep.entities[entity.key]?.finished === true;
+  // `done` is the marker of the day. It is true only once every object was queued to its end.
+  const saveSweep = () => {
+    sweep.done = entities.every(isFinished);
+    return saveState({
+      pk: SWEEP_PK,
+      id: `${portalId}:daily`,
+      type: "poller-sweep",
+      ttlSeconds: NEVER_EXPIRES,
+      data: sweep
+    });
+  };
+  const enqueuedAt = now.toISOString();
+
+  for (const entity of entities) {
+    const progress = (sweep.entities[entity.key] ??= { afterId: null, finished: false });
+    try {
+      while (!progress.finished && result.queued < SWEEP_MAX_MESSAGES_PER_RUN) {
+        // Paged by record ID, not by HubSpot's cursor, so the place survives until the next hour.
+        // With the gate off, linked records only.
+        const page = await searchPage({
+          objectTypeId: entity.objectTypeId,
+          filterGroups: buildFilterGroups({
+            entity,
+            gateProperty,
+            branches: [
+              linkedFilter(entity),
+              ...(gateProperty
+                ? [{ propertyName: STATUS_PROPERTY, operator: "EQ", value: WAITING_STATUS }]
+                : [])
+            ],
+            shared: progress.afterId
+              ? [{ propertyName: "hs_object_id", operator: "GT", value: progress.afterId }]
+              : []
+          }),
+          sorts: [{ propertyName: "hs_object_id", direction: "ASCENDING" }],
+          properties: ["hs_object_id"],
+          limit: Math.min(SWEEP_PAGE_SIZE, SWEEP_MAX_MESSAGES_PER_RUN - result.queued)
+        });
+
+        requireRecords(page);
+        const lastId =
+          page.results.length > 0 ? lastIdAfter(page, progress.afterId) : progress.afterId;
+
+        for (const record of page.results) {
+          // Spread with scheduled delivery: the first 60 go out now, the next 60 a minute later.
+          const delayMinutes = Math.floor(result.queued / SWEEP_MESSAGES_PER_MINUTE);
+          await entity.send(recordIdOf(record), {
+            source: "dailySweep",
+            enqueuedAt,
+            ...(delayMinutes > 0
+              ? { scheduledEnqueueTimeUtc: new Date(nowMs + delayMinutes * 60 * 1000) }
+              : {})
+          });
+          result.queued += 1;
+        }
+
+        progress.afterId = lastId;
+        progress.finished = !page.nextAfter;
+        await saveSweep();
+      }
+    } catch (error) {
+      onEntityError("dailySweep", entity, error);
+    }
+  }
+
+  result.done = sweep.done;
+  return result;
+}
+
+export async function runIntakePollerWorkflow(context, dependencies = {}) {
   void context;
-  const config = getIntakePollerConfig();
-  createHubSpotClient(config);
-  createStateClient(config);
-  createServiceBusClient(config);
-  const { sendClient, sendEmployee } = portalSenders(config.hubspot.hubspotPortalId);
+  const config = (dependencies.getConfig || getIntakePollerConfig)();
+  (dependencies.createHubSpotClient || createHubSpotClient)(config);
+  (dependencies.createStateClient || createStateClient)(config);
+  (dependencies.createServiceBusClient || createServiceBusClient)(config);
+  const searchPage = dependencies.searchObjectPage || searchObjectPage;
+  const readState = dependencies.getState || getState;
+  const saveState = dependencies.putState || putState;
+  const claimLock = dependencies.acquireLease || acquireLease;
+  const unlock = dependencies.releaseLease || releaseLease;
+  const logger = dependencies.safeLog || safeLog;
+  const nowMs = (dependencies.now || Date.now)();
+
+  const portalId = config.hubspot.hubspotPortalId;
+  const gateProperty = config.sync.recordGateProperty;
+  const entities = pollerEntities(config, portalSenders(config.hubspot.hubspotPortalId));
 
   const summary = {
     leaseAcquired: false,
-    candidatesFetched: 0,
-    skippedAlreadyProcessed: 0,
-    skippedShouldSyncFalse: 0,
+    poll: { client: 0, bt_rbt: 0, bcba: 0 },
+    sweep: { ran: false, done: false, queued: 0 },
     messagesEnqueued: 0,
-    btRbtCandidatesFetched: 0,
-    btRbtMessagesEnqueued: 0,
-    btRbtSkippedAlreadyProcessed: 0,
-    btRbtSkippedShouldSyncFalse: 0,
-    bcbaCandidatesFetched: 0,
-    bcbaMessagesEnqueued: 0,
-    bcbaSkippedAlreadyProcessed: 0,
-    bcbaSkippedShouldSyncFalse: 0,
-    linkedRecheckEnabled: false,
-    linkedClientEnqueued: 0,
-    linkedBtRbtEnqueued: 0,
-    linkedBcbaEnqueued: 0,
     errorsCount: 0
   };
 
-  const lease = await acquireLease({
-    pk: POLLER_LEASE_PK,
-    id: POLLER_LEASE_ID,
-    ttlSeconds: config.ttl.leaseTtlSeconds
-  });
+  // One poller run at a time per portal.
+  const leaseKey = { pk: POLLER_LEASE_PK, id: `${portalId}:active-lease` };
+  const lease = await claimLock({ ...leaseKey, ttlSeconds: config.ttl.leaseTtlSeconds });
   summary.leaseAcquired = Boolean(lease);
-
   if (!lease) {
-    safeLog("info", "Intake poller skipped; active lease exists.");
+    logger("info", "Intake poller skipped; active lease exists.");
     return summary;
   }
 
+  // One object's failure is logged and counted. It does not stop the other objects.
+  const onEntityError = (stage, entity, error) => {
+    summary.errorsCount += 1;
+    logger(
+      "error",
+      "Poller failed for one object. The next run goes on from the last page that was queued in full.",
+      buildErrorLog({ workflow: "intakePoller", stage: `${stage}:${entity.key}`, error })
+    );
+  };
+  const shared = { portalId, gateProperty, nowMs, searchPage, readState, saveState };
+
   try {
-    let candidates = [];
-    try {
-      candidates = await searchIntakeCompleteDeals({
-        limit: config.limits.maxDealsPerRun,
-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes
-      });
-    } catch (error) {
-      safeLog(
-        "error",
-        "HubSpot intake search failed.",
-        buildErrorLog({ workflow: "intakePoller", stage: "searchDeals", error })
-      );
-      summary.errorsCount += 1;
-      return summary;
-    }
-
-    summary.candidatesFetched = candidates.length;
-
-    for (const candidate of candidates) {
-      const dealId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-      const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
-      if (!dealId) {
-        summary.skippedShouldSyncFalse += 1;
-        continue;
-      }
-
-      if (!hsLastModifiedDate || !shouldSyncDeal(candidate)) {
-        summary.skippedShouldSyncFalse += 1;
-        continue;
-      }
-
-      const dedupeId = buildIntakeDedupeId(dealId, hsLastModifiedDate);
-      const alreadyProcessed = await hasState({ pk: DEDUPE_PK, id: dedupeId });
-
-      if (alreadyProcessed) {
-        summary.skippedAlreadyProcessed += 1;
-        continue;
-      }
-
+    for (const entity of entities) {
       try {
-        await sendClient({
-          dealId,
-          hsLastModifiedDate,
-          source: "intakePoller",
-          workflow: "clientSync"
-        });
-        summary.messagesEnqueued += 1;
-
-        await putState({
-          pk: DEDUPE_PK,
-          id: dedupeId,
-          type: "dedupe",
-          ttlSeconds: config.ttl.dedupeTtlSeconds,
-          data: {
-            module: "client",
-            source: "intakePoller"
+        await pollEntity({
+          entity,
+          ...shared,
+          onQueued: () => {
+            summary.poll[entity.key] += 1;
           }
         });
       } catch (error) {
-        summary.errorsCount += 1;
-        safeLog(
-          "error",
-          "Failed processing intake candidate.",
-          buildErrorLog({
-            workflow: "intakePoller",
-            stage: "processCandidate",
-            error,
-            recordId: dealId
-          })
-        );
+        onEntityError("poll", entity, error);
       }
     }
 
     try {
-      const btRbtCandidates = await searchEligibleBtRbtRecords({
-        objectTypeId: config.hubspot.btRbtObjectTypeId,
-        limit: config.limits.maxBtRbtPerRun,
-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes
-      });
-      summary.btRbtCandidatesFetched = btRbtCandidates.length;
-
-      for (const candidate of btRbtCandidates) {
-        const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-        const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
-        if (!recordId) {
-          summary.btRbtSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        if (!hsLastModifiedDate || !shouldSyncBtRbt(candidate)) {
-          summary.btRbtSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        const dedupeId = buildEmployeeDedupeId(
-          HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-          recordId,
-          hsLastModifiedDate
-        );
-        const alreadyProcessed = await hasState({ pk: EMPLOYEE_DEDUPE_PK, id: dedupeId });
-        if (alreadyProcessed) {
-          summary.btRbtSkippedAlreadyProcessed += 1;
-          continue;
-        }
-
-        try {
-          await sendEmployee({
-            workflow: "employeeSync",
-            source: "employeePoller",
-            employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-            recordId,
-            hsLastModifiedDate
-          });
-          summary.btRbtMessagesEnqueued += 1;
-
-          await putState({
-            pk: EMPLOYEE_DEDUPE_PK,
-            id: dedupeId,
-            type: "dedupe",
-            ttlSeconds: config.ttl.dedupeTtlSeconds,
-            data: {
-              module: "employee",
-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-              source: "employeePoller"
-            }
-          });
-        } catch (error) {
-          summary.errorsCount += 1;
-          safeLog(
-            "error",
-            "Failed processing BT/RBT candidate.",
-            buildErrorLog({
-              workflow: "intakePoller",
-              stage: "processBtRbtCandidate",
-              error,
-              recordId
-            })
-          );
-        }
-      }
+      summary.sweep = await runDailySweep({ entities, ...shared, onEntityError });
     } catch (error) {
       summary.errorsCount += 1;
-      safeLog(
+      logger(
         "error",
-        "BT/RBT poller search failed.",
-        buildErrorLog({
-          workflow: "intakePoller",
-          stage: "searchBtRbt",
-          error
-        })
+        "Daily sweep failed. It runs again in the next hourly run.",
+        buildErrorLog({ workflow: "intakePoller", stage: "dailySweep", error })
       );
     }
 
-    try {
-      const bcbaCandidates = await searchEligibleBcbaRecords({
-        objectTypeId: config.hubspot.bcbaObjectTypeId,
-        limit: config.limits.maxBcbaPerRun,
-        maxSearchRequestsPerRun: config.limits.maxSearchRequestsPerRun,
-        lookbackMinutes: config.limits.lookbackMinutes
-      });
-      summary.bcbaCandidatesFetched = bcbaCandidates.length;
-
-      for (const candidate of bcbaCandidates) {
-        const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-        const hsLastModifiedDate = String(candidate?.properties?.hs_lastmodifieddate ?? "");
-        if (!recordId) {
-          summary.bcbaSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        if (!hsLastModifiedDate || !shouldSyncBcba(candidate)) {
-          summary.bcbaSkippedShouldSyncFalse += 1;
-          continue;
-        }
-
-        const dedupeId = buildEmployeeDedupeId(
-          HUBSPOT_EMPLOYEE_TYPES.BCBA,
-          recordId,
-          hsLastModifiedDate
-        );
-        const alreadyProcessed = await hasState({ pk: EMPLOYEE_DEDUPE_PK, id: dedupeId });
-        if (alreadyProcessed) {
-          summary.bcbaSkippedAlreadyProcessed += 1;
-          continue;
-        }
-
-        try {
-          await sendEmployee({
-            workflow: "employeeSync",
-            source: "employeePoller",
-            employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
-            recordId,
-            hsLastModifiedDate
-          });
-          summary.bcbaMessagesEnqueued += 1;
-
-          await putState({
-            pk: EMPLOYEE_DEDUPE_PK,
-            id: dedupeId,
-            type: "dedupe",
-            ttlSeconds: config.ttl.dedupeTtlSeconds,
-            data: {
-              module: "employee",
-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
-              source: "employeePoller"
-            }
-          });
-        } catch (error) {
-          summary.errorsCount += 1;
-          safeLog(
-            "error",
-            "Failed processing BCBA candidate.",
-            buildErrorLog({
-              workflow: "intakePoller",
-              stage: "processBcbaCandidate",
-              error,
-              recordId
-            })
-          );
-        }
-      }
-    } catch (error) {
-      summary.errorsCount += 1;
-      safeLog(
-        "error",
-        "BCBA poller search failed.",
-        buildErrorLog({
-          workflow: "intakePoller",
-          stage: "searchBcba",
-          error
-        })
-      );
-    }
-
-    summary.messagesEnqueued += summary.btRbtMessagesEnqueued + summary.bcbaMessagesEnqueued;
-
-    if (config.limits.linkedRecheckEnabled) {
-      summary.linkedRecheckEnabled = true;
-      const rechecks = [
-        {
-          entity: "client",
-          objectTypeId: "deals",
-          propertyName: config.limits.crContactIdProperty,
-          limit: config.limits.maxDealsPerRun,
-          countKey: "linkedClientEnqueued",
-          send: async (recordId) =>
-            sendClient({
-              dealId: recordId,
-              source: "linkedRecheck",
-              workflow: "clientSync"
-            })
-        },
-        {
-          entity: "bt_rbt",
-          objectTypeId: config.hubspot.btRbtObjectTypeId,
-          propertyName: config.limits.employeeIdProperty,
-          limit: config.limits.maxBtRbtPerRun,
-          countKey: "linkedBtRbtEnqueued",
-          send: async (recordId) =>
-            sendEmployee({
-              workflow: "employeeSync",
-              source: "linkedRecheck",
-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
-              recordId
-            })
-        },
-        {
-          entity: "bcba",
-          objectTypeId: config.hubspot.bcbaObjectTypeId,
-          propertyName: config.limits.employeeIdProperty,
-          limit: config.limits.maxBcbaPerRun,
-          countKey: "linkedBcbaEnqueued",
-          send: async (recordId) =>
-            sendEmployee({
-              workflow: "employeeSync",
-              source: "linkedRecheck",
-              employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
-              recordId
-            })
-        }
-      ];
-
-      for (const spec of rechecks) {
-        try {
-          const cursor = await getState({ pk: `recheck:${spec.entity}`, id: "cursor" });
-          const page = await searchRecordsByKnownProperty({
-            objectTypeId: spec.objectTypeId,
-            propertyName: spec.propertyName,
-            properties: ["hs_object_id", spec.propertyName, "hs_lastmodifieddate"],
-            limit: spec.limit,
-            after: cursor?.data?.after || null
-          });
-          for (const candidate of page.results) {
-            const recordId = String(candidate?.id ?? candidate?.properties?.hs_object_id ?? "");
-            if (!recordId || !isLinkedForOngoingRefresh(candidate, spec.propertyName)) {
-              continue;
-            }
-            await spec.send(recordId);
-            summary[spec.countKey] += 1;
-          }
-          await putState({
-            pk: `recheck:${spec.entity}`,
-            id: "cursor",
-            type: "recheck-cursor",
-            ttlSeconds: config.ttl.dedupeTtlSeconds,
-            data: { after: page.nextAfter }
-          });
-        } catch (error) {
-          summary.errorsCount += 1;
-          safeLog(
-            "error",
-            "Linked-record recheck failed.",
-            buildErrorLog({
-              workflow: "intakePoller",
-              stage: `linkedRecheck:${spec.entity}`,
-              error
-            })
-          );
-        }
-      }
-      summary.messagesEnqueued +=
-        summary.linkedClientEnqueued + summary.linkedBtRbtEnqueued + summary.linkedBcbaEnqueued;
-    }
-
+    summary.messagesEnqueued =
+      summary.poll.client + summary.poll.bt_rbt + summary.poll.bcba + summary.sweep.queued;
     return summary;
   } finally {
     try {
-      await releaseLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID, etag: lease.etag });
+      await unlock({ ...leaseKey, etag: lease.etag });
     } catch (error) {
-      safeLog(
+      logger(
         "error",
         "Failed releasing intake lease.",
         buildErrorLog({ workflow: "intakePoller", stage: "releaseLease", error })

@@ -21,10 +21,8 @@ const settings = {
   portalReady: true,
   btRbtObjectTypeId: "2-55656309",
   bcbaObjectTypeId: "2-55656302",
-  coalesceSeconds: 30,
   secretReady: true,
-  serviceBusReady: true,
-  cosmosReady: true
+  serviceBusReady: true
 };
 
 function signedRequest(rawBody, { signature, version = "v2" } = {}) {
@@ -74,14 +72,12 @@ test("deal webhook enqueues the existing client sync path", async () => {
   const response = await hubspotWebhook(signedRequest(rawBody), {}, {
     settings,
     rawBody,
-    claimCoalesce: async () => true,
     sendClientSyncMessage: async (message) => {
       sent.push(message);
     }
   });
 
   assert.equal(response.status, 202);
-  assert.equal(response.jsonBody.coalesced, false);
   assert.equal(response.jsonBody.target, "client");
   assert.equal(response.jsonBody.recordId, "12345");
   assert.deepEqual(sent, [{
@@ -115,22 +111,24 @@ test("bcba and bt object ids route to the employee queue", () => {
   );
 });
 
+// Stage 3 (row 3.11): the coalesce step and its Cosmos write are removed. The webhook queues
+// every notice; stage3WebhookAndSettings.test.mjs proves that no Cosmos call is made.
 test("repeat notice for the same record is still enqueued", async () => {
   const rawBody = JSON.stringify({ objectTypeId: "0-3", recordId: "12345" });
   let sends = 0;
-  const response = await hubspotWebhook(signedRequest(rawBody), {}, {
+  const dependencies = {
     settings,
     rawBody,
-    claimCoalesce: async () => false,
     sendClientSyncMessage: async () => {
       sends += 1;
     }
-  });
+  };
+  await hubspotWebhook(signedRequest(rawBody), {}, dependencies);
+  const response = await hubspotWebhook(signedRequest(rawBody), {}, dependencies);
 
   assert.equal(response.status, 202);
-  assert.equal(response.jsonBody.coalesced, true);
   assert.equal(response.jsonBody.accepted, true);
-  assert.equal(sends, 1);
+  assert.equal(sends, 2);
   assert.equal(JSON.stringify(response.jsonBody).includes("phi_"), false);
 });
 

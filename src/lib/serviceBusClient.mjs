@@ -18,6 +18,18 @@ export function createServiceBusClient(config) {
   return serviceBusClient;
 }
 
+// Tests pass in fake senders, so the real message builders run and nothing is sent.
+export function useServiceBusSenders({ clientSyncSender: client, employeeSyncSender: employee }) {
+  clientSyncSender = client || null;
+  employeeSyncSender = employee || null;
+}
+
+// The daily sweep spreads its messages with scheduled delivery. The scheduled time is a Service
+// Bus property of the message; it is not part of the body.
+function withScheduledTime(message, scheduledEnqueueTimeUtc) {
+  return scheduledEnqueueTimeUtc ? { ...message, scheduledEnqueueTimeUtc } : message;
+}
+
 // Every queue message says which HubSpot portal it is for. A worker completes a message for
 // another portal, or with no portal ID, without acting.
 function requirePortalId(portalId) {
@@ -69,7 +81,9 @@ export async function sendClientSyncMessage(message) {
     enqueuedAt: message.enqueuedAt
   });
 
-  await clientSyncSender.sendMessages(outboundMessage);
+  await clientSyncSender.sendMessages(
+    withScheduledTime(outboundMessage, message.scheduledEnqueueTimeUtc)
+  );
 }
 
 export async function sendEmployeeSyncMessage(message) {
@@ -87,7 +101,9 @@ export async function sendEmployeeSyncMessage(message) {
     enqueuedAt: message.enqueuedAt
   });
 
-  await employeeSyncSender.sendMessages(outboundMessage);
+  await employeeSyncSender.sendMessages(
+    withScheduledTime(outboundMessage, message.scheduledEnqueueTimeUtc)
+  );
 }
 
 export function buildEmployeeSyncMessage({

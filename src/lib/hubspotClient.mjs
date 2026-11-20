@@ -1,21 +1,8 @@
 import axios from "axios";
 import { withRetry } from "./retry.mjs";
 import { HubSpotReadError } from "./mappedState.mjs";
-import { CASE_EXCLUDED_STAGE_IDS } from "../constants/hubspot.mjs";
 
 let hubSpotHttpClient = null;
-const SEARCH_LIMIT = 50;
-const EMPLOYEE_SEARCH_PROPERTIES = [
-  "hs_object_id",
-  "employee_id",
-  "hs_lastmodifieddate",
-  "updated_by_integration",
-  "integration_last_write",
-  "last_sync_hash",
-  "last_sync_at",
-  "last_sync_status",
-  "last_sync_error"
-];
 
 function extractHubspotErrorBlob(error) {
   const data = error?.response?.data || {};
@@ -49,64 +36,6 @@ function extractHubspotErrorBlob(error) {
   }
 
   return messageParts.join(" ").toLowerCase();
-}
-
-function isLookbackFilterError(error) {
-  const status = error?.response?.status;
-  if (status !== 400 && status !== 422) {
-    return false;
-  }
-  const blob = extractHubspotErrorBlob(error);
-  return (
-    blob.includes("hs_lastmodifieddate") &&
-    (blob.includes("invalid") ||
-      blob.includes("unknown") ||
-      blob.includes("filter") ||
-      blob.includes("property") ||
-      blob.includes("validation"))
-  );
-}
-
-// Guide Requirements 1-2: every pipeline and stage is in scope. The only stage filter is an
-// optional exclusion (Case Cleanup stages). The sync workers apply the full eligibility gate.
-function buildObjectSearchPayload({
-  stageProperty,
-  excludedStageIds,
-  properties,
-  limit,
-  after,
-  sinceIso,
-  includeLookback
-}) {
-  const filters = [];
-  if (stageProperty && Array.isArray(excludedStageIds) && excludedStageIds.length > 0) {
-    filters.push({
-      propertyName: stageProperty,
-      operator: "NOT_IN",
-      values: excludedStageIds
-    });
-  }
-
-  if (includeLookback && sinceIso) {
-    filters.push({
-      propertyName: "hs_lastmodifieddate",
-      operator: "GTE",
-      value: sinceIso
-    });
-  }
-
-  return {
-    filterGroups: filters.length > 0 ? [{ filters }] : [],
-    properties,
-    sorts: [
-      {
-        propertyName: "hs_lastmodifieddate",
-        direction: "DESCENDING"
-      }
-    ],
-    limit,
-    ...(after ? { after } : {})
-  };
 }
 
 async function runSearch(objectPath, payload) {
@@ -147,98 +76,30 @@ export function createHubSpotClient(config) {
   return hubSpotHttpClient;
 }
 
-export async function searchIntakeCompleteDeals({
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes
-}) {
-  return searchCustomObjectRecords({
-    objectTypeId: "deals",
-    stageProperty: "dealstage",
-    excludedStageIds: CASE_EXCLUDED_STAGE_IDS,
-    limit,
-    maxSearchRequestsPerRun,
-    lookbackMinutes,
-    properties: ["hs_object_id", "hs_lastmodifieddate", "integration_last_write"]
-  });
-}
-
-export async function searchCustomObjectRecords({
-  objectTypeId,
-  stageProperty = "hs_pipeline_stage",
-  excludedStageIds = [],
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes,
-  properties = EMPLOYEE_SEARCH_PROPERTIES
-}) {
-  const normalizedObjectTypeId = String(objectTypeId || "").trim();
-  if (!normalizedObjectTypeId) {
+// The first page of a CRM search, for the poller and the daily sweep. The caller builds the
+// filters, and asks for the next page with a new search (by timestamp or by record ID), never
+// with HubSpot's position cursor. `nextAfter` only says that more records match.
+// A search HubSpot rejects is thrown as it is: no second search with fewer filters is tried.
+// An answer with no results list is a failed read, never "no records" (rule 5.8).
+export async function searchObjectPage({ objectTypeId, filterGroups, sorts, properties, limit }) {
+  const typeId = String(objectTypeId || "").trim();
+  if (!typeId) {
     throw new Error("HubSpot objectTypeId is required for search");
   }
 
-  const cappedLimit = Math.max(Number(limit) || 0, 0);
-  if (cappedLimit === 0) {
-    return [];
+  const answer = await runSearch(`/crm/v3/objects/${typeId}/search`, {
+    filterGroups,
+    sorts,
+    properties,
+    limit
+  });
+  if (!Array.isArray(answer?.results)) {
+    throw new HubSpotReadError(`search:${typeId}`);
   }
-
-  const perRequestLimit = Math.min(SEARCH_LIMIT, cappedLimit);
-  const maxSearchRequests = Math.max(Number(maxSearchRequestsPerRun) || 1, 1);
-  const sinceIso = new Date(
-    Date.now() - Math.max(Number(lookbackMinutes) || 0, 0) * 60 * 1000
-  ).toISOString();
-
-  let after = null;
-  let includeLookback = true;
-  let requests = 0;
-  const deals = [];
-
-  while (deals.length < cappedLimit && requests < maxSearchRequests) {
-    const payload = buildObjectSearchPayload({
-      stageProperty,
-      excludedStageIds,
-      properties,
-      limit: perRequestLimit,
-      after,
-      sinceIso,
-      includeLookback
-    });
-
-    let searchResult;
-    try {
-      searchResult = await runSearch(`/crm/v3/objects/${normalizedObjectTypeId}/search`, payload);
-    } catch (error) {
-      if (includeLookback && isLookbackFilterError(error)) {
-        includeLookback = false;
-        const fallbackPayload = buildObjectSearchPayload({
-          stageProperty,
-          excludedStageIds,
-          properties,
-          limit: perRequestLimit,
-          after,
-          sinceIso,
-          includeLookback
-        });
-        searchResult = await runSearch(
-          `/crm/v3/objects/${normalizedObjectTypeId}/search`,
-          fallbackPayload
-        );
-      } else {
-        throw error;
-      }
-    }
-
-    requests += 1;
-    const pageResults = Array.isArray(searchResult?.results) ? searchResult.results : [];
-    deals.push(...pageResults);
-
-    after = searchResult?.paging?.next?.after || null;
-    if (!after) {
-      break;
-    }
-  }
-
-  return deals.slice(0, cappedLimit);
+  return {
+    results: answer.results,
+    nextAfter: answer.paging?.next?.after || null
+  };
 }
 
 export async function getDealById(dealId, properties = []) {
@@ -405,36 +266,6 @@ export async function updateObjectProperties(objectTypeId, objectId, properties)
   return response?.data || null;
 }
 
-export async function searchEligibleBtRbtRecords({
-  objectTypeId,
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes
-}) {
-  return searchCustomObjectRecords({
-    objectTypeId,
-    limit,
-    maxSearchRequestsPerRun,
-    lookbackMinutes,
-    properties: EMPLOYEE_SEARCH_PROPERTIES
-  });
-}
-
-export async function searchEligibleBcbaRecords({
-  objectTypeId,
-  limit,
-  maxSearchRequestsPerRun,
-  lookbackMinutes
-}) {
-  return searchCustomObjectRecords({
-    objectTypeId,
-    limit,
-    maxSearchRequestsPerRun,
-    lookbackMinutes,
-    properties: EMPLOYEE_SEARCH_PROPERTIES
-  });
-}
-
 export async function getBtRbtRecordById(recordId, objectTypeId, properties = []) {
   return getObjectById(objectTypeId, recordId, properties);
 }
@@ -447,40 +278,6 @@ function assertHubSpotReady() {
   if (!hubSpotHttpClient) {
     throw new Error("HubSpot client is not initialized");
   }
-}
-
-export async function searchRecordsByKnownProperty({
-  objectTypeId,
-  propertyName,
-  properties = [],
-  limit = 50,
-  after = null
-}) {
-  assertHubSpotReady();
-  const normalizedType = String(objectTypeId || "").trim();
-  const normalizedProperty = String(propertyName || "").trim();
-  if (!normalizedType || !normalizedProperty) {
-    throw new Error("objectTypeId and propertyName are required");
-  }
-
-  const perRequestLimit = Math.min(Math.max(Number(limit) || 1, 1), SEARCH_LIMIT);
-  const payload = {
-    filterGroups: [
-      {
-        filters: [{ propertyName: normalizedProperty, operator: "HAS_PROPERTY" }]
-      }
-    ],
-    properties: properties.length ? properties : [normalizedProperty, "hs_object_id"],
-    sorts: [{ propertyName: "hs_object_id", direction: "ASCENDING" }],
-    limit: perRequestLimit,
-    ...(after ? { after } : {})
-  };
-
-  const searchResult = await runSearch(`/crm/v3/objects/${normalizedType}/search`, payload);
-  return {
-    results: Array.isArray(searchResult?.results) ? searchResult.results : [],
-    nextAfter: searchResult?.paging?.next?.after || null
-  };
 }
 
 export async function findHubSpotRecordsByEmployeeId({
@@ -511,7 +308,12 @@ export async function findHubSpotRecordsByEmployeeId({
       properties: [employeeIdProperty, "hs_object_id"],
       limit: 100
     });
-    for (const row of Array.isArray(searchResult?.results) ? searchResult.results : []) {
+    // Rule 5.8: an answer with no results list is a failed read. It is never read as "no other
+    // record holds this CR ID".
+    if (!Array.isArray(searchResult?.results)) {
+      throw new HubSpotReadError(`search:${typeId}`);
+    }
+    for (const row of searchResult.results) {
       const id = String(row?.id ?? row?.properties?.hs_object_id ?? "").trim();
       if (id && id !== excluded) {
         found.push({ id, objectTypeId: typeId });
