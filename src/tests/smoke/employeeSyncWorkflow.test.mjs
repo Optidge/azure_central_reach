@@ -51,7 +51,9 @@ function buildDeps(overrides = {}) {
     }),
     validateEmployeePayload: () => ({ isValid: true, errors: [] }),
     hashPayload: () => "hash-2",
-    getEmployeeByContactId: async () => ({ primaryEmail: "a@test.com" }),
+    // The live read holds the employee under `contact`. A read without it sends no update
+    // (lane B review fix B-R2, row 3.13).
+    getEmployeeByContactId: async () => ({ contact: { primaryEmail: "a@test.com" } }),
     findEmployeeByExternalSystemId: async () => ({ found: false, crContactId: null }),
     buildEmployeePayloadForContactId: (payload) => ({ payload }),
     createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "100" }),
@@ -96,9 +98,10 @@ test("workflow writes success state on successful update", async () => {
   assert.equal(calls.stateWrites.at(-1).type, "success");
 });
 
-test("workflow returns noop when hash is unchanged", async () => {
+test("workflow returns noop when hash is unchanged, and writes nothing", async () => {
   // Stage 2 (row 2.4): a no-op also needs a clean Cosmos record with matching hashes, so a first
-  // run saves one.
+  // run saves one. Stage 3 (row 3.7): a no-op writes nothing, to HubSpot or to Cosmos, when
+  // HubSpot already shows success; the status noop is never written.
   const store = new Map();
   const getState = async ({ pk, id }) => store.get(`${pk}|${id}`) || null;
   const first = buildDeps({
@@ -119,6 +122,7 @@ test("workflow returns noop when hash is unchanged", async () => {
         integration_last_write: "2026-05-06T09:00:00.000Z",
         bt_name: "Alex Rivera",
         last_sync_hash: "hash-2",
+        last_sync_status: "success",
         employee_id: "100"
       }
     }),
@@ -129,7 +133,9 @@ test("workflow returns noop when hash is unchanged", async () => {
 
   const result = await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "noop");
-  assert.equal(calls.stateWrites[0].data.operation, "noop");
+  assert.equal(result.operation, "noop");
+  assert.equal(calls.writebacks.length, 0);
+  assert.equal(calls.stateWrites.length, 0);
 });
 
 test("hash match does not noop when employee_id is missing", async () => {

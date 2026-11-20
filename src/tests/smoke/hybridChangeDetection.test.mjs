@@ -270,7 +270,8 @@ test("employee timestamp shortcut no longer skips a mapped change", async () => 
         warnings: []
       }),
       validateEmployeePayload: () => ({ isValid: true, errors: [] }),
-      getEmployeeByContactId: async () => ({ externalSystemId: "1" }),
+      // Under `contact`, as the live read answers (lane B review fix B-R2, row 3.13).
+      getEmployeeByContactId: async () => ({ contact: { externalSystemId: "1" } }),
       buildEmployeePayloadForContactId: (payload) => ({ payload }),
       createOrUpdateEmployee: async () => {
         upserts += 1;

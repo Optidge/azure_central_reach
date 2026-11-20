@@ -19,20 +19,47 @@ import {
 import { findHubSpotRecordsByEmployeeId } from "../lib/hubspotClient.mjs";
 import { CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS } from "../constants/centralReach.mjs";
 import {
+  CHANGE_NOT_FROM_WEBHOOK,
   HubSpotReadError,
   MAPPING_VERSION,
   canonicalizeLabels,
+  changedMetadata,
   changedNamesFromHashes,
   explicitMetadata,
   fieldHashes,
   hashMappedState,
+  isBackupPathSource,
   isStateClientUnavailable,
-  metadataClearFieldIds
+  keepOmittedFieldHashes,
+  keepUnwrittenCoreFields,
+  metadataClearFieldIds,
+  writtenFieldHashes
 } from "../lib/mappedState.mjs";
-import { hashesForContact, saveLinkRecord } from "../lib/linkRecord.mjs";
+import {
+  NO_IN_PROGRESS,
+  NO_PENDING_CREATE,
+  hashesForContact,
+  inProgressFields,
+  inProgressHashesFor,
+  isDigitsOnly,
+  labelFieldsAfterSend,
+  labelPostFromError,
+  labelsPendingFields,
+  labelsPendingFor,
+  lastLabelPostFor,
+  pendingCreateFields,
+  pendingCreateHasTime,
+  pendingCreateIsRecent,
+  pendingCreateStamp,
+  saveLinkRecord,
+  savedHashesForContact
+} from "../lib/linkRecord.mjs";
+import { unreadableAnswerError } from "../lib/unreadableAnswer.mjs";
 import {
   FAILURE_KINDS,
   classifyFailure,
+  createStillPendingError,
+  labelPostUnconfirmedError,
   metadataWriteFailedError,
   permanentFailureReason
 } from "../lib/retry.mjs";
@@ -52,6 +79,7 @@ import {
 import {
   ANOTHER_HUBSPOT_RECORD_LINKED,
   CONFLICTING_EXTERNAL_IDS,
+  crIdNotDigits,
   missingDateProperty,
   RETRIES_USED_UP,
   unreadableDate,
@@ -167,6 +195,14 @@ function buildWritebackPropertyPatch({
   return { ...base, ...linkProperties({ employeeType, employeeIdProperty, contactId }) };
 }
 
+// Row 3.7: does HubSpot already show the status and the reason this run would write?
+function statusIsShown(properties, status, reason) {
+  return (
+    String(properties?.last_sync_status ?? "").trim() === status &&
+    String(properties?.last_sync_error ?? "").trim() === String(reason || "").trim()
+  );
+}
+
 function getWorkflowStateId(portalId, employeeType, recordId) {
   return `${portalId}:${employeeType}:${recordId}`;
 }
@@ -215,6 +251,14 @@ export async function runEmployeeSyncWorkflow(
   const digestPayload = dependencies.hashPayload || hashPayload;
   const logger = dependencies.safeLog || safeLog;
   const buildError = dependencies.buildErrorLog || buildErrorLog;
+  // The clock, in milliseconds. Row 3.15 measures the age of a pending create with it.
+  const now = dependencies.now || Date.now;
+  // Row L.3: the wait between the label read-backs. Only a test sets it; otherwise the sender's
+  // own default applies.
+  const labelReadBackOptions =
+    dependencies.labelReadBackDelayMs === undefined
+      ? {}
+      : { labelReadBackDelayMs: dependencies.labelReadBackDelayMs };
 
   const normalizedRecordId = ensureRecordId(recordId);
   const normalizedEmployeeType = ensureEmployeeType(employeeType);
@@ -277,6 +321,31 @@ export async function runEmployeeSyncWorkflow(
   // Rule 5.1: a record the gate would skip gets no HubSpot writeback. Until the gate has been
   // checked and passed, a failure writes nothing to HubSpot; the dead-letter alert reports it.
   let gatePassed = false;
+  // Row 3.7: the status and reason HubSpot shows, from the read of this run and then from this
+  // run's own writes. A status HubSpot already shows is not written again: every write moves
+  // hs_lastmodifieddate, and the hourly poller would queue the record again without end.
+  let shown = null;
+  const writeHubSpot = async (patch) => {
+    const result = await writeEmployeeWriteback({
+      objectTypeId,
+      recordId: normalizedRecordId,
+      employeeIdProperty,
+      properties: filterWritebackProperties(patch, {
+        kind: "employee",
+        idProperty: employeeIdProperty
+      })
+    });
+    if (patch.last_sync_status !== undefined) {
+      shown = {
+        last_sync_status: patch.last_sync_status,
+        last_sync_error: patch.last_sync_error
+      };
+    }
+    return result;
+  };
+  // Contract P.5 (e): true once this run created the employee or linked the record to its own
+  // earlier create. The catch block then saves labelsPending with the CR id.
+  let ownCreateThisRun = false;
   try {
     lease = await claimRecordLock(claimLock, {
       pk: "sync-lock:employee",
@@ -301,9 +370,12 @@ export async function runEmployeeSyncWorkflow(
       }
     };
 
-    let hubspotRecord = await fetchRecord();
-    hubspotRecord = (await fetchRecord()) || hubspotRecord;
+    const hubspotRecord = await fetchRecord();
     const hubspotProps = hubspotRecord?.properties || {};
+    shown = {
+      last_sync_status: hubspotProps.last_sync_status,
+      last_sync_error: hubspotProps.last_sync_error
+    };
 
     const prior = (await readLink())?.data || {};
     const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
@@ -354,22 +426,25 @@ export async function runEmployeeSyncWorkflow(
         invocationId: context?.invocationId || null
       });
     }
+    // The status is written only when HubSpot does not show it yet; the CR id and the link when
+    // HubSpot lacks them.
     const decided = async ({ status, reason, contactId = null, fail = false }) => {
-      await writeEmployeeWriteback({
-        objectTypeId,
-        recordId: normalizedRecordId,
-        employeeIdProperty,
-        properties: filterWritebackProperties(
-          buildWritebackPropertyPatch({
-            employeeType: normalizedEmployeeType,
-            employeeIdProperty,
-            status,
-            contactId,
-            errorMessage: reason || ""
-          }),
-          { kind: "employee", idProperty: employeeIdProperty }
-        )
-      });
+      const patch = {
+        ...(statusIsShown(shown, status, reason)
+          ? {}
+          : buildWritebackPropertyPatch({
+              employeeType: normalizedEmployeeType,
+              employeeIdProperty,
+              status,
+              errorMessage: reason || ""
+            })),
+        ...(contactId && !hubspotHasContactId
+          ? linkProperties({ employeeType: normalizedEmployeeType, employeeIdProperty, contactId })
+          : {})
+      };
+      if (Object.keys(patch).length > 0) {
+        await writeHubSpot(patch);
+      }
       // A CR id this run learned is kept. The merge leaves the last good hashes as they are.
       if (contactId && !linkSaved && String(prior.crContactId || "") !== String(contactId)) {
         await saveLinkFields({ crContactId: String(contactId) });
@@ -388,6 +463,13 @@ export async function runEmployeeSyncWorkflow(
         crContactId: contactId
       };
     };
+
+    // Rule 5.5, row 3.16: a CR ID from HubSpot must be digits only. The value is not used, not
+    // saved and not logged.
+    if (hubspotContactId && !isDigitsOnly(hubspotContactId)) {
+      linkedContactId = null;
+      return decided({ status: "error", reason: crIdNotDigits(employeeIdProperty), fail: true });
+    }
 
     if (mapped.dateOfBirthStatus === "missing") {
       return decided({ status: "error", reason: missingDateProperty("date_of_birth"), fail: true });
@@ -412,19 +494,34 @@ export async function runEmployeeSyncWorkflow(
     let identity = null;
     let syncResult = null;
     let createdThisRun = false;
+    // True when this run linked the record to its own earlier create (rule 5.3).
+    let linkedToOwnCreate = false;
+    // Contract P.5 (e): a contact the integration created, or its own earlier create that a run
+    // linked to, may show an empty label read until a label read confirms its labels.
+    let labelsPending = labelsPendingFor(prior, existingContactId);
 
     // A CR id that HubSpot does not hold yet is saved before any later step can fail: first in
     // Cosmos, then on the HubSpot record. Saving the CR id also ends a pending create.
-    const saveLink = async (contactId, externalSystemId) => {
-      // Set first: if the Cosmos save fails, the catch block still sends the id to HubSpot.
+    // ownCreate: the integration created this contact, in this run or in an earlier one.
+    const saveLink = async (contactId, externalSystemId, { ownCreate = false } = {}) => {
+      // Set first: if the Cosmos save fails, the catch block still sends the id to HubSpot and
+      // still saves labelsPending.
       linkedContactId = String(contactId);
+      if (ownCreate) {
+        labelsPending = true;
+        ownCreateThisRun = true;
+      }
       await saveLinkFields({
         workflow: "employeeSync",
         employeeType: normalizedEmployeeType,
         portalId,
         crContactId: String(contactId),
         ...(externalSystemId ? { externalSystemId: String(externalSystemId) } : {}),
-        pendingCreateExternalId: null
+        ...NO_PENDING_CREATE,
+        // The in-progress hashes a create saved before it had a CR id belong to this contact.
+        ...(ownCreate
+          ? { ...labelsPendingFields(contactId), inProgressContactId: String(contactId) }
+          : {})
       });
       linkSaved = true;
       try {
@@ -451,6 +548,38 @@ export async function runEmployeeSyncWorkflow(
         );
       }
     };
+
+    // Contract P.5 (c) in src/mappings/employees/buildEmployeePayload.mjs: a field whose input
+    // could not be read is named here, so it is not compared, not sent and not cleared. Rows
+    // 4.18 and 6.4 add the reads that fill the list.
+    const omitFieldIds = [
+      ...(mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
+        ? [
+            CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
+            CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
+          ]
+        : []),
+      ...(dependencies.omitFieldIds || [])
+    ];
+    // Row 3.7: the compared state is built from HubSpot data only: the mapped payload before
+    // any CentralReach read, plus the two inputs of the identity check (rule 5.4).
+    const comparedStateOf = (mappedRecord, recordProperties) => ({
+      employee: mappedRecord.employeePayload,
+      metadata: explicitMetadata(
+        mappedRecord.metadataValues,
+        knownMetadataFieldIds(normalizedEmployeeType),
+        omitFieldIds
+      ),
+      labels: canonicalizeLabels(mappedRecord.requiredLabelIds),
+      identity: {
+        workdayId: String(recordProperties?.workday_id ?? "").trim() || null,
+        checklistTicked: checklistTicked(recordProperties?.[checklistProperty])
+      }
+    });
+    const comparedState = comparedStateOf(mapped, hubspotProps);
+    const metadataForCompare = comparedState.metadata;
+    const payloadHash = digestPayload(comparedState);
+    const comparedFieldHashes = fieldHashes(comparedState);
 
     if (!existingContactId) {
       const externalId = String(mapped.employeePayload.externalSystemId || normalizedRecordId).trim();
@@ -485,10 +614,11 @@ export async function runEmployeeSyncWorkflow(
           return Array.isArray(holders) ? holders : [];
         };
 
-        // Row 2.3: a create whose answer never arrived is looked up first, by the ID it was sent
-        // with, even if workday_id was edited since. Found: it is this record's own create.
-        // 404: nothing was created, so the pending ID is cleared. Anything else is thrown and
-        // the pending ID stays.
+        // Rows 2.3 and 3.15: a create whose answer never arrived is looked up first, by the ID it
+        // was sent with, even if workday_id was edited since. Found: it is this record's own
+        // create. 404 less than 15 minutes after the create was sent: CentralReach may not show
+        // it yet, so no create is sent and the run is retried. 404 later: nothing was created,
+        // so the pending ID is cleared. Anything else is thrown and the pending ID stays.
         let decision = null;
         const pendingId = String(prior.pendingCreateExternalId || "").trim();
         if (pendingId) {
@@ -506,8 +636,14 @@ export async function runEmployeeSyncWorkflow(
               crContactId: String(byPending.crContactId),
               externalSystemId: pendingId
             };
+          } else if (pendingCreateIsRecent(prior, now())) {
+            // A marker with no readable time is stamped now; the 15 minutes run from here.
+            if (!pendingCreateHasTime(prior)) {
+              await saveLinkFields(pendingCreateStamp(now()));
+            }
+            throw createStillPendingError();
           } else {
-            await saveLinkFields({ pendingCreateExternalId: null });
+            await saveLinkFields(NO_PENDING_CREATE);
           }
         }
         if (!decision) {
@@ -537,18 +673,27 @@ export async function runEmployeeSyncWorkflow(
         if (decision.outcome === "link_own") {
           // This record's own earlier create: save the link and go on as linked (rule 5.4).
           existingContactId = decision.crContactId;
-          await saveLink(existingContactId, decision.externalSystemId || normalizedRecordId);
+          linkedToOwnCreate = true;
+          await saveLink(existingContactId, decision.externalSystemId || normalizedRecordId, {
+            ownCreate: true
+          });
         } else {
           const createAllowed =
             Boolean(config.features?.allowEmployeeCreate) && config.features?.putOnlyMode === false;
           if (createAllowed) {
-            // Rows 2.3 and 2.4: the ID about to be used is saved, and the record is marked in
-            // progress, before the create is sent. If this save fails, no create is sent.
+            // Rows 2.3, 2.4 and 3.15: the ID about to be used is saved with the time, and the
+            // record is marked in progress, before the create is sent. If this save fails, no
+            // create is sent.
             await saveLinkFields({
               workflow: "employeeSync",
               employeeType: normalizedEmployeeType,
               portalId,
-              pendingCreateExternalId: externalId,
+              ...pendingCreateFields(externalId, now()),
+              // If the run fails after the create, the next run still knows what was sent.
+              ...inProgressFields(
+                writtenFieldHashes(inProgressHashesFor(prior, null), comparedFieldHashes),
+                null
+              ),
               clean: false
             });
           }
@@ -567,13 +712,13 @@ export async function runEmployeeSyncWorkflow(
           }
           if (syncResult?.operation === "create_rejected") {
             // CentralReach said no (400 or 409): nothing was created, so nothing is pending.
-            await saveLinkFields({ pendingCreateExternalId: null });
+            await saveLinkFields(NO_PENDING_CREATE);
             return decided({ status: "error", reason: syncResult.reason, fail: true });
           }
           // Row 1.8: the lease also covers saving the new CR id, so a second record with the
           // same Workday ID finds this record as its holder.
           if (createdThisRun && syncResult.crContactId) {
-            await saveLink(syncResult.crContactId, externalId);
+            await saveLink(syncResult.crContactId, externalId, { ownCreate: true });
           }
         }
       } finally {
@@ -589,14 +734,104 @@ export async function runEmployeeSyncWorkflow(
       }
     }
 
-    if (existingContactId) {
-      const existingCrEmployee = await fetchCrEmployeeById(existingContactId);
-      const preserved = preserveIdentifiers(mapped.employeePayload, existingCrEmployee);
-      // A copy: the edits below must not change the mapped payload that the stale check hashes.
-      outboundPayload = { ...preserved.payload };
-      if (mapped.dateOfBirthStatus === "blank" || outboundPayload.dateOfBirth == null) {
-        delete outboundPayload.dateOfBirth;
+    // Rows 2.2 and 3.7: the saved hashes count only for the CR id they were synced to and for
+    // the current mapping version. Otherwise every field is treated as changed.
+    const previousFieldHashes = hashesForContact(prior, existingContactId);
+    // Rule 5.8: what the integration is known to have written to this employee. The last clean
+    // copy counts under any mapping version, and so do the hashes of runs that did not finish
+    // clean (for a record just linked to its own create: the hashes that create saved before it
+    // had a CR id). This is the basis for a clear, for a core field sent blank and for an
+    // omitted field's kept hash, not for "did anything change".
+    const savedAnyVersion = savedHashesForContact(prior, existingContactId);
+    const unfinishedFieldHashes = createdThisRun
+      ? null
+      : inProgressHashesFor(prior, linkedToOwnCreate ? null : existingContactId);
+    const writtenBefore = writtenFieldHashes(savedAnyVersion, unfinishedFieldHashes);
+    // Row 3.18: an omitted field keeps its saved hash and is not a changed field.
+    const nextFieldHashes = keepOmittedFieldHashes(
+      comparedFieldHashes,
+      savedAnyVersion,
+      omitFieldIds
+    );
+    const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
+    // Rows 2.4 and 3.7: "nothing changed" needs a clean last run and matching hashes in Cosmos.
+    // HubSpot's last_sync_hash is not asked.
+    const lastRunClean = prior.clean === true;
+    const unchanged =
+      !syncResult && lastRunClean && Boolean(previousFieldHashes) && changedFields.length === 0;
+
+    // Row 3.7: nothing changed, so nothing is sent to CentralReach and nothing is saved. HubSpot
+    // is written only when it does not show what this run would write: the status, or the CR id.
+    const finishUnchanged = async ({ status, reason }) => {
+      const patch = {
+        ...(statusIsShown(shown, status, reason)
+          ? {}
+          : buildWritebackPropertyPatch({
+              employeeType: normalizedEmployeeType,
+              employeeIdProperty,
+              status,
+              errorMessage: reason
+            })),
+        ...(hubspotHasContactId
+          ? {}
+          : linkProperties({
+              employeeType: normalizedEmployeeType,
+              employeeIdProperty,
+              contactId: existingContactId
+            }))
+      };
+      let writebackResult = null;
+      if (Object.keys(patch).length > 0) {
+        writebackResult = await writeHubSpot(patch);
       }
+      logger("info", "Employee sync compared mapped state.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        source: source || null,
+        mappingVersion: MAPPING_VERSION,
+        outcome: "noop",
+        changedFieldNames: changedFields,
+        invocationId: context?.invocationId || null
+      });
+      return {
+        ok: true,
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        status: "noop",
+        operation: "noop",
+        crContactId: existingContactId,
+        writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
+      };
+    };
+
+    if (existingContactId) {
+      // Row 3.7: the CentralReach read for the ID check is skipped only when the last status is
+      // success and nothing changed. No update is sent then either.
+      if (unchanged && String(hubspotProps.last_sync_status ?? "").trim() === "success") {
+        return finishUnchanged({ status: "success", reason: "" });
+      }
+      const existingCrEmployee = await fetchCrEmployeeById(existingContactId);
+      // Row 3.13: an update sends back what this read holds under `contact`. A read with no
+      // `contact` object would leave every blank core field out, and a field that is left out
+      // is cleared in CentralReach. So no update is sent: the answer cannot be read (Stage 2
+      // decision 4: permanent, logged by field names and types).
+      const crContact = existingCrEmployee?.contact;
+      if (!crContact || typeof crContact !== "object" || Array.isArray(crContact)) {
+        throw unreadableAnswerError({
+          code: "CR_EMPLOYEE_READ_FAILED",
+          call: "GET /contacts/employee/{id}",
+          status: null,
+          expected: "the employee's core fields under contact",
+          expectedFields: ["contact"],
+          reasonField: "contact",
+          answer: existingCrEmployee
+        });
+      }
+      const preserved = preserveIdentifiers(mapped.employeePayload, existingCrEmployee);
+      // Row 3.13: a blank core field the integration did not write carries the value this read
+      // holds. A copy: the mapped payload that the stale check hashes is not changed.
+      outboundPayload = keepUnwrittenCoreFields(preserved.payload, writtenBefore, crContact);
       // Rule 5.4: when CR holds no External System ID, an update sends workday_id only if it is
       // filled. The temporary ID (the HubSpot record ID) is for a create only.
       if (!preserved.crExternalSystemId && String(hubspotProps.workday_id || "").trim() === "") {
@@ -625,93 +860,35 @@ export async function runEmployeeSyncWorkflow(
           contactId: existingContactId
         });
       }
+      // Row 3.7: the ID check ran; with no change only the status can differ.
+      if (unchanged) {
+        return finishUnchanged({ status: identity.status, reason: identity.reason });
+      }
     }
 
-    // Contract P.5 (c) in src/mappings/employees/buildEmployeePayload.mjs: a field whose input
-    // could not be read is named here, so it is not compared, not sent and not cleared.
-    const omitFieldIds = mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
-      ? [
-          CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
-          CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
-        ]
-      : [];
-    const metadataForCompare = explicitMetadata(
-      mapped.metadataValues,
-      knownMetadataFieldIds(normalizedEmployeeType),
-      omitFieldIds
-    );
-    const payloadHashInput = {
-      employee: outboundPayload,
-      metadata: metadataForCompare,
-      labels: canonicalizeLabels(mapped.requiredLabelIds)
-    };
-
-    const payloadHash = digestPayload(payloadHashInput);
-    const nextFieldHashes = fieldHashes(payloadHashInput);
-    // Row 2.2: the saved hashes count only for the CR id they were synced to. For any other CR
-    // id every field is treated as changed.
-    const previousFieldHashes = hashesForContact(prior, existingContactId);
-    const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
-    const previousHash = String(hubspotProps?.last_sync_hash || "");
-    // Row 2.4: "nothing changed" needs a clean last run and matching hashes in Cosmos. A matching
-    // last_sync_hash in HubSpot alone is not enough: a run that failed halfway leaves it behind.
-    const cosmosSaysUnchanged =
-      prior.clean === true && Boolean(previousFieldHashes) && changedFields.length === 0;
-    const canNoopByHash = Boolean(
-      previousHash &&
-        previousHash === payloadHash &&
-        existingContactId &&
-        !syncResult &&
-        cosmosSaysUnchanged
-    );
-    if (canNoopByHash && identity && identity.status !== "success") {
-      return decided({
-        status: identity.status,
-        reason: identity.reason,
-        fail: identity.status === "error",
-        contactId: existingContactId
-      });
-    }
-    if (canNoopByHash) {
-      const writebackResult = await writeEmployeeWriteback({
-        objectTypeId,
-        recordId: normalizedRecordId,
-        employeeIdProperty,
-        properties: filterWritebackProperties(
-          buildWritebackPropertyPatch({
-            employeeType: normalizedEmployeeType,
-            employeeIdProperty,
-            payloadHash,
-            status: "noop",
-            contactId: existingContactId
-          }),
-          { kind: "employee", idProperty: employeeIdProperty }
-        )
-      });
-
-      // Nothing changed, so the link record is left as it is.
-      await saveAttempt(STATE_TYPES.SUCCESS, {
-        status: "noop",
-        operation: "noop",
-        changedFieldNames: changedFields,
-        writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed),
-        mappingWarningCodes: mappingWarnings.map((item) => item?.code).filter(Boolean)
-      });
-
-      return {
-        ok: true,
+    if (isBackupPathSource(source) && changedFields.length > 0) {
+      // Row 3.9: field names only, never values.
+      logger("warn", CHANGE_NOT_FROM_WEBHOOK, {
+        workflow: "employeeSync",
         recordId: normalizedRecordId,
         employeeType: normalizedEmployeeType,
-        status: "noop",
-        operation: "noop",
-        crContactId: existingContactId,
-        writebackFallbackUsed: Boolean(writebackResult?.fallbackUsed)
-      };
+        source,
+        changedFieldNames: changedFields,
+        invocationId: context?.invocationId || null
+      });
     }
 
     if (!syncResult) {
-      // Row 2.4: in progress before the first CentralReach write of this run.
-      await saveLinkFields({ clean: false });
+      // Row 2.4: in progress before the first CentralReach write of this run. The run's field
+      // hashes are saved too: if it fails halfway, the next run still knows what may have
+      // reached CentralReach (rule 5.8).
+      await saveLinkFields({
+        clean: false,
+        ...inProgressFields(
+          writtenFieldHashes(unfinishedFieldHashes, nextFieldHashes),
+          existingContactId
+        )
+      });
       syncResult = await upsertEmployee({
         payload: outboundPayload,
         employeeType: normalizedEmployeeType,
@@ -755,15 +932,59 @@ export async function runEmployeeSyncWorkflow(
 
     const labelIds = canonicalizeLabels(mapped.requiredLabelIds);
     if (contactId && (Object.keys(metadataForCompare).length > 0 || labelIds.length > 0)) {
-      const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadataForCompare);
-      // Contract P.5 (e) in src/lib/centralReachClient.mjs. Row L.3 saves lastLabelPost.
-      metadataSyncSummary = await pushMetadata(contactId, metadataForCompare, {
-        labelIds,
-        managedLabelIds: mapped.managedLabelIds ?? [],
-        lastLabelPost: prior.lastLabelPost ?? null,
-        contactCreatedThisRun: createdThisRun,
-        clearFieldIds
+      const clearFieldIds = metadataClearFieldIds(writtenBefore, metadataForCompare);
+      // Row 3.8: only the changed fields are sent; all of them when there is no saved copy or
+      // the last run was not clean. Contract P.5 (e) in src/lib/centralReachClient.mjs.
+      try {
+        metadataSyncSummary = await pushMetadata(
+          contactId,
+          changedMetadata(
+            metadataForCompare,
+            lastRunClean ? previousFieldHashes : null,
+            nextFieldHashes
+          ),
+          {
+            labelIds,
+            managedLabelIds: mapped.managedLabelIds ?? [],
+            lastLabelPost: lastLabelPostFor(prior, contactId),
+            contactCreatedThisRun: createdThisRun || labelsPending,
+            clearFieldIds,
+            ...labelReadBackOptions
+          }
+        );
+      } catch (error) {
+        // Row L.3: a label POST that failed with a timeout or a 5xx may still have been applied.
+        // The sender attaches it to the error; it is saved, then the same error is rethrown. If
+        // the save fails, that is logged and the label error still stands.
+        const failedPost = labelPostFromError(error);
+        if (Object.keys(failedPost).length > 0) {
+          try {
+            await saveLinkFields(failedPost);
+          } catch (stateError) {
+            logger(
+              "error",
+              "Employee label POST could not be saved after a failed label step.",
+              buildError({
+                workflow: "employeeSync",
+                stage: "saveLabelPostAfterFailure",
+                error: stateError,
+                recordId: normalizedRecordId
+              })
+            );
+          }
+        }
+        throw error;
+      }
+      // Row L.3: a label POST is saved before anything else can end the run, also before the
+      // throw for a failed metadata field.
+      const labelChanges = labelFieldsAfterSend({
+        labelResult: metadataSyncSummary?.labelResult,
+        contactId,
+        labelsPending: createdThisRun || labelsPending
       });
+      if (Object.keys(labelChanges).length > 0) {
+        await saveLinkFields(labelChanges);
+      }
       if ((metadataSyncSummary?.failedCount || 0) > 0) {
         logger("warn", "Employee metadata write had failures.", {
           workflow: "employeeSync",
@@ -776,6 +997,9 @@ export async function runEmployeeSyncWorkflow(
         });
         throw metadataWriteFailedError(metadataSyncSummary);
       }
+      if (metadataSyncSummary?.labelResult?.confirmed === false) {
+        throw labelPostUnconfirmedError();
+      }
     }
 
     const confirmedRecord = await fetchRecord();
@@ -784,21 +1008,10 @@ export async function runEmployeeSyncWorkflow(
       employeeType: normalizedEmployeeType,
       config
     });
-    const confirmedHash = digestPayload({
-      employee: confirmedMapped.employeePayload,
-      metadata: explicitMetadata(
-        confirmedMapped.metadataValues,
-        knownMetadataFieldIds(normalizedEmployeeType),
-        omitFieldIds
-      ),
-      labels: canonicalizeLabels(confirmedMapped.requiredLabelIds)
-    });
-    const sourceHash = digestPayload({
-      employee: mapped.employeePayload,
-      metadata: metadataForCompare,
-      labels: canonicalizeLabels(mapped.requiredLabelIds)
-    });
-    if (confirmedHash !== sourceHash) {
+    const confirmedHash = digestPayload(
+      comparedStateOf(confirmedMapped, confirmedRecord?.properties || {})
+    );
+    if (confirmedHash !== payloadHash) {
       const stale = new Error("SyncStale");
       stale.code = "SYNC_STALE";
       throw stale;
@@ -815,22 +1028,16 @@ export async function runEmployeeSyncWorkflow(
       invocationId: context?.invocationId || null
     });
 
-    const writebackResult = await writeEmployeeWriteback({
-      objectTypeId,
-      recordId: normalizedRecordId,
-      employeeIdProperty,
-      properties: filterWritebackProperties(
-        buildWritebackPropertyPatch({
-          employeeType: normalizedEmployeeType,
-          employeeIdProperty,
-          payloadHash,
-          status,
-          contactId,
-          errorMessage: syncResult.reason || ""
-        }),
-        { kind: "employee", idProperty: employeeIdProperty }
-      )
-    });
+    const writebackResult = await writeHubSpot(
+      buildWritebackPropertyPatch({
+        employeeType: normalizedEmployeeType,
+        employeeIdProperty,
+        payloadHash,
+        status,
+        contactId,
+        errorMessage: syncResult.reason || ""
+      })
+    );
 
     // Every CentralReach write of this run succeeded, so the run is clean and its hashes are
     // saved, also when the status is waiting or error (rule 5.4).
@@ -844,7 +1051,8 @@ export async function runEmployeeSyncWorkflow(
       fieldHashes: nextFieldHashes,
       hashesContactId: contactId,
       mappingVersion: MAPPING_VERSION,
-      pendingCreateExternalId: null,
+      ...NO_PENDING_CREATE,
+      ...NO_IN_PROGRESS,
       clean: true
     });
     await saveAttempt(STATE_TYPES.SUCCESS, {
@@ -897,15 +1105,16 @@ export async function runEmployeeSyncWorkflow(
     }
 
     // The CR id goes to HubSpot when HubSpot does not hold it yet, with or without a status.
+    // Row 3.7: a status and reason HubSpot already shows are not written again.
+    const errorReason = permanent ? permanentFailureReason(error) : RETRIES_USED_UP;
     const errorPatch = {
-      ...(permanent || lastAttempt
-        ? {
-            last_sync_status: "error",
-            last_sync_at: new Date().toISOString(),
-            last_sync_error: permanent ? permanentFailureReason(error) : RETRIES_USED_UP,
-            integration_last_write: new Date().toISOString(),
-            updated_by_integration: true
-          }
+      ...((permanent || lastAttempt) && !statusIsShown(shown, "error", errorReason)
+        ? buildWritebackPropertyPatch({
+            employeeType: normalizedEmployeeType,
+            employeeIdProperty,
+            status: "error",
+            errorMessage: errorReason
+          })
         : {}),
       ...(linkedContactId && !hubspotHasContactId
         ? linkProperties({
@@ -947,7 +1156,19 @@ export async function runEmployeeSyncWorkflow(
     if (lease) {
       try {
         if (linkedContactId) {
-          await saveLinkFields({ crContactId: linkedContactId });
+          // An employee this run created or linked to its own create keeps its labelsPending
+          // fields and loses its pending marker, also when the save right after the create was
+          // the step that failed.
+          await saveLinkFields({
+            crContactId: linkedContactId,
+            ...(ownCreateThisRun
+              ? {
+                  ...labelsPendingFields(linkedContactId),
+                  inProgressContactId: linkedContactId,
+                  ...NO_PENDING_CREATE
+                }
+              : {})
+          });
         }
         await saveAttempt(STATE_TYPES.FAIL, {
           status: "error",

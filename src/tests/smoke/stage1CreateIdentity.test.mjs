@@ -96,10 +96,10 @@ function employeeHarness({
   properties = {},
   features = { allowEmployeeCreate: true, putOnlyMode: false },
   sync = {},
-  crEmployee = { contact: { contactId: "CR1", externalSystemId: "WD1", primaryEmail: "stored@example.com" } },
+  crEmployee = { contact: { contactId: "7001", externalSystemId: "WD1", primaryEmail: "stored@example.com" } },
   findEmployeeByExternalSystemId = async () => ({ found: false, crContactId: null }),
   findHubSpotRecordsByEmployeeId = async () => [],
-  createOrUpdateEmployee = async () => ({ operation: "create", crContactId: "CR1" }),
+  createOrUpdateEmployee = async () => ({ operation: "create", crContactId: "7001" }),
   acquireLease = async () => true,
   hash = "hash-new",
   prior = null
@@ -288,7 +288,7 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
         employeeType,
         sync: { recordGateProperty: "sandbox_test_field" },
         properties: {
-          employee_id: "CR1",
+          employee_id: "7001",
           sandbox_test_field: gateValue
         }
       });
@@ -308,7 +308,7 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
     const { deps, calls } = employeeHarness({
       employeeType,
       sync: { recordGateProperty: "sandbox_test_field" },
-      properties: { employee_id: "CR1", sandbox_test_field: "true" }
+      properties: { employee_id: "7001", sandbox_test_field: "true" }
     });
     const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType }, deps);
     assert.notEqual(result.status, "skipped");
@@ -350,7 +350,7 @@ test("[GBR] record gate lets a Case proceed when sandbox_test_field is true", as
 test("[G17] record gate value none is not checked", async () => {
   const employee = employeeHarness({
     sync: { recordGateProperty: null },
-    properties: { employee_id: "CR1" }
+    properties: { employee_id: "7001" }
   });
   const employeeResult = await runEmployeeSyncWorkflow(
     { recordId: "HS1", employeeType: "bt_rbt" },
@@ -528,7 +528,7 @@ for (const [employeeType, fieldName] of [
   test(`[GER-REQ] employee update ${employeeType} errors when ${fieldName} is blank and does not call CentralReach`, async () => {
     const { deps, calls } = employeeHarness({
       employeeType,
-      properties: { employee_id: "CR1", [fieldName]: " " }
+      properties: { employee_id: "7001", [fieldName]: " " }
     });
     const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType }, deps);
     assert.equal(result.status, "error");
@@ -642,9 +642,28 @@ test("[GER-REQ] a blank employee date of birth on create sends the placeholder",
   assert.equal(cr.calls.some((call) => call.method === "PUT"), false);
 });
 
-test("[GER-REQ] a blank employee date of birth on update is left out of the request", async () => {
+test("[GER-REQ] a blank employee date of birth on update sends back the date CentralReach holds", async () => {
+  // Row 3.13 (rule 5.7, API test of 2026-11-20): a date of birth that is left out of an update
+  // is cleared in CentralReach, so the stored date is sent back. It was left out before.
   const { deps, calls } = employeeHarness({
-    properties: { employee_id: "CR1", date_of_birth: "" }
+    properties: { employee_id: "7001", date_of_birth: "" },
+    crEmployee: {
+      contact: {
+        contactId: "7001",
+        externalSystemId: "WD1",
+        primaryEmail: "stored@example.com",
+        dateOfBirth: "1988-04-09T00:00:00"
+      }
+    }
+  });
+  await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bcba" }, deps);
+  assert.equal(calls.upserts.length, 1);
+  assert.equal(calls.upserts[0].payload.dateOfBirth, "1988-04-09T00:00:00");
+});
+
+test("[GER-REQ] a blank employee date of birth on update is left out when the CentralReach read does not hold the key", async () => {
+  const { deps, calls } = employeeHarness({
+    properties: { employee_id: "7001", date_of_birth: "" }
   });
   await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bcba" }, deps);
   assert.equal(calls.upserts.length, 1);
@@ -801,11 +820,11 @@ test("[G17] an employee found by the HubSpot record ID is linked and not created
     properties: { employee_id: "", workday_id: "WD1" },
     findEmployeeByExternalSystemId: async (externalId) => {
       if (externalId === "HS1") {
-        return { found: true, crContactId: "CR55" };
+        return { found: true, crContactId: "7055" };
       }
       return { found: false, crContactId: null };
     },
-    crEmployee: { contact: { contactId: "CR55", externalSystemId: "WD1", primaryEmail: "stored@example.com" } },
+    crEmployee: { contact: { contactId: "7055", externalSystemId: "WD1", primaryEmail: "stored@example.com" } },
     createOrUpdateEmployee: async (input) => ({
       operation: "update",
       crContactId: input.existingContactId
@@ -813,8 +832,8 @@ test("[G17] an employee found by the HubSpot record ID is linked and not created
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   assert.equal(calls.upserts.some((item) => !item.existingContactId), false);
-  assert.equal(calls.writebacks.some((item) => item.employee_id === "CR55"), true);
-  assert.equal(result.crContactId, "CR55");
+  assert.equal(calls.writebacks.some((item) => item.employee_id === "7055"), true);
+  assert.equal(result.crContactId, "7055");
   assert.notEqual(result.status, "error");
 });
 
@@ -822,8 +841,8 @@ test("[G17] an employee found by the record ID and the Workday ID under two Cent
   const { deps, calls } = employeeHarness({
     properties: { employee_id: "" },
     findEmployeeByExternalSystemId: async (externalId) => {
-      if (externalId === "HS1") return { found: true, crContactId: "CR1" };
-      if (externalId === "WD1") return { found: true, crContactId: "CR2" };
+      if (externalId === "HS1") return { found: true, crContactId: "7001" };
+      if (externalId === "WD1") return { found: true, crContactId: "7002" };
       return { found: false, crContactId: null };
     }
   });
@@ -837,13 +856,13 @@ test("[G17] an employee not found by either ID is created once", async () => {
   const { deps, calls } = employeeHarness({
     properties: { employee_id: "", workday_id: "WD9" },
     findEmployeeByExternalSystemId: async () => ({ found: false, crContactId: null }),
-    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "CR9" })
+    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "7009" })
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   assert.equal(calls.lookups.includes("HS1"), true);
   assert.equal(calls.lookups.includes("WD9"), true);
   assert.equal(calls.upserts.length, 1);
-  assert.equal(result.crContactId, "CR9");
+  assert.equal(result.crContactId, "7009");
   assert.equal(result.status, "success");
 });
 
@@ -851,7 +870,7 @@ test("[G17] a Workday ID found only in CentralReach, with no HubSpot holder, is 
   const { deps, calls } = employeeHarness({
     properties: { employee_id: "", workday_id: "WD9" },
     findEmployeeByExternalSystemId: async (externalId) => {
-      if (externalId === "WD9") return { found: true, crContactId: "CR70" };
+      if (externalId === "WD9") return { found: true, crContactId: "7070" };
       return { found: false, crContactId: null };
     },
     findHubSpotRecordsByEmployeeId: async () => []
@@ -870,7 +889,7 @@ test("[G17] a Workday ID whose CentralReach employee is already on another HubSp
   const first = employeeHarness({
     properties: { hs_object_id: "HS-A", employee_id: "", workday_id: "SHARED" },
     findEmployeeByExternalSystemId: async () => ({ found: false, crContactId: null }),
-    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "CR-SHARED" })
+    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "7099" })
   });
   await runEmployeeSyncWorkflow({ recordId: "HS-A", employeeType: "bt_rbt" }, first.deps);
 
@@ -878,13 +897,13 @@ test("[G17] a Workday ID whose CentralReach employee is already on another HubSp
     employeeType: "bcba",
     properties: { hs_object_id: "HS-B", employee_id: "", workday_id: "SHARED" },
     findEmployeeByExternalSystemId: async (externalId) => {
-      if (externalId === "SHARED") return { found: true, crContactId: "CR-SHARED" };
+      if (externalId === "SHARED") return { found: true, crContactId: "7099" };
       return { found: false, crContactId: null };
     },
     findHubSpotRecordsByEmployeeId: async () => [{ id: "HS-A", objectType: "bt_rbt" }],
     createOrUpdateEmployee: async (input) => {
       writesToFirstEmployee.push(input);
-      return { operation: "update", crContactId: "CR-SHARED" };
+      return { operation: "update", crContactId: "7099" };
     }
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS-B", employeeType: "bcba" }, second.deps);
@@ -1005,13 +1024,13 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
       const { deps, calls } = employeeHarness({
         employeeType,
         properties: {
-          employee_id: "CR1",
+          employee_id: "7001",
           workday_id: row.workday_id,
           [checklistProperty]: row.checklist
         },
         crEmployee: {
           contact: {
-            contactId: "CR1",
+            contactId: "7001",
             externalSystemId: row.crExternalSystemId,
             primaryEmail: "stored@example.com"
           }
@@ -1037,14 +1056,14 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
       employeeType,
       hash: "same-hash",
       properties: {
-        employee_id: "CR1",
+        employee_id: "7001",
         workday_id: "WD9",
         last_sync_hash: "same-hash",
         [checklistProperty]: CHECKLIST_VALUE
       },
       crEmployee: {
         contact: {
-          contactId: "CR1",
+          contactId: "7001",
           externalSystemId: "HS1",
           primaryEmail: "stored@example.com"
         }
@@ -1230,13 +1249,13 @@ test("[GBR] a linked Case with no change and the real hash ends as noop and is n
 
 for (const employeeType of ["bt_rbt", "bcba"]) {
   const noIdInCentralReach = {
-    contact: { contactId: "CR1", externalSystemId: "", primaryEmail: "stored@example.com" }
+    contact: { contactId: "7001", externalSystemId: "", primaryEmail: "stored@example.com" }
   };
 
   test(`[G17] a linked ${employeeType} with no External System ID in CentralReach and a blank workday_id sends no ID`, async () => {
     const { deps, calls } = employeeHarness({
       employeeType,
-      properties: { employee_id: "CR1", workday_id: "" },
+      properties: { employee_id: "7001", workday_id: "" },
       crEmployee: noIdInCentralReach
     });
     const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType }, deps);
@@ -1251,7 +1270,7 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
   test(`[G17] a linked ${employeeType} with no External System ID in CentralReach sends a filled workday_id`, async () => {
     const { deps, calls } = employeeHarness({
       employeeType,
-      properties: { employee_id: "CR1", workday_id: "WD7" },
+      properties: { employee_id: "7001", workday_id: "WD7" },
       crEmployee: noIdInCentralReach
     });
     const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType }, deps);
@@ -1262,9 +1281,9 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
   test(`[G17] a linked ${employeeType} whose CentralReach ID is another value, with a blank workday_id and no tick, is success`, async () => {
     const { deps, calls } = employeeHarness({
       employeeType,
-      properties: { employee_id: "CR1", workday_id: "" },
+      properties: { employee_id: "7001", workday_id: "" },
       crEmployee: {
-        contact: { contactId: "CR1", externalSystemId: "OTHER", primaryEmail: "stored@example.com" }
+        contact: { contactId: "7001", externalSystemId: "OTHER", primaryEmail: "stored@example.com" }
       }
     });
     const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType }, deps);
@@ -1304,7 +1323,7 @@ test("[GBR] an employee read with its own contact ID is returned", async () => {
 });
 
 test("[GBR] a failed employee read sends nothing to CentralReach", async () => {
-  const { deps, calls } = employeeHarness({ properties: { employee_id: "CR1" } });
+  const { deps, calls } = employeeHarness({ properties: { employee_id: "7001" } });
   deps.getEmployeeByContactId = async () => {
     const failed = new Error("CentralReach employee read could not be read");
     failed.code = "CR_EMPLOYEE_READ_FAILED";
@@ -1323,7 +1342,7 @@ test("[GBR] an employee error decided on purpose keeps the CentralReach ID and t
   const savedHashes = { "metadata.1": "abc" };
   const { deps, calls } = employeeHarness({
     properties: { employee_id: "", last_name: "" },
-    prior: { data: { crContactId: "CR1", fieldHashes: savedHashes } }
+    prior: { data: { crContactId: "7001", fieldHashes: savedHashes } }
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "error");
@@ -1340,10 +1359,10 @@ test("[GBR] an employee error decided on purpose keeps the CentralReach ID and t
 test("[GBR] the employee ID mismatch error keeps the saved field hashes", async () => {
   const savedHashes = { "metadata.1": "abc" };
   const { deps, calls } = employeeHarness({
-    properties: { employee_id: "CR1", workday_id: "WD1" },
-    prior: { data: { crContactId: "CR1", fieldHashes: savedHashes } },
+    properties: { employee_id: "7001", workday_id: "WD1" },
+    prior: { data: { crContactId: "7001", fieldHashes: savedHashes } },
     crEmployee: {
-      contact: { contactId: "CR1", externalSystemId: "OTHER", primaryEmail: "stored@example.com" }
+      contact: { contactId: "7001", externalSystemId: "OTHER", primaryEmail: "stored@example.com" }
     }
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
@@ -1390,14 +1409,14 @@ test("[GBR] the Case ID mismatch error keeps the saved field hashes", async () =
 test("[G17] the CentralReach ID of a new employee is saved before the create lease is released", async () => {
   const { deps, calls } = employeeHarness({
     properties: { employee_id: "", workday_id: "WD9" },
-    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "CR9" })
+    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "7009" })
   });
   // Stage 2 (row 2.1): the CR ID is saved in the one link record (there is no pending_link
   // record any more), so this test marks the link write that carries the CR ID.
   const putState = deps.putState;
   deps.putState = async (input) => {
     await putState(input);
-    if (input.type === "link" && input.data.crContactId === "CR9") {
+    if (input.type === "link" && input.data.crContactId === "7009") {
       calls.events.push("state:link-with-cr-id");
     }
   };
@@ -1419,7 +1438,7 @@ test("[G17] the CentralReach ID of a new employee is saved before the create lea
 test("[G17] when the Cosmos save fails after a create, the CentralReach ID still reaches HubSpot", async () => {
   const { deps, calls } = employeeHarness({
     properties: { employee_id: "", workday_id: "WD9" },
-    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "CR9" })
+    createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "7009" })
   });
   // Stage 2 (row 2.1): the CR ID is saved in the one link record, so the failing write is the
   // first link write that carries the CR ID.
@@ -1435,8 +1454,8 @@ test("[G17] when the Cosmos save fails after a create, the CentralReach ID still
   assert.equal(calls.upserts.length, 1);
   // Stage 2 (decision 1): the failure is retried, so the CR ID reaches HubSpot with no status.
   assert.equal(lastWrite(calls).last_sync_status, undefined);
-  assert.equal(lastWrite(calls).employee_id, "CR9");
-  assert.equal(lastLinkWrite(calls).data.crContactId, "CR9");
+  assert.equal(lastWrite(calls).employee_id, "7009");
+  assert.equal(lastLinkWrite(calls).data.crContactId, "7009");
   assert.equal(lastLinkWrite(calls).ttlSeconds, -1);
 });
 

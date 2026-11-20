@@ -11,19 +11,44 @@ import {
 } from "../lib/centralReachClient.mjs";
 import { acquireLease, createStateClient, getState, putState, releaseLease } from "../lib/cosmosState.mjs";
 import {
+  CHANGE_NOT_FROM_WEBHOOK,
   HubSpotReadError,
   MAPPING_VERSION,
   buildComparableState,
+  changedMetadata,
   changedNamesFromHashes,
   fieldHashes,
   hashMappedState,
+  isBackupPathSource,
   isStateClientUnavailable,
-  metadataClearFieldIds
+  keepOmittedFieldHashes,
+  metadataClearFieldIds,
+  writtenFieldHashes
 } from "../lib/mappedState.mjs";
-import { hashesForContact, saveLinkRecord } from "../lib/linkRecord.mjs";
+import {
+  NO_IN_PROGRESS,
+  NO_PENDING_CREATE,
+  hashesForContact,
+  inProgressFields,
+  inProgressHashesFor,
+  isDigitsOnly,
+  labelFieldsAfterSend,
+  labelPostFromError,
+  labelsPendingFields,
+  labelsPendingFor,
+  lastLabelPostFor,
+  pendingCreateFields,
+  pendingCreateHasTime,
+  pendingCreateIsRecent,
+  pendingCreateStamp,
+  saveLinkRecord,
+  savedHashesForContact
+} from "../lib/linkRecord.mjs";
 import {
   FAILURE_KINDS,
   classifyFailure,
+  createStillPendingError,
+  labelPostUnconfirmedError,
   metadataWriteFailedError,
   permanentFailureReason
 } from "../lib/retry.mjs";
@@ -37,7 +62,7 @@ import { STATE_TYPES } from "../constants/state.mjs";
 import {
   CASE_CLIENT_ID_MISMATCH,
   RETRIES_USED_UP,
-  unreadableDate
+  crIdNotDigits
 } from "../constants/syncReasons.mjs";
 import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
 
@@ -124,6 +149,27 @@ function linkProperties(crContactIdProperty, contactId) {
   };
 }
 
+// Rule 5.2: every status writeback also sets last_sync_at, integration_last_write and
+// updated_by_integration.
+function statusProperties(status, reason) {
+  const now = new Date().toISOString();
+  return {
+    last_sync_status: status,
+    last_sync_error: reason || "",
+    last_sync_at: now,
+    integration_last_write: now,
+    updated_by_integration: true
+  };
+}
+
+// Row 3.7: does HubSpot already show the status and the reason this run would write?
+function statusIsShown(properties, status, reason) {
+  return (
+    String(properties?.last_sync_status ?? "").trim() === status &&
+    String(properties?.last_sync_error ?? "").trim() === String(reason || "").trim()
+  );
+}
+
 // lastAttempt is set by the queue worker when this message has used its five retries.
 export async function runClientSyncWorkflow(
   { dealId, hsLastModifiedDate, source, context, lastAttempt = false },
@@ -149,6 +195,14 @@ export async function runClientSyncWorkflow(
   const digestPayload = dependencies.hashPayload || hashPayload;
   const logger = dependencies.safeLog || safeLog;
   const buildError = dependencies.buildErrorLog || buildErrorLog;
+  // The clock, in milliseconds. Row 3.15 measures the age of a pending create with it.
+  const now = dependencies.now || Date.now;
+  // Row L.3: the wait between the label read-backs. Only a test sets it; otherwise the sender's
+  // own default applies.
+  const labelReadBackOptions =
+    dependencies.labelReadBackDelayMs === undefined
+      ? {}
+      : { labelReadBackDelayMs: dependencies.labelReadBackDelayMs };
 
   const normalizedDealId = ensureDealId(dealId);
   const config = getRuntimeConfig();
@@ -190,6 +244,13 @@ export async function runClientSyncWorkflow(
   // Rule 5.1: a record the gate would skip gets no HubSpot writeback. Until the gate has been
   // checked and passed, a failure writes nothing to HubSpot; the dead-letter alert reports it.
   let gatePassed = false;
+  // Row 3.7: the status and reason HubSpot shows, from the read of this run and then from this
+  // run's own writes. A status HubSpot already shows is not written again: every write moves
+  // hs_lastmodifieddate, and the hourly poller would queue the record again without end.
+  let shown = null;
+  // Contract P.5 (e): true once this run created the client or linked the Case to its own
+  // earlier create. The catch block then saves labelsPending with the CR id.
+  let ownCreate = false;
   try {
     lease = await claimRecordLock(claimLock, {
       pk: "sync-lock:client",
@@ -210,10 +271,6 @@ export async function runClientSyncWorkflow(
     let deal;
     try {
       deal = await fetchDeal(normalizedDealId, propertyList);
-      const confirmed = await fetchDeal(normalizedDealId, propertyList);
-      if (confirmed) {
-        deal = confirmed;
-      }
     } catch (error) {
       const readError = asReadFailure(error, "deal");
       if (readError) {
@@ -222,6 +279,10 @@ export async function runClientSyncWorkflow(
       throw error;
     }
 
+    shown = {
+      last_sync_status: deal?.properties?.last_sync_status,
+      last_sync_error: deal?.properties?.last_sync_error
+    };
     const prior = (await readLink())?.data || {};
     const hubspotContactId = String(deal?.properties?.[crContactIdProperty] || "").trim();
     const existingContactId = hubspotContactId || String(prior.crContactId || "").trim() || null;
@@ -253,33 +314,59 @@ export async function runClientSyncWorkflow(
     }
     gatePassed = true;
 
-    // Row 2.2: the saved hashes count only for the CR id they were synced to. For any other CR
-    // id every field is treated as changed.
-    const savedFieldHashes = hashesForContact(prior, existingContactId);
-    // An error decided on purpose: write the status and finish. The link record is not touched,
-    // so the CR id and the last good field hashes stay as they are.
-    const decidedError = async (reason) => {
+    const writeback = async (properties) => {
       await pushWriteback(
         normalizedDealId,
-        filterWritebackProperties(
-          {
-            last_sync_status: "error",
-            last_sync_at: new Date().toISOString(),
-            last_sync_error: reason,
-            integration_last_write: new Date().toISOString(),
-            updated_by_integration: true
-          },
-          { kind: "client", idProperty: crContactIdProperty }
-        )
+        filterWritebackProperties(properties, { kind: "client", idProperty: crContactIdProperty })
       );
+      if (properties.last_sync_status !== undefined) {
+        shown = {
+          last_sync_status: properties.last_sync_status,
+          last_sync_error: properties.last_sync_error
+        };
+      }
+    };
+    // An error decided on purpose: write the status and finish. The link record is not touched,
+    // so the CR id and the last good field hashes stay as they are. The status is written only
+    // when HubSpot does not show it yet; the CR id and the link when HubSpot lacks them.
+    const decidedError = async (reason) => {
+      const patch = {
+        ...(statusIsShown(shown, "error", reason) ? {} : statusProperties("error", reason)),
+        ...(knownContactId && !hubspotContactId
+          ? linkProperties(crContactIdProperty, knownContactId)
+          : {})
+      };
+      if (Object.keys(patch).length > 0) {
+        await writeback(patch);
+      }
       await saveAttempt(STATE_TYPES.FAIL, { status: "error", errorMessage: reason });
       return {
         ok: true,
         dealId: normalizedDealId,
         status: "error",
-        crContactId: existingContactId
+        crContactId: knownContactId
       };
     };
+
+    // Rule 5.5, row 3.16: a CR ID from HubSpot must be digits only. The value is not used, not
+    // saved and not logged.
+    if (hubspotContactId && !isDigitsOnly(hubspotContactId)) {
+      knownContactId = null;
+      return decidedError(crIdNotDigits(crContactIdProperty));
+    }
+
+    // Rows 2.2 and 3.7: the saved hashes count only for the CR id they were synced to and for
+    // the current mapping version. Otherwise every field is treated as changed.
+    const savedFieldHashes = hashesForContact(prior, existingContactId);
+    // Rule 5.8: what the integration is known to have written to this client. The last clean
+    // copy counts under any mapping version, and so do the hashes of runs that did not finish
+    // clean. This is the basis for a clear and for an omitted field's kept hash, not for
+    // "did anything change".
+    const savedAnyVersion = savedHashesForContact(prior, existingContactId);
+    const writtenBefore = writtenFieldHashes(
+      savedAnyVersion,
+      inProgressHashesFor(prior, existingContactId)
+    );
 
     const mappedPayload = mapPayload({ deal, config });
     const validation = validatePayload(mappedPayload, { linked: Boolean(existingContactId) });
@@ -288,7 +375,11 @@ export async function runClientSyncWorkflow(
     }
     const payload = centralReachPayload(mappedPayload);
 
-    const metadata = mapMetadata({ deal, portalId: portal.portalId });
+    // Contract P.5 (c) in src/mappings/client/buildClientMetadata.mjs: the CentralReach metadata
+    // fields whose input could not be read in this run. No read of this worker fills the list
+    // yet; rows 4.14 and 4.16 add those reads. Both mappings of the run get the same list.
+    const omitFieldIds = [...(dependencies.omitFieldIds || [])];
+    const metadata = mapMetadata({ deal, portalId: portal.portalId, omitFieldIds });
     let includeRelationships = false;
     let relationships = [];
     const bcbaType = config.hubspot.bcbaObjectTypeId;
@@ -331,90 +422,239 @@ export async function runClientSyncWorkflow(
       includeRelationships
     });
     const payloadHash = digestPayload(comparable);
-    const nextFieldHashes = fieldHashes(comparable);
-    const previousFieldHashes = savedFieldHashes;
-    const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
-    const existingHash = deal?.properties?.last_sync_hash || null;
+    // Row 3.18: an omitted field keeps its saved hash and is not a changed field.
+    const nextFieldHashes = keepOmittedFieldHashes(
+      fieldHashes(comparable),
+      savedAnyVersion,
+      omitFieldIds
+    );
+    const changedFields = changedNamesFromHashes(savedFieldHashes, nextFieldHashes);
 
-    // Row 2.4: "nothing changed" needs a clean last run and matching hashes in Cosmos. A matching
-    // last_sync_hash in HubSpot alone is not enough: a run that failed halfway leaves it behind.
-    const cosmosSaysUnchanged =
-      prior.clean === true && Boolean(previousFieldHashes) && changedFields.length === 0;
+    // Rows 2.4 and 3.7: "nothing changed" needs a clean last run and matching hashes in Cosmos,
+    // made with the current mapping version. HubSpot's last_sync_hash is not asked.
+    const lastRunClean = prior.clean === true;
+    const unchanged = lastRunClean && Boolean(savedFieldHashes) && changedFields.length === 0;
 
-    let syncResult;
-    if (existingHash && existingHash === payloadHash && existingContactId && cosmosSaysUnchanged) {
-      syncResult = {
-        operation: "noop",
-        crContactId: String(existingContactId)
+    if (unchanged) {
+      // Row 3.7: no CentralReach call, no confirm read and no Cosmos write. HubSpot is written
+      // only when it does not show what this run would write: the status, or the CR id.
+      const patch = {
+        ...(statusIsShown(shown, "success", "") ? {} : statusProperties("success", "")),
+        ...(hubspotContactId ? {} : linkProperties(crContactIdProperty, existingContactId))
       };
-    } else {
-      if (existingContactId) {
-        const lookup = await findClient(normalizedDealId);
-        const lookedUpId = lookup?.found ? String(lookup.crContactId || "").trim() : "";
-        if (lookup?.found && !lookedUpId) {
-          throw lookupWithoutContactId("client", { status: null, data: null });
-        }
-        if (lookup?.found && lookedUpId !== String(existingContactId)) {
-          return decidedError(CASE_CLIENT_ID_MISMATCH);
-        }
+      if (Object.keys(patch).length > 0) {
+        await writeback(patch);
       }
-      // Row 2.4: in progress before the first CentralReach write of this run.
-      await saveLinkFields({ workflow: "clientSync", portalId: portal.portalId, clean: false });
+      logger("info", "Client sync compared mapped state.", {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source: source || null,
+        mappingVersion: MAPPING_VERSION,
+        outcome: "noop",
+        changedFieldNames: changedFields,
+        invocationId: context?.invocationId || null
+      });
+      return {
+        ok: true,
+        dealId: normalizedDealId,
+        status: "noop",
+        operation: "noop",
+        crContactId: String(existingContactId),
+        changedFieldNames: changedFields,
+        metadataUpdatedCount: 0,
+        metadataFailedCount: 0
+      };
+    }
+
+    if (isBackupPathSource(source) && changedFields.length > 0) {
+      // Row 3.9: field names only, never values.
+      logger("warn", CHANGE_NOT_FROM_WEBHOOK, {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source,
+        changedFieldNames: changedFields,
+        invocationId: context?.invocationId || null
+      });
+    }
+
+    // The CR id the write goes to. null: a create.
+    let targetContactId = existingContactId;
+    // Contract P.5 (f), row 3.14: true only when a lookup of this run found the client under the
+    // CR id the update goes to, so CentralReach is known to hold this Case's External System ID.
+    // The update then sends that ID back; an update that left it out could wipe it.
+    let externalSystemIdHeld = false;
+    if (existingContactId) {
+      const lookup = await findClient(normalizedDealId);
+      const lookedUpId = lookup?.found ? String(lookup.crContactId || "").trim() : "";
+      if (lookup?.found && !lookedUpId) {
+        throw lookupWithoutContactId("client", { status: null, data: null });
+      }
+      if (lookup?.found && lookedUpId !== String(existingContactId)) {
+        return decidedError(CASE_CLIENT_ID_MISMATCH);
+      }
+      externalSystemIdHeld = Boolean(lookup?.found);
+    } else if (String(prior.pendingCreateExternalId || "").trim()) {
+      // Row 3.15: an earlier run sent a create and never saved a CR id. Look that ID up first.
+      // Found: this Case's own client. Not found less than 15 minutes after the create was
+      // sent: CentralReach may not show it yet, so no create; the run is retried. Not found
+      // later: nothing was created, and the create below saves a new marker.
+      const pendingId = String(prior.pendingCreateExternalId).trim();
+      const pending = await findClient(pendingId);
+      const pendingContactId = pending?.found ? String(pending.crContactId || "").trim() : "";
+      if (pending?.found && !pendingContactId) {
+        throw lookupWithoutContactId("client", { status: null, data: null });
+      }
+      if (pendingContactId) {
+        targetContactId = pendingContactId;
+        externalSystemIdHeld = pendingId === normalizedDealId;
+      } else if (pendingCreateIsRecent(prior, now())) {
+        // A marker with no readable time is stamped now; the 15 minutes run from here.
+        if (!pendingCreateHasTime(prior)) {
+          await saveLinkFields(pendingCreateStamp(now()));
+        }
+        throw createStillPendingError();
+      }
+    }
+
+    // Rows 2.4 and 3.15: in progress before the first CentralReach write of this run, and the
+    // ID a create is about to use is saved with the time. If this save fails, nothing is sent.
+    // The run's field hashes are saved too: if it fails halfway, the next run still knows what
+    // may have reached CentralReach (rule 5.8).
+    const creating = !targetContactId;
+    await saveLinkFields({
+      workflow: "clientSync",
+      portalId: portal.portalId,
+      clean: false,
+      ...inProgressFields(
+        writtenFieldHashes(inProgressHashesFor(prior, targetContactId), nextFieldHashes),
+        targetContactId
+      ),
+      ...(creating ? pendingCreateFields(normalizedDealId, now()) : {})
+    });
+    let syncResult;
+    try {
       syncResult = await upsertClient({
         payload,
-        existingContactId
+        existingContactId: targetContactId,
+        ...(externalSystemIdHeld ? { externalSystemIdHeld: true } : {})
       });
-      // A CR id that HubSpot does not hold yet (a create, or a match by external id) is saved
-      // before any later step can fail: first in Cosmos, then on the HubSpot record.
-      if (
-        (syncResult?.operation === "create" || !hubspotContactId) &&
-        syncResult?.crContactId
-      ) {
-        knownContactId = String(syncResult.crContactId);
-        await saveLinkFields({ crContactId: knownContactId });
-        if (!hubspotContactId) {
-          try {
-            await pushWriteback(
-              normalizedDealId,
-              filterWritebackProperties(
-                linkProperties(crContactIdProperty, knownContactId),
-                { kind: "client", idProperty: crContactIdProperty }
-              )
-            );
-          } catch (linkError) {
-            // Not fatal: Cosmos holds the id and the final writeback sends it again.
-            logger(
-              "error",
-              "Client CR id writeback failed after the CentralReach write.",
-              buildError({
-                workflow: "clientSync",
-                stage: "writeLinkAfterUpsert",
-                error: linkError,
-                recordId: normalizedDealId
-              })
-            );
-          }
+    } catch (error) {
+      // Nothing is pending when no create can have reached CentralReach: it said no (a permanent
+      // failure), or the lookup inside createOrUpdateClient failed before any create was sent
+      // (CR_LOOKUP_UNKNOWN, CR_LOOKUP_UNREADABLE). An unknown create outcome and an error with
+      // no code keep the marker.
+      const createNotSent =
+        classifyFailure(error) === FAILURE_KINDS.PERMANENT ||
+        error?.code === "CR_LOOKUP_UNKNOWN" ||
+        error?.code === "CR_LOOKUP_UNREADABLE";
+      if (creating && createNotSent) {
+        await saveLinkFields(NO_PENDING_CREATE);
+      }
+      throw error;
+    }
+
+    // Row L.3: a label POST that failed with a timeout or a 5xx may still have been applied. The
+    // sender attaches it to the error; it is saved, and the caller rethrows the same error. If
+    // the save fails, that is logged and the label error still stands.
+    const saveLabelPostOf = async (error) => {
+      const changes = labelPostFromError(error);
+      if (Object.keys(changes).length === 0) {
+        return;
+      }
+      try {
+        await saveLinkFields(changes);
+      } catch (stateError) {
+        logger(
+          "error",
+          "Client label POST could not be saved after a failed label step.",
+          buildError({
+            workflow: "clientSync",
+            stage: "saveLabelPostAfterFailure",
+            error: stateError,
+            recordId: normalizedDealId
+          })
+        );
+      }
+    };
+
+    // Contract P.5 (e): a contact the integration created, or its own earlier create that this
+    // run linked to, may show an empty label read until a label read confirms its labels.
+    let labelsPending = labelsPendingFor(prior, existingContactId);
+    // A CR id that HubSpot does not hold yet (a create, or a match by external id) is saved
+    // before any later step can fail: first in Cosmos, then on the HubSpot record.
+    if ((syncResult?.operation === "create" || !hubspotContactId) && syncResult?.crContactId) {
+      knownContactId = String(syncResult.crContactId);
+      if (!existingContactId) {
+        labelsPending = true;
+        // Set first: if the save below fails, the catch block still saves labelsPending.
+        ownCreate = true;
+      }
+      await saveLinkFields({
+        crContactId: knownContactId,
+        inProgressContactId: knownContactId,
+        ...NO_PENDING_CREATE,
+        ...(existingContactId ? {} : labelsPendingFields(knownContactId))
+      });
+      if (!hubspotContactId) {
+        try {
+          await writeback(linkProperties(crContactIdProperty, knownContactId));
+        } catch (linkError) {
+          // Not fatal: Cosmos holds the id and the final writeback sends it again.
+          logger(
+            "error",
+            "Client CR id writeback failed after the CentralReach write.",
+            buildError({
+              workflow: "clientSync",
+              stage: "writeLinkAfterUpsert",
+              error: linkError,
+              recordId: normalizedDealId
+            })
+          );
         }
       }
     }
 
     let metadataSyncSummary = null;
-    if (syncResult.operation !== "noop" && syncResult.crContactId) {
-      const clearFieldIds = metadataClearFieldIds(previousFieldHashes, metadata.metadataValues);
-      // Contract P.5 (e) in src/lib/centralReachClient.mjs. Row L.3 saves lastLabelPost.
-      metadataSyncSummary = await pushMetadata(
-        syncResult.crContactId,
-        metadata.metadataValues,
-        {
-          labelIds: requiredLabels(metadata),
-          managedLabelIds: metadata.managedLabelIds ?? [],
-          lastLabelPost: prior.lastLabelPost ?? null,
-          contactCreatedThisRun: syncResult.operation === "create",
-          clearFieldIds
-        }
-      );
+    if (syncResult.crContactId) {
+      const clearFieldIds = metadataClearFieldIds(writtenBefore, metadata.metadataValues);
+      // Row 3.8: only the changed fields are sent; all of them when there is no saved copy or
+      // the last run was not clean. Contract P.5 (e) in src/lib/centralReachClient.mjs.
+      try {
+        metadataSyncSummary = await pushMetadata(
+          syncResult.crContactId,
+          changedMetadata(
+            metadata.metadataValues,
+            lastRunClean ? savedFieldHashes : null,
+            nextFieldHashes
+          ),
+          {
+            labelIds: requiredLabels(metadata),
+            managedLabelIds: metadata.managedLabelIds ?? [],
+            lastLabelPost: lastLabelPostFor(prior, syncResult.crContactId),
+            contactCreatedThisRun: labelsPending,
+            clearFieldIds,
+            ...labelReadBackOptions
+          }
+        );
+      } catch (error) {
+        await saveLabelPostOf(error);
+        throw error;
+      }
+      // Row L.3: a label POST is saved before anything else can end the run, also before the
+      // throw for a failed metadata field.
+      const labelChanges = labelFieldsAfterSend({
+        labelResult: metadataSyncSummary?.labelResult,
+        contactId: syncResult.crContactId,
+        labelsPending
+      });
+      if (Object.keys(labelChanges).length > 0) {
+        await saveLinkFields(labelChanges);
+      }
       if ((metadataSyncSummary?.failedCount || 0) > 0) {
         throw metadataWriteFailedError(metadataSyncSummary);
+      }
+      if (metadataSyncSummary?.labelResult?.confirmed === false) {
+        throw labelPostUnconfirmedError();
       }
     }
 
@@ -429,7 +669,11 @@ export async function runClientSyncWorkflow(
       throw error;
     }
     const confirmedPayload = centralReachPayload(mapPayload({ deal: confirmedDeal, config }));
-    const confirmedMetadata = mapMetadata({ deal: confirmedDeal, portalId: portal.portalId });
+    const confirmedMetadata = mapMetadata({
+      deal: confirmedDeal,
+      portalId: portal.portalId,
+      omitFieldIds
+    });
     const confirmedHash = digestPayload(
       buildComparableState({
         core: confirmedPayload,
@@ -445,7 +689,7 @@ export async function runClientSyncWorkflow(
       throw stale;
     }
 
-    const status = syncResult.operation === "noop" ? "noop" : "success";
+    const status = "success";
     logger("info", "Client sync compared mapped state.", {
       workflow: "clientSync",
       recordId: normalizedDealId,
@@ -456,37 +700,27 @@ export async function runClientSyncWorkflow(
       invocationId: context?.invocationId || null
     });
 
-    await pushWriteback(
-      normalizedDealId,
-      filterWritebackProperties(
-        {
-          updated_by_integration: true,
-          integration_last_write: new Date().toISOString(),
-          last_sync_at: new Date().toISOString(),
-          last_sync_status: status,
-          last_sync_error: "",
-          last_sync_hash: payloadHash,
-          ...linkProperties(crContactIdProperty, syncResult.crContactId)
-        },
-        { kind: "client", idProperty: crContactIdProperty }
-      )
-    );
+    await writeback({
+      ...statusProperties(status, ""),
+      last_sync_hash: payloadHash,
+      ...linkProperties(crContactIdProperty, syncResult.crContactId)
+    });
 
     // Every CentralReach write of this run succeeded, so the run is clean and its hashes are
-    // saved. A no-op changed nothing, so the link record is left as it is.
-    if (syncResult.operation !== "noop") {
-      await saveLinkFields({
-        workflow: "clientSync",
-        portalId: portal.portalId,
-        crContactId: syncResult.crContactId || null,
-        externalSystemId: normalizedDealId,
-        payloadHash,
-        fieldHashes: nextFieldHashes,
-        hashesContactId: syncResult.crContactId || null,
-        mappingVersion: MAPPING_VERSION,
-        clean: true
-      });
-    }
+    // saved.
+    await saveLinkFields({
+      workflow: "clientSync",
+      portalId: portal.portalId,
+      crContactId: syncResult.crContactId || null,
+      externalSystemId: normalizedDealId,
+      payloadHash,
+      fieldHashes: nextFieldHashes,
+      hashesContactId: syncResult.crContactId || null,
+      mappingVersion: MAPPING_VERSION,
+      ...NO_PENDING_CREATE,
+      ...NO_IN_PROGRESS,
+      clean: true
+    });
     await saveAttempt(STATE_TYPES.SUCCESS, {
       status,
       operation: syncResult.operation,
@@ -533,15 +767,11 @@ export async function runClientSyncWorkflow(
     }
 
     // The CR id goes to HubSpot when HubSpot does not hold it yet, with or without a status.
+    // Row 3.7: a status and reason HubSpot already shows are not written again.
+    const errorReason = permanent ? permanentFailureReason(error) : RETRIES_USED_UP;
     const errorPatch = {
-      ...(permanent || lastAttempt
-        ? {
-            last_sync_at: new Date().toISOString(),
-            last_sync_status: "error",
-            last_sync_error: permanent ? permanentFailureReason(error) : RETRIES_USED_UP,
-            integration_last_write: new Date().toISOString(),
-            updated_by_integration: true
-          }
+      ...((permanent || lastAttempt) && !statusIsShown(shown, "error", errorReason)
+        ? statusProperties("error", errorReason)
         : {}),
       ...(knownContactId && !hubspotHasContactId
         ? linkProperties(crContactIdProperty, knownContactId)
@@ -574,7 +804,18 @@ export async function runClientSyncWorkflow(
     if (lease) {
       try {
         if (knownContactId) {
-          await saveLinkFields({ crContactId: knownContactId });
+          // A client this run created keeps its labelsPending fields and loses its pending
+          // marker, also when the save right after the create was the step that failed.
+          await saveLinkFields({
+            crContactId: knownContactId,
+            ...(ownCreate
+              ? {
+                  ...labelsPendingFields(knownContactId),
+                  inProgressContactId: knownContactId,
+                  ...NO_PENDING_CREATE
+                }
+              : {})
+          });
         }
         await saveAttempt(STATE_TYPES.FAIL, {
           status: "error",
