@@ -131,7 +131,8 @@ test("[P.3] every label constant a mapper can name is in the sendable list", () 
   }
 });
 
-test("[P.3] every label today's mappers return is in the sendable list", () => {
+// Changed in Stage 5 (rows 5.4 and 5.11): the employee Work State is read from `location`.
+test("[BR19][P.3] every label today's mappers return is in the sendable list", () => {
   const config = {
     hubspot: {
       hubspotPortalId: "52311591",
@@ -148,7 +149,7 @@ test("[P.3] every label today's mappers return is in the sendable list", () => {
     for (const btRbtType of ["BT", "RBT", ""]) {
       returned.push(
         ...buildEmployeePayload({
-          record: { id: "1", properties: { hs_object_id: "1", location_home: location, bt_rbt_type: btRbtType } },
+          record: { id: "1", properties: { hs_object_id: "1", location, bt_rbt_type: btRbtType } },
           employeeType: "bt_rbt",
           config
         }).requiredLabelIds
@@ -156,7 +157,7 @@ test("[P.3] every label today's mappers return is in the sendable list", () => {
     }
     returned.push(
       ...buildEmployeePayload({
-        record: { id: "1", properties: { hs_object_id: "1", home_state: location } },
+        record: { id: "1", properties: { hs_object_id: "1", location } },
         employeeType: "bcba",
         config
       }).requiredLabelIds

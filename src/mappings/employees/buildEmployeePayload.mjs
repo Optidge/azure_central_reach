@@ -141,48 +141,139 @@ function buildMissingPortalWarning() {
   };
 }
 
-function requiredBtRbtLabels({ btRbtType, stateCode }) {
-  const labels = [CENTRAL_REACH_EMPLOYEE_LABELS.ALL_EMPLOYEES];
-  if (stateCode === "NY") {
-    labels.push(
-      CENTRAL_REACH_EMPLOYEE_LABELS.BT_NY,
-      CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL,
-      CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE
-    );
-    if (btRbtType === "RBT") {
-      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_NY);
-    }
-  }
-  if (stateCode === "CO") {
-    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL, CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE);
-    if (btRbtType === "BT" || btRbtType === "RBT") {
-      labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.RBT_CO);
-    }
-  }
-  return labels;
+// A HubSpot multi-checkbox stores its ticked options joined by ";".
+function multiCheckboxValues(value) {
+  return String(value ?? "")
+    .split(";")
+    .map((option) => option.trim())
+    .filter(Boolean);
 }
 
-function requiredBcbaLabels({ stateCode }) {
-  const labels = [
+// Contract P.5 (d). The Work State(s) options of HubSpot `location` that have a code today.
+// New Mexico and Virginia have no HubSpot value yet, so they are not here (BL3, TL2; O-6).
+const WORK_STATE_CODES = {
+  Colorado: "CO",
+  "New Jersey": "NJ",
+  "New York": "NY"
+};
+
+// One state label per Work State (BL2, TL1).
+const STATE_LABELS = {
+  CO: CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE,
+  NJ: CENTRAL_REACH_EMPLOYEE_LABELS.NJ_EMPLOYEE,
+  NY: CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE
+};
+
+// TL3, row 5.12: bt_rbt_type by Work State. A BT gets Behavior Technician, an RBT gets RBT.
+const ROLE_LABELS = {
+  BT: {
+    CO: CENTRAL_REACH_EMPLOYEE_LABELS.BT_CO,
+    NJ: CENTRAL_REACH_EMPLOYEE_LABELS.BT_NJ,
+    NY: CENTRAL_REACH_EMPLOYEE_LABELS.BT_NY
+  },
+  RBT: {
+    CO: CENTRAL_REACH_EMPLOYEE_LABELS.RBT_CO,
+    NJ: CENTRAL_REACH_EMPLOYEE_LABELS.RBT_NJ,
+    NY: CENTRAL_REACH_EMPLOYEE_LABELS.RBT_NY
+  }
+};
+
+// The labels the integration manages for a BT/RBT or a BCBA. A managed label that is not required
+// is removed (rule 5.6). The base labels (All Employees, Clinical, the BCBA header) are never in
+// these lists.
+const ALL_ROLE_LABEL_IDS = Object.freeze([
+  ...Object.values(ROLE_LABELS.BT),
+  ...Object.values(ROLE_LABELS.RBT)
+]);
+
+// Decision 35 (row 5.12): the six role labels are managed only when bt_rbt_type is BT or RBT.
+// A type that is blank, or any other value (production also has "BT to RBT"), manages no role
+// label, so a role label the person already holds in CentralReach is left alone. The state
+// labels are always managed.
+function managedBtRbtLabels(btRbtType) {
+  const stateLabelIds = Object.values(STATE_LABELS);
+  return Object.hasOwn(ROLE_LABELS, btRbtType ?? "")
+    ? [...stateLabelIds, ...ALL_ROLE_LABEL_IDS]
+    : stateLabelIds;
+}
+
+const BCBA_MANAGED_LABEL_IDS = Object.freeze([
+  ...Object.values(STATE_LABELS),
+  CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_COLORADO,
+  CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NJ,
+  CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NY,
+  CENTRAL_REACH_EMPLOYEE_LABELS.GRAD_STUDENT_LBA_NY,
+  CENTRAL_REACH_EMPLOYEE_LABELS.NY_MEDICAID,
+  CENTRAL_REACH_EMPLOYEE_LABELS.SALARIED,
+  CENTRAL_REACH_EMPLOYEE_LABELS.BILLING_HOLD_MEDICAID_AFFILIATION
+]);
+
+// Reads `location` into state codes, sorted, with no duplicates. An option with no code is left
+// out and reported, by property name only.
+function readWorkStates(properties) {
+  const options = multiCheckboxValues(properties.location);
+  const codes = options
+    .filter((option) => Object.hasOwn(WORK_STATE_CODES, option))
+    .map((option) => WORK_STATE_CODES[option]);
+  const warnings = [];
+  if (codes.length < options.length) {
+    warnings.push({
+      code: "unmapped_work_state",
+      message:
+        "location holds a Work State option with no CentralReach mapping; no state label is sent for it."
+    });
+  }
+  return { workStates: [...new Set(codes)].sort(), warnings };
+}
+
+function requiredBtRbtLabels({ btRbtType, workStates }) {
+  const roleLabels = Object.hasOwn(ROLE_LABELS, btRbtType ?? "") ? ROLE_LABELS[btRbtType] : {};
+  return [
+    CENTRAL_REACH_EMPLOYEE_LABELS.ALL_EMPLOYEES,
+    CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL,
+    ...workStates.map((code) => STATE_LABELS[code]),
+    ...workStates.map((code) => roleLabels[code])
+  ].filter(Boolean);
+}
+
+function requiredBcbaLabels({ properties, workStates }) {
+  const assignStates = multiCheckboxValues(properties.assign_states);
+  const lbaLicensure = trimOrNull(properties.lba_licensure__ny);
+  return [
     CENTRAL_REACH_EMPLOYEE_LABELS.ALL_EMPLOYEES,
     CENTRAL_REACH_EMPLOYEE_LABELS.BCBA,
-    CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL
-  ];
-  if (stateCode === "NY") {
-    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.NY_EMPLOYEE);
-  }
-  if (stateCode === "CO") {
-    labels.push(CENTRAL_REACH_EMPLOYEE_LABELS.CO_EMPLOYEE);
-  }
-  return labels;
+    CENTRAL_REACH_EMPLOYEE_LABELS.CLINICAL,
+    ...workStates.map((code) => STATE_LABELS[code]),
+    // BL4, row 5.5. lba_licensure__ny "No" (shown as "Will Apply") gets no label.
+    assignStates.includes("Assign CO") && CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_COLORADO,
+    assignStates.includes("Assign NJ") && CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NJ,
+    lbaLicensure === "Yes" && CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NY,
+    lbaLicensure === "Grad Permit" && CENTRAL_REACH_EMPLOYEE_LABELS.GRAD_STUDENT_LBA_NY,
+    // BL5, row 5.6. The other credential options have no documented label (BL6) and send nothing.
+    multiCheckboxValues(properties.ny_insurance_labels).includes("MCD FFS-NY") &&
+      CENTRAL_REACH_EMPLOYEE_LABELS.NY_MEDICAID,
+    // B10, row 5.7.
+    trimOrNull(properties.work_status) === "Salaried" && CENTRAL_REACH_EMPLOYEE_LABELS.SALARIED,
+    // BL7, row 5.8.
+    trimOrNull(properties.cr_billing_hold_label) === "Yes" &&
+      CENTRAL_REACH_EMPLOYEE_LABELS.BILLING_HOLD_MEDICAID_AFFILIATION
+  ].filter(Boolean);
 }
 
 function buildBtRbtPayload({ record, config }) {
   const properties = record?.properties || {};
   const recordId = properties.hs_object_id || record?.id;
   const dateFields = employeeDateFields(properties);
-  const stateCode = normalizeStateCode(properties.location_home);
+  // T4, row 5.9: the mailing state is state_home. The Work States (`location`) drive the labels.
+  const stateCode = normalizeStateCode(properties.state_home);
+  const { workStates, warnings } = readWorkStates(properties);
   const btRbtType = String(properties.bt_rbt_type || "").trim().toUpperCase() || null;
+  if (btRbtType && !Object.hasOwn(ROLE_LABELS, btRbtType)) {
+    warnings.push({
+      code: "unmapped_bt_rbt_type",
+      message: "bt_rbt_type holds a value that is not BT or RBT; no role label is sent or removed."
+    });
+  }
 
   const employeePayload = {
     externalSystemId: externalSystemIdForCreate(properties, recordId),
@@ -192,15 +283,21 @@ function buildBtRbtPayload({ record, config }) {
     dateOfBirth: dateFields.dateOfBirth,
     primaryEmail: cleanEmail(properties.email),
     addressLine1: trimOrNull(properties.street_home),
+    // T5: home_apt stays as line 2 until O-20 is decided.
     addressLine2: trimOrNull(properties.home_apt),
     city: trimOrNull(properties.location_city),
     stateProvince: stateCode,
-    zipPostalCode: trimOrNull(properties.postal_code_home) || trimOrNull(properties.postal_code),
+    zipPostalCode: trimOrNull(properties.postal_code_home),
     phoneCell: normalizePhone(properties.employee_phone)
   };
 
+  // T6, row 5.10: "street, apartment, city, state zip".
   const workAddress = [
-    [trimOrNull(properties.street_address__work_), trimOrNull(properties.city__work_)]
+    [
+      trimOrNull(properties.street_address__work_),
+      trimOrNull(properties.apartment__work),
+      trimOrNull(properties.city__work_)
+    ]
       .filter(Boolean)
       .join(", "),
     [trimOrNull(properties.state__work_), trimOrNull(properties.postal_code__work_)]
@@ -217,7 +314,6 @@ function buildBtRbtPayload({ record, config }) {
   });
 
   const metadataValues = {};
-  const warnings = [];
   if (workAddress) {
     metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS] = workAddress;
   }
@@ -237,9 +333,9 @@ function buildBtRbtPayload({ record, config }) {
     employeePayload,
     metadataValues,
     warnings,
-    requiredLabelIds: requiredBtRbtLabels({ btRbtType, stateCode }),
-    managedLabelIds: [],
-    workStates: [],
+    requiredLabelIds: requiredBtRbtLabels({ btRbtType, workStates }),
+    managedLabelIds: managedBtRbtLabels(btRbtType),
+    workStates,
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
     emailField: "email",
@@ -251,18 +347,24 @@ function buildBcbaPayload({ record, config }) {
   const properties = record?.properties || {};
   const recordId = properties.hs_object_id || record?.id;
   const dateFields = employeeDateFields(properties);
-  const stateCode = normalizeStateCode(properties.home_state);
+  // B7, row 5.2: the mailing address reads the Contact mirrors. The Work States (`location`) drive
+  // the labels.
+  const stateCode = normalizeStateCode(properties.state_home);
+  const { workStates, warnings } = readWorkStates(properties);
 
   const employeePayload = {
     externalSystemId: externalSystemIdForCreate(properties, recordId),
     firstName: trimOrNull(properties.first_name),
     lastName: trimOrNull(properties.last_name),
+    // B6, row 5.1: gender_new, never the archived gender.
+    gender: mapGender(properties.gender_new),
     dateOfBirth: dateFields.dateOfBirth,
     primaryEmail: cleanEmail(properties.ucaba_email_address),
     addressLine1: trimOrNull(properties.address),
-    addressLine2: trimOrNull(properties.home_apt),
-    city: trimOrNull(properties.city_work),
+    addressLine2: trimOrNull(properties.apartment__home),
+    city: trimOrNull(properties.city_home),
     stateProvince: stateCode,
+    zipPostalCode: trimOrNull(properties.postal_code_home),
     phoneCell: normalizePhone(properties.employee_phone)
   };
 
@@ -282,12 +384,8 @@ function buildBcbaPayload({ record, config }) {
     ),
     [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO]: trimOrNull(
       properties.medicaid_id__co
-    ),
-    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY]: trimOrNull(
-      properties.credentialed_insurances__ny
     )
   };
-  const warnings = [];
 
   if (hubspotRecordUrl) {
     metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD] =
@@ -300,9 +398,9 @@ function buildBcbaPayload({ record, config }) {
     employeePayload,
     metadataValues,
     warnings,
-    requiredLabelIds: requiredBcbaLabels({ stateCode }),
-    managedLabelIds: [],
-    workStates: [],
+    requiredLabelIds: requiredBcbaLabels({ properties, workStates }),
+    managedLabelIds: [...BCBA_MANAGED_LABEL_IDS],
+    workStates,
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BCBA,
     emailField: "ucaba_email_address",
@@ -312,18 +410,21 @@ function buildBcbaPayload({ record, config }) {
 
 // CONTRACT P.5 (a): labels. Every mapper returns two lists of CentralReach label IDs (rule 5.6).
 //   requiredLabelIds  the labels the record must hold now. The base labels are always in it.
-//   managedLabelIds   every label the integration maps for this kind of record, required now or
-//                     not. Empty until Stage 5 fills it (rows 5.4 to 5.8, 5.11, 5.12).
+//   managedLabelIds   the labels the integration manages for this record, required now or not
+//                     (rows 5.4 to 5.8, 5.11, 5.12). For a BCBA the list is fixed. For a BT/RBT
+//                     it always holds the three state labels, and holds the six role labels only
+//                     when bt_rbt_type is BT or RBT (decision 35): with a blank or any other type
+//                     no role label is required or removed, and a non-blank one adds the warning
+//                     unmapped_bt_rbt_type, which names the property, never the value.
 // The worker passes both to the label sender (contract (e) in src/lib/centralReachClient.mjs).
-// The sender posts: what CentralReach holds, minus managed, plus required. With an empty managed
-// list nothing is ever removed. Every ID in requiredLabelIds must be in
-// CENTRAL_REACH_SENDABLE_LABEL_IDS (src/constants/centralReach.mjs). A remove-only ID may be in
-// managedLabelIds and never in requiredLabelIds.
+// The sender posts: what CentralReach holds, minus managed, plus required. Every ID in
+// requiredLabelIds must be in CENTRAL_REACH_SENDABLE_LABEL_IDS (src/constants/centralReach.mjs).
+// A remove-only ID may be in managedLabelIds and never in requiredLabelIds.
 //
 // CONTRACT P.5 (d): work states and the contact form (rule 5.9, row 5.13).
 //   workStates  the record's Work State(s) from HubSpot `location`, as upper-case two-letter
 //               state codes with no duplicates, for example ["CO", "NY"]. Empty when `location`
-//               is blank. Empty until row 5.13 fills it. Returned for BT/RBT and for BCBA.
+//               is blank. Returned for BT/RBT and for BCBA.
 //               Only Colorado, New Jersey and New York have a code today. Any other `location`
 //               option is left out of workStates, and the mapper adds a warning that names the
 //               property, never the value. It is not an error: the record still syncs, gets no

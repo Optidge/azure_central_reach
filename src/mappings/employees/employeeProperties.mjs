@@ -29,21 +29,23 @@ export const BT_RBT_PROPERTIES = Object.freeze({
     "date_of_birth",
     "gender",
     "email",
+    // Mailing address and phone (T4, T5)
     "street_home",
     "home_apt",
     "location_city",
-    "location_home",
-    "postal_code",
+    "state_home",
     "postal_code_home",
     "employee_phone",
+    // Work State(s) and type: state labels, role labels and the contact form (TL1, TL3, T1)
+    "location",
     "bt_rbt_type",
     "active_cases_count",
+    // Work address (T6)
     "street_address__work_",
+    "apartment__work",
     "city__work_",
     "state__work_",
-    "postal_code__work_",
-    // Requested today, but the mapper does not read it. It stays so that P.1 changes no request.
-    "bt_name"
+    "postal_code__work_"
   ]),
   signalOnly: Object.freeze([]),
   mustTrigger: Object.freeze([EMPLOYEE_ENTRY_PROPERTY, BT_RBT_CHECKLIST_PROPERTY]),
@@ -68,21 +70,28 @@ export const BCBA_PROPERTIES = Object.freeze({
     "first_name",
     "last_name",
     "date_of_birth",
+    "gender_new",
+    // Personal email (B9). Read from the BCBA record until row 6.4 reads the BCBA's Contact.
     "email",
     "ucaba_email_address",
+    // Mailing address and phone: read-only Contact mirrors (B7)
     "address",
-    "home_apt",
-    "city_work",
-    "home_state",
+    "apartment__home",
+    "city_home",
+    "state_home",
+    "postal_code_home",
     "employee_phone",
     "medicaid_id__ny",
     "medicaid_id__nj",
     "medicaid_id__co",
-    "credentialed_insurances__ny",
-    // Requested today, but the mapper reads neither. They stay so that P.1 changes no request.
-    // Row 5.3 stops requesting work_email.
-    "bcba_name",
-    "work_email"
+    // Labels: Work State(s) (BL2), assignment and licensure (BL4), NY Medicaid (BL5),
+    // Salaried (B10), Billing Hold (BL7)
+    "location",
+    "assign_states",
+    "lba_licensure__ny",
+    "ny_insurance_labels",
+    "work_status",
+    "cr_billing_hold_label"
   ]),
   signalOnly: Object.freeze([]),
   mustTrigger: Object.freeze([EMPLOYEE_ENTRY_PROPERTY, BCBA_CHECKLIST_PROPERTY]),
@@ -127,7 +136,6 @@ export function knownMetadataFieldIds(employeeType) {
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NJ,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CREDENTIALED_WITH_MEDICAID_NY,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
   ];
 }

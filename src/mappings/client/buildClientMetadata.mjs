@@ -1,7 +1,10 @@
 import {
   CENTRAL_REACH_CLIENT_LABELS,
-  CENTRAL_REACH_CLIENT_METADATA_FIELDS
+  CENTRAL_REACH_CLIENT_METADATA_FIELDS,
+  CENTRAL_REACH_CLIENT_STAFFING_LABELS,
+  CENTRAL_REACH_REMOVE_ONLY_LABEL_IDS
 } from "../../constants/centralReach.mjs";
+import { readDate } from "../../lib/dates.mjs";
 
 function toTrimmedOrNull(value) {
   if (value === undefined || value === null) {
@@ -16,126 +19,211 @@ function joinMetadataParts(parts) {
   return clean.length ? clean.join(", ") : null;
 }
 
-function hsDateToIsoOrNull(value) {
-  if (value === undefined || value === null || String(value).trim() === "") {
-    return null;
-  }
-
-  const asNumber = Number(value);
-  if (Number.isFinite(asNumber) && asNumber > 0) {
-    const fromEpoch = new Date(asNumber);
-    return Number.isNaN(fromEpoch.getTime()) ? null : fromEpoch.toISOString();
-  }
-
-  const asDate = new Date(value);
-  return Number.isNaN(asDate.getTime()) ? null : asDate.toISOString();
-}
+// Rule 5.7. A HubSpot date for a CentralReach metadata text field: MM/DD/YYYY, null when blank,
+// UNREADABLE when it is filled and is not a real date. An unreadable date is never a blank.
+const UNREADABLE = Symbol("unreadable date");
 
 function toMetadataDate(value) {
-  const iso = hsDateToIsoOrNull(value);
-  if (!iso) {
+  const read = readDate(value);
+  if (read === "blank") {
     return null;
   }
-
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) {
-    return null;
+  if (read === "unreadable") {
+    return UNREADABLE;
   }
-
-  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(date.getUTCDate()).padStart(2, "0");
-  const yyyy = String(date.getUTCFullYear());
+  const [yyyy, mm, dd] = read.split("-");
   return `${mm}/${dd}/${yyyy}`;
 }
 
-function getCurrentInsuranceMetaValue(dealProps) {
-  const primary = toTrimmedOrNull(dealProps.insurance_primary);
-  const otherSummary = toTrimmedOrNull(dealProps.insurance_1__other__summary);
+// The carrier, or the "Other" summary when the carrier is Other (C29 primary, C30 secondary).
+function insuranceCarrier(carrierValue, otherSummaryValue) {
+  const carrier = toTrimmedOrNull(carrierValue);
+  const otherSummary = toTrimmedOrNull(otherSummaryValue);
 
-  if (primary && primary.toLowerCase() === "other") {
+  if (carrier && carrier.toLowerCase() === "other") {
     return otherSummary || "Other";
   }
 
-  return primary || otherSummary || null;
+  return carrier || otherSummary || null;
 }
 
-function getInsuranceIdForMetaField(dealProps, slotIndex) {
-  return toTrimmedOrNull(dealProps[`insurance_id_${slotIndex}`]);
-}
+// C31, row 4.23 (decision 32). The six stored values of n1_what_type_of_insurance, read from the
+// sandbox on 2026-11-20. Every Medicaid type uses the Medicaid pair. "Unsure", blank or any other
+// value sends a blank field.
+const MEDICAID_INSURANCE_TYPES = ["medicaid ffs", "medicaid ffs - nj", "medicaid ffs - co"];
+const COMMERCIAL_INSURANCE_TYPES = ["commercial enrolled", "commercial oon"];
 
 function getPhysicianCredentialsByInsuranceType(dealProps) {
   const insuranceType = toTrimmedOrNull(dealProps.n1_what_type_of_insurance)?.toLowerCase();
-  if (insuranceType === "medicaid ffs") {
+  if (MEDICAID_INSURANCE_TYPES.includes(insuranceType)) {
     return joinMetadataParts([dealProps.physician_name, dealProps.npi_number]);
   }
 
-  if (insuranceType === "commercial enrolled" || insuranceType === "commercial oon") {
+  if (COMMERCIAL_INSURANCE_TYPES.includes(insuranceType)) {
     return joinMetadataParts([dealProps.physician_name__commercial, dealProps.npi_number__commercial]);
   }
 
   return null;
 }
 
-function getAsdDiagnosisDateByInsuranceType(dealProps) {
-  const insuranceType = toTrimmedOrNull(dealProps.n1_what_type_of_insurance)?.toLowerCase();
-  if (insuranceType === "medicaid ffs") {
-    return toMetadataDate(dealProps.most_recent_asd_diagnosis_date_medicaid);
+// C23, row 4.8. start and end are the two dates as toMetadataDate read them. One unreadable date
+// makes the whole field unreadable.
+function getAuthPeriodValue(start, end) {
+  if (start === UNREADABLE || end === UNREADABLE) {
+    return UNREADABLE;
   }
-
-  if (insuranceType === "commercial enrolled" || insuranceType === "commercial oon") {
-    return toMetadataDate(dealProps.most_recent_asd_diagnosis_date_1);
-  }
-
-  return null;
-}
-
-function getSecondaryAsdDiagnosisDateByInsuranceType(dealProps) {
-  const insuranceType = toTrimmedOrNull(dealProps.n2_what_type_of_insurance)?.toLowerCase();
-  if (insuranceType === "medicaid ffs") {
-    return toMetadataDate(dealProps.most_recent_asd_diagnosis_date_medicaid);
-  }
-
-  if (insuranceType === "commercial enrolled" || insuranceType === "commercial oon") {
-    return toMetadataDate(dealProps.most_recent_asd_diagnosis_date_2);
-  }
-
-  return null;
-}
-
-function getAuthPeriodValue(dealProps) {
-  const start = toMetadataDate(dealProps.auth_start_date);
-  const end = toMetadataDate(dealProps.auth_end_date);
   if (start && end) {
     return `${start} - ${end}`;
   }
   return start || end || null;
 }
 
-function normalizeClientStateForLabel(stateValue) {
-  const normalized = String(stateValue || "").trim().toLowerCase();
-  if (!normalized) {
-    return null;
+// C22, row 4.7. initial_auth_tracks chooses the source. Blank or any other track: blank.
+function getApprovedAuthHours(dealProps) {
+  const track = toTrimmedOrNull(dealProps.initial_auth_tracks);
+  if (track === "Prior Authorization Required") {
+    return toTrimmedOrNull(dealProps.n97153_approved_assessment_hours_auth_req);
   }
-  if (normalized === "ny" || normalized === "new york") {
-    return "NY";
-  }
-  if (normalized === "co" || normalized === "colorado") {
-    return "CO";
+  if (track === "No Prior Authorization Required") {
+    return toTrimmedOrNull(dealProps.ia_hours_from_the_ia);
   }
   return null;
 }
 
-function requiredClientLabelIdsForState(stateValue) {
-  const normalizedState = normalizeClientStateForLabel(stateValue);
-  const labelIds = [CENTRAL_REACH_CLIENT_LABELS.ALL_CLIENTS];
-  if (normalizedState === "NY") {
-    labelIds.push(CENTRAL_REACH_CLIENT_LABELS.NY_CLIENT);
+// C26, row 4.9. allergies stores Confirmed (shown as Yes) or Denial (shown as No).
+// Assumed text format (O-28): "Yes", then the explanation when filled.
+function getKnownAllergies(dealProps) {
+  const allergies = toTrimmedOrNull(dealProps.allergies);
+  if (allergies === "Confirmed") {
+    return joinMetadataParts(["Yes", dealProps.allergies__yes__explain]);
   }
-  if (normalizedState === "CO") {
-    labelIds.push(CENTRAL_REACH_CLIENT_LABELS.CO_CLIENT);
+  if (allergies === "Denial") {
+    return "No";
   }
-  return labelIds;
+  return null;
 }
+
+// C33, row 4.11. phi_diagnosis stores Yes for the option shown as "Yes-F84.0"; every other
+// option stores what it shows (guide appendix). Assumed text format (O-28): the option's display
+// text, then diagnosis_other when filled.
+function getDiagnosis(dealProps) {
+  const diagnosis = toTrimmedOrNull(dealProps.phi_diagnosis);
+  return joinMetadataParts([diagnosis === "Yes" ? "Yes-F84.0" : diagnosis, dealProps.diagnosis_other]);
+}
+
+// C24 and C25, rows 4.13 and 4.22. specific_home_location says where services happen.
+const HOME_SERVICE_LOCATIONS = ["Child's House", "More Than One Location"];
+
+function getServiceLocationAddress(dealProps) {
+  const location = toTrimmedOrNull(dealProps.specific_home_location);
+  if (HOME_SERVICE_LOCATIONS.includes(location)) {
+    return toTrimmedOrNull(dealProps.full_home_address);
+  }
+  if (location === "Other Location") {
+    return joinMetadataParts([
+      dealProps.service__street_address,
+      dealProps.service__apt,
+      dealProps.service__city,
+      dealProps.service__postal_code
+    ]);
+  }
+  return null;
+}
+
+function getServiceLocationAddress2(dealProps) {
+  return toTrimmedOrNull(dealProps.specific_home_location) === "More Than One Location"
+    ? toTrimmedOrNull(dealProps.service_address__other)
+    : null;
+}
+
+// C11 and C14, row 4.14 (contract P.5 b). "First Last" for each staff record in the role, in
+// record-ID order.
+function staffNamesInRole(staffInRole) {
+  const byRecordId = [...staffInRole].sort((left, right) =>
+    String(left?.recordId ?? "").localeCompare(String(right?.recordId ?? ""), "en", { numeric: true })
+  );
+  return byRecordId.map((staff) =>
+    [toTrimmedOrNull(staff?.firstName), toTrimmedOrNull(staff?.lastName)].filter(Boolean).join(" ")
+  );
+}
+
+const STAFF_ROLE_FIELDS = {
+  initialAssessmentBcba: CENTRAL_REACH_CLIENT_METADATA_FIELDS.INITIAL_ASSESSMENT_BCBA,
+  reEvaluationBcba: CENTRAL_REACH_CLIENT_METADATA_FIELDS.REASSESSMENT_BCBA,
+  primaryBt1: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_1_NAME,
+  primaryBt2: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_2_NAME
+};
+
+// The four staff name fields: the names of a role joined by ", " (assumed format, O-28), and a
+// blank field for an empty list. Rule 5.8: a role whose list was not passed was not read, and a
+// staff record with no readable name is not "nobody". In both cases the role's key is left out;
+// the second also gets a warning that names the role, never a value.
+function staffNameFields(staffNames) {
+  const fields = {};
+  const warnings = [];
+  for (const [role, fieldId] of Object.entries(STAFF_ROLE_FIELDS)) {
+    if (!Array.isArray(staffNames?.[role])) {
+      continue;
+    }
+    const names = staffNamesInRole(staffNames[role]);
+    if (names.some((name) => !name)) {
+      warnings.push({
+        code: "staff_name_unreadable",
+        role,
+        message: `A staff record in the role ${role} has no first or last name; the field is not sent.`
+      });
+      continue;
+    }
+    fields[fieldId] = joinMetadataParts(names);
+  }
+  return { fields, warnings };
+}
+
+// CL1, row 4.19. The Case `location` stores the state name.
+const STATE_LABELS = {
+  "New York": CENTRAL_REACH_CLIENT_LABELS.NY_CLIENT,
+  "New Jersey": CENTRAL_REACH_CLIENT_LABELS.NJ_CLIENT,
+  Colorado: CENTRAL_REACH_CLIENT_LABELS.CO_CLIENT
+};
+
+// CL3, row 4.21. case_status stores Warm (shown as Active) or Cold (shown as Inactive).
+const CASE_STATUS_LABELS = {
+  Warm: CENTRAL_REACH_CLIENT_LABELS.ACTIVE_CLIENT,
+  Cold: CENTRAL_REACH_CLIENT_LABELS.IN_ACTIVE_CLIENT
+};
+
+function ownLabel(labelsByStoredValue, storedValue) {
+  const key = String(storedValue ?? "").trim();
+  return Object.prototype.hasOwnProperty.call(labelsByStoredValue, key) ? labelsByStoredValue[key] : null;
+}
+
+// Rows 4.19 to 4.21. All Clients is the base label: always required, never managed (CL6).
+function requiredClientLabelIds(dealProps) {
+  const home = HOME_SERVICE_LOCATIONS.includes(toTrimmedOrNull(dealProps.specific_home_location))
+    ? CENTRAL_REACH_CLIENT_LABELS.HOME
+    : null;
+  return [
+    CENTRAL_REACH_CLIENT_LABELS.ALL_CLIENTS,
+    ownLabel(STATE_LABELS, dealProps.location),
+    home,
+    ownLabel(CASE_STATUS_LABELS, dealProps.case_status),
+    // CL4: a staffing_status equal to one of the three label names; any other value: no label.
+    ownLabel(CENTRAL_REACH_CLIENT_STAFFING_LABELS, dealProps.staffing_status)
+  ].filter(Boolean);
+}
+
+// Every label the integration maps for a Case. One that is not required is removed (rule 5.6).
+// The three remove-only IDs are the retired staffing labels: managed, never required.
+const CLIENT_MANAGED_LABEL_IDS = Object.freeze([
+  CENTRAL_REACH_CLIENT_LABELS.NY_CLIENT,
+  CENTRAL_REACH_CLIENT_LABELS.NJ_CLIENT,
+  CENTRAL_REACH_CLIENT_LABELS.CO_CLIENT,
+  CENTRAL_REACH_CLIENT_LABELS.HOME,
+  CENTRAL_REACH_CLIENT_LABELS.ACTIVE_CLIENT,
+  CENTRAL_REACH_CLIENT_LABELS.IN_ACTIVE_CLIENT,
+  ...Object.values(CENTRAL_REACH_CLIENT_STAFFING_LABELS),
+  ...CENTRAL_REACH_REMOVE_ONLY_LABEL_IDS
+]);
 
 // portalId is the worker's configured portal, passed in by the workflow.
 function buildHubspotDealUrl(hsObjectId, portalId) {
@@ -149,9 +237,9 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 
 // CONTRACT P.5 (a): labels. Every mapper returns two lists of CentralReach label IDs (rule 5.6).
 //   requiredLabelIds  the labels the Case must hold now. All Clients is always in it.
-//   managedLabelIds   every label the integration maps for a Case, required now or not. Empty
-//                     until Stage 4 fills it (rows 4.19 to 4.21). Row 4.21 also puts the
-//                     remove-only IDs in it; they are never in requiredLabelIds.
+//   managedLabelIds   every label the integration maps for a Case, required now or not: the
+//                     state, Home, Active / Inactive and staffing labels (rows 4.19 to 4.21), and
+//                     the remove-only IDs, which are never in requiredLabelIds.
 //   labelIds          the old name of requiredLabelIds, the same list. Old tests still read it.
 // The worker reads requiredLabelIds and managedLabelIds and passes both to the label sender
 // (contract (e) in src/lib/centralReachClient.mjs). Every ID in requiredLabelIds must be in
@@ -165,96 +253,149 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 //               The role names are those of staffingRoleAssociationTypeIds in src/lib/config.mjs.
 //               Each role holds a list of { recordId, firstName, lastName }, one per staff record
 //               in that role, and an empty list when nobody holds the role. The mapper builds the
-//               text for fields 131314, 144602, 131313 and 138092 (row 4.14).
+//               text for fields 131314, 144602, 131313 and 138092 (row 4.14). A staff record
+//               with neither a first nor a last name: that role's key is left out and the
+//               answer's `warnings` list names the role ({ code, role, message }), never a value.
 //   ownerName   the Case owner's name as text, for field 138851 (row 4.16). null or "" when the
-//               Case has no owner.
-// Until rows 4.14 and 4.16 are built the mapper ignores both inputs and maps as before.
+//               Case has no owner. Anything that is not a string or null counts as not passed.
 //
 // CONTRACT P.5 (c): an input that could not be read (rule 5.8) never becomes a blank.
 //   omitFieldIds  CentralReach metadata field IDs whose input could not be read in this run, for
 //                 example 138851 when the owner call is refused. The mapper leaves those keys out
-//                 of metadataValues, so the field is not sent.
+//                 of metadataValues, so the field is not sent. null or undefined: no field.
+//   unreadableDateProperties (in the answer, rule 5.7)  the HubSpot date properties that are
+//                 filled and are not a real date: the auth period start and end, the two ASD
+//                 dates and the policy holder date of birth. An empty list when there is none.
+//                 The mapper leaves that date's field out of metadataValues, so it is neither
+//                 sent nor cleared; one unreadable auth date leaves the whole Auth Period out.
+//                 The worker (lane D, wave 2) must end the run as `error` when the list is not
+//                 empty, with a reason that names the properties, and make no CentralReach write.
 // What the worker must do for an omitted field (row 3.18): keep the field's saved hash in the
 // link record as it was, and leave the field out of the changed fields. If the saved hash were
 // dropped, a later blank in HubSpot would send no clear and CentralReach would keep the old value.
 // The Case worker maps twice in one run: before the writes, and again after the confirm read.
 // Both mappings get the same staffNames, ownerName and omitFieldIds. If they differ, the two
 // hashes differ and the run ends as "changed during the run" after the CentralReach writes.
-// An input that is not passed at all (undefined) was not read either: once rows 4.14 and 4.16 are
-// built, the mapper leaves that input's fields out in the same way. A failed association or staff
-// name read is different: it stops the run in the worker and never reaches the mapper.
-export function buildClientMetadata({ deal, portalId, staffNames, ownerName, omitFieldIds = [] }) {
-  void staffNames;
-  void ownerName;
+// An input that is not passed at all (undefined) was not read either: the mapper leaves that
+// input's fields out in the same way (a role missing from staffNames: that role's field). A failed
+// association or staff name read is different: it stops the run in the worker and never reaches
+// the mapper.
+export function buildClientMetadata({ deal, portalId, staffNames, ownerName, omitFieldIds }) {
   const dealProps = deal?.properties || {};
+  const staff = staffNameFields(staffNames);
+  // Rule 5.7: reads one date property and notes it when it is filled and unreadable.
+  const unreadableDateProperties = [];
+  const dateOf = (property) => {
+    const date = toMetadataDate(dealProps[property]);
+    if (date === UNREADABLE) {
+      unreadableDateProperties.push(property);
+    }
+    return date;
+  };
 
   const metadataValues = {
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.ALLERGIES]: toTrimmedOrNull(dealProps.allergies),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.ALLERGIES]: getKnownAllergies(dealProps),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.MALADAPTIVE_BEHAVIORS]: toTrimmedOrNull(
-      dealProps.maladaptive_behaviors__clinical
+      dealProps.maladaptive_behaviors__parentguardian
     ),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.COMORBID_DIAGNOSIS]: toTrimmedOrNull(
-      dealProps.comorbid_diagnosis__clinical
+      dealProps.does_your_child_have_any_other_comorbid_diagnoses_
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_1_NAME]: toTrimmedOrNull(dealProps.current_primary_bt),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_2_NAME]: toTrimmedOrNull(dealProps.current_primary_bt_2),
+    ...staff.fields,
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.WORK_SCHEDULE_1]: toTrimmedOrNull(
-      dealProps.bt_work_schedule_confirmed
+      dealProps.work_schedule_details
     ),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.WORK_SCHEDULE_2]: toTrimmedOrNull(
-      dealProps.bt_work_schedule_2_confirmed
+      dealProps.btrbt_work_schedule_2_details
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.CLIENT_AVAILABILITY]: toTrimmedOrNull(
-      dealProps.client_availability_completed
-    ),
+    // C19, row 4.5. Assumed text format (O-28): the text, then the weekly hours when filled.
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.CLIENT_AVAILABILITY]: joinMetadataParts([
+      dealProps.finalized_client_service_hours_post_assessment,
+      dealProps.client_service_hours_total
+    ]),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.TOTAL_ASSIGNED_HOURS]: toTrimmedOrNull(
-      dealProps.assigned_hours
+      dealProps.total_hours_bt1bt2_work_schedule
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.APPROVED_AUTH_HOURS]: toTrimmedOrNull(
-      dealProps.authorized_hours
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.APPROVED_AUTH_HOURS]: getApprovedAuthHours(dealProps),
+    // The end-date property name is misspelled in HubSpot; the spelling is real.
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.AUTH_PERIOD]: getAuthPeriodValue(
+      dateOf("ongoing_auth_period_start_date"),
+      dateOf("ongoing_autrh_period_end_date")
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.AUTH_PERIOD]: getAuthPeriodValue(dealProps),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SERVICE_LOCATION_ADDRESS]:
+      getServiceLocationAddress(dealProps),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SERVICE_LOCATION_ADDRESS_2]:
+      getServiceLocationAddress2(dealProps),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.PHYSICIAN_CREDENTIALS]:
       getPhysicianCredentialsByInsuranceType(dealProps),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.ASD_DIAGNOSIS_DATE]:
-      getAsdDiagnosisDateByInsuranceType(dealProps),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.ASD_DIAGNOSIS_DATE_SECONDARY]:
-      getSecondaryAsdDiagnosisDateByInsuranceType(dealProps),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SUPERVISING_BCBA]: toTrimmedOrNull(
-      dealProps.supervising_bcba
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.REFERRING_PHYSICIAN_MEDICAID_ID]: toTrimmedOrNull(
+      dealProps.referring_provider_medicaid_id
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.INITIAL_ASSESSMENT_BCBA]: toTrimmedOrNull(
-      dealProps.initial_assessment_bcba
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.DIAGNOSIS]: getDiagnosis(dealProps),
+    // C34, row 4.12: both dates, each to its own field.
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.ASD_DIAGNOSIS_DATE]: dateOf(
+      "most_recent_asd_diagnosis_date_1"
+    ),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.ASD_DIAGNOSIS_DATE_MEDICAID]: dateOf(
+      "most_recent_asd_diagnosis_date_medicaid"
+    ),
+    // C12, row 4.15: the typed text as it is.
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SUPERVISING_BCBA]: toTrimmedOrNull(
+      dealProps.ongoing_central_reach_provider_supplier
     ),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SEVERITY_LEVEL]: toTrimmedOrNull(
       dealProps.severity_level_clinical
     ),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.IMPORTANT_INFORMATION_PARENT]: toTrimmedOrNull(
+      dealProps.important_information
+    ),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.POLICY_HOLDER_NAME]: toTrimmedOrNull(
       dealProps.policy_holder_name
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.POLICY_HOLDER_DOB]: toMetadataDate(
-      dealProps.phi__policy_holder_dob
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.POLICY_HOLDER_DOB]: dateOf("phi__policy_holder_dob"),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.CURRENT_INSURANCE]: insuranceCarrier(
+      dealProps.insurance_primary,
+      dealProps.insurance_1__other__summary
     ),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.CURRENT_INSURANCE]:
-      getCurrentInsuranceMetaValue(dealProps),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.INSURANCE_ID]: getInsuranceIdForMetaField(dealProps, 1),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.INSURANCE_ID]: toTrimmedOrNull(dealProps.insurance_id_1),
+    // C30, row 4.10: the carrier, never n2_what_type_of_insurance.
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SECONDARY_INSURANCE]: insuranceCarrier(
+      dealProps.insurance_2,
+      dealProps.insurance_2__other__summary
+    ),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SECONDARY_INSURANCE_ID]: toTrimmedOrNull(
+      dealProps.insurance_id_2
+    ),
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.REFERRAL_SOURCE]: toTrimmedOrNull(dealProps.referral_source),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.HUBSPOT_LINK_TO_CASE_RECORD]: buildHubspotDealUrl(
       dealProps.hs_object_id,
       portalId
     )
   };
 
-  for (const fieldId of omitFieldIds) {
-    delete metadataValues[fieldId];
+  // C10, row 4.16: the owner's name. An owner that was not passed (or is not text) was not read:
+  // no key.
+  if (typeof ownerName === "string" || ownerName === null) {
+    metadataValues[CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR] = toTrimmedOrNull(ownerName);
   }
 
-  const requiredLabelIds = requiredClientLabelIdsForState(
-    dealProps.location_central_reach || dealProps.location
-  );
+  for (const fieldId of omitFieldIds ?? []) {
+    delete metadataValues[fieldId];
+  }
+  // Rule 5.7: a field whose date could not be read is not sent and not cleared.
+  for (const [fieldId, value] of Object.entries(metadataValues)) {
+    if (value === UNREADABLE) {
+      delete metadataValues[fieldId];
+    }
+  }
+
+  const requiredLabelIds = requiredClientLabelIds(dealProps);
   return {
     requiredLabelIds,
-    managedLabelIds: [],
+    managedLabelIds: [...CLIENT_MANAGED_LABEL_IDS],
     labelIds: requiredLabelIds,
-    metadataValues
+    metadataValues,
+    unreadableDateProperties,
+    warnings: staff.warnings
   };
 }

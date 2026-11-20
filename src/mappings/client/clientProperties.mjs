@@ -15,70 +15,83 @@ import { CASE_ENTRY_PROPERTY, TEST_RECORD_PROPERTY } from "../../constants/hubsp
 
 export const CASE_PROPERTIES = Object.freeze({
   mapped: Object.freeze([
+    // Core fields (buildClientPayload.mjs): C2 to C4, C6 to C8
     "phi_first_name__cloned_",
     "phi_last_name",
     "phi_date_of_birth",
     "phi_gender",
     "email",
     "phone",
-    "phone_number__second_",
-    "if_services_will_be_in_more_than_one_location__list_the_other_addres",
     "street_address",
     "home_apt",
     "location_city",
-    "location_central_reach",
-    "location",
+    "stateregion",
     "postal_code",
     "guardian_first_name",
     "guardian_last_name",
+    // Labels (buildClientMetadata.mjs): CL1 to CL4. specific_home_location also chooses the
+    // service address (C24, C25).
+    "location",
+    "specific_home_location",
+    "case_status",
+    "staffing_status",
+    // Metadata fields (buildClientMetadata.mjs)
     "allergies",
-    "maladaptive_behaviors__clinical",
-    "comorbid_diagnosis__clinical",
-    // The four staff name properties below are read by buildClientMetadata.mjs today.
-    // When row 4.14 stops reading current_primary_bt and current_primary_bt_2, those two move to
-    // signalOnly: they are two of the guide's five staffing-name signals. supervising_bcba and
-    // initial_assessment_bcba are not signals: rows 4.14, 4.15 and 4.17 stop requesting them.
-    "current_primary_bt",
-    "current_primary_bt_2",
-    "supervising_bcba",
-    "initial_assessment_bcba",
-    "bt_work_schedule_confirmed",
-    "bt_work_schedule_2_confirmed",
-    "client_availability_completed",
-    "assigned_hours",
-    "authorized_hours",
-    "auth_start_date",
-    "auth_end_date",
+    "allergies__yes__explain",
+    "maladaptive_behaviors__parentguardian",
+    "does_your_child_have_any_other_comorbid_diagnoses_",
+    "severity_level_clinical",
+    "important_information",
+    "ongoing_central_reach_provider_supplier",
+    "work_schedule_details",
+    "btrbt_work_schedule_2_details",
+    "finalized_client_service_hours_post_assessment",
+    "client_service_hours_total",
+    "total_hours_bt1bt2_work_schedule",
+    "initial_auth_tracks",
+    "n97153_approved_assessment_hours_auth_req",
+    "ia_hours_from_the_ia",
+    "ongoing_auth_period_start_date",
+    "ongoing_autrh_period_end_date",
+    "full_home_address",
+    "service__street_address",
+    "service__apt",
+    "service__city",
+    "service__postal_code",
+    "service_address__other",
+    "n1_what_type_of_insurance",
     "physician_name",
     "npi_number",
     "physician_name__commercial",
     "npi_number__commercial",
-    "most_recent_asd_diagnosis_date_medicaid",
+    "referring_provider_medicaid_id",
+    "phi_diagnosis",
+    "diagnosis_other",
     "most_recent_asd_diagnosis_date_1",
-    "most_recent_asd_diagnosis_date_2",
+    "most_recent_asd_diagnosis_date_medicaid",
     "policy_holder_name",
     "phi__policy_holder_dob",
-    "severity_level_clinical",
-    "n1_what_type_of_insurance",
-    "n2_what_type_of_insurance",
     "insurance_primary",
     "insurance_1__other__summary",
     "insurance_id_1",
-    // Requested today, but no mapper reads these three. They stay so that P.1 changes no
-    // request. Row 4.10 maps insurance_id_2; row 4.17 stops requesting the other two.
+    "insurance_2",
+    "insurance_2__other__summary",
     "insurance_id_2",
-    "insurance_id_3",
-    "insurance_id_4"
+    "referral_source"
   ]),
-  // dealstage, and three of the guide's five staffing-name signals: a HubSpot workflow cannot
-  // trigger on an association, so it triggers on the name property that changes with it. The
-  // other two (current_primary_bt, current_primary_bt_2) are in mapped until row 4.14. The three
-  // names below were not requested before Stage P; no mapper reads them and they are not hashed.
+  // dealstage, and the guide's five staffing-name signals: a HubSpot workflow cannot trigger on an
+  // association, so it triggers on the name property that changes with it. No mapper reads them
+  // and they are not hashed: the staff names sent to CentralReach come from the associations
+  // (row 4.14). hubspot_owner_id is the Case owner: the worker resolves it to a name (row 4.16)
+  // and passes the name to the mapper.
   signalOnly: Object.freeze([
     "dealstage",
     "supervising_bcba_name",
     "ia_bcba_name",
-    "reassessment_bcba_name"
+    "reassessment_bcba_name",
+    "current_primary_bt",
+    "current_primary_bt_2",
+    "hubspot_owner_id"
   ]),
   mustTrigger: Object.freeze([CASE_ENTRY_PROPERTY]),
   system: Object.freeze([

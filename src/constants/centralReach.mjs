@@ -17,10 +17,9 @@ export const CENTRAL_REACH_EMPLOYEE_LABELS = {
   NY_EMPLOYEE: 1132655,
   CO_EMPLOYEE: 1107687,
   RBT_CO: 1107692,
-  // Added in Stage P (row P.3) so the sendable list below can name them. No mapper reads them
-  // until Stage 5 (rows 5.4 to 5.8, 5.11 and 5.12).
   NJ_EMPLOYEE: 1107686,
-  // New Mexico and Virginia: no HubSpot value exists yet, so no mapping reads these two (O-6).
+  // New Mexico and Virginia: no HubSpot value exists yet, so no mapping reads these two and they
+  // are not managed (BL3, TL2; O-6).
   NM_EMPLOYEE: 1157030,
   VA_EMPLOYEE: 1157031,
   BT_NJ: 1132652,
@@ -42,7 +41,7 @@ export const CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS = {
   BCBA_MEDICAID_ID_NY: 126216,
   BCBA_MEDICAID_ID_NJ: 138112,
   BCBA_MEDICAID_ID_CO: 138113,
-  BCBA_CREDENTIALED_WITH_MEDICAID_NY: 134444,
+  // Field 134444 (Credentialed with Medicaid NY) is excluded by the guide and is not sent (B13).
   HUBSPOT_LINK_TO_BCBA_RECORD: 138703
 };
 
@@ -50,8 +49,6 @@ export const CENTRAL_REACH_CLIENT_LABELS = {
   ALL_CLIENTS: 1052619,
   NY_CLIENT: 1082499,
   CO_CLIENT: 1132648,
-  // Added in Stage P (row P.3) so the sendable list below can name them. No mapper reads them
-  // until Stage 4 (rows 4.19 to 4.21).
   NJ_CLIENT: 1132647,
   HOME: 1052656,
   ACTIVE_CLIENT: 1125427,
@@ -65,15 +62,15 @@ export const CENTRAL_REACH_STAFFING_STATUS_PARENT_LABEL_ID = 1156741;
 // Client staffing labels, keyed by the HubSpot Case staffing_status stored value (the stored value
 // equals the Central Reach label name). Guide [G19]: only these three are sent. Any other
 // staffing_status value, or a blank one, gets no staffing label (BUILD-PLAN section 9, CL4).
-// Ids from a live GET /contacts/labels (Zeke, 2026-11-18). No mapper reads them until row 4.21.
+// Ids from a live GET /contacts/labels (Zeke, 2026-11-18).
 export const CENTRAL_REACH_CLIENT_STAFFING_LABELS = {
   "97151 Services": 1156743,
   "Staffed 97153": 1156746,
   "X 97153": 1156747
 };
 
-// Remove only: the three retired staffing labels. They are never sent. Row 4.21 puts them in the
-// Case's managed list, so the label sender takes them off a client that still holds one.
+// Remove only: the three retired staffing labels. They are never sent. They are in the Case's
+// managed list (row 4.21), so the label sender takes them off a client that still holds one.
 export const CENTRAL_REACH_REMOVE_ONLY_LABEL_IDS = Object.freeze([
   1156742, // Pending 97151 Services
   1156744, // Pending 97153 Services
@@ -142,17 +139,26 @@ export const CENTRAL_REACH_CLIENT_METADATA_FIELDS = {
   AUTH_PERIOD: 134672,
   PHYSICIAN_CREDENTIALS: 131151,
   ASD_DIAGNOSIS_DATE: 131195,
-  ASD_DIAGNOSIS_DATE_SECONDARY: 138701,
+  // "Date of Most Recent ASD Diagnosis Medicaid FFS NY" in CentralReach.
+  ASD_DIAGNOSIS_DATE_MEDICAID: 138701,
   SUPERVISING_BCBA: 131308,
   INITIAL_ASSESSMENT_BCBA: 131314,
+  REASSESSMENT_BCBA: 144602,
+  CARE_COORDINATOR: 138851,
   SEVERITY_LEVEL: 133826,
+  IMPORTANT_INFORMATION_PARENT: 138378,
   POLICY_HOLDER_NAME: 138090,
   POLICY_HOLDER_DOB: 137667,
   CURRENT_INSURANCE: 126210,
   INSURANCE_ID: 131316,
+  SECONDARY_INSURANCE: 144600,
+  SECONDARY_INSURANCE_ID: 144601,
+  REFERRING_PHYSICIAN_MEDICAID_ID: 141233,
+  DIAGNOSIS: 144793,
+  REFERRAL_SOURCE: 126222,
   HUBSPOT_LINK_TO_CASE_RECORD: 138702,
-  // Added in Stage P (row P.3) to register its type. No mapper sends it until row 4.13.
-  SERVICE_LOCATION_ADDRESS: 137697
+  SERVICE_LOCATION_ADDRESS: 137697,
+  SERVICE_LOCATION_ADDRESS_2: 138091
 };
 
 // Fields CentralReach stores as a textarea. Every other field is an Input.

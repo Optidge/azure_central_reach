@@ -1,0 +1,7 @@
+{
+  "about": "Read by `npm run check:triggers` (BUILD-PLAN row 3.10). For each object, list the HubSpot internal names of every property that triggers a HubSpot workflow which calls the integration webhook (all of that object's workflows together, each name once). Fill from the HubSpot workflow exports: the sandbox in step 7.2, production in step 9.6. Empty until then, so the check fails.",
+  "case": [],
+  "bcba": [],
+  "btRbt": [],
+  "contact": []
+}
