@@ -64,10 +64,12 @@ function linkedEmployee(cr, contactId = "7001", externalSystemId = "WD1") {
     externalSystemId,
     primaryEmail: "stored@example.com"
   });
+  cr.labels.set(contactId, [1052618]);
 }
 
 function linkedClient(cr, contactId = "2001", externalSystemId = "deal-1") {
   cr.clients.set(contactId, { contactId, externalSystemId, primaryEmail: null });
+  cr.labels.set(contactId, [1052619]);
 }
 
 function runBt(record, options = {}) {
@@ -157,7 +159,7 @@ test("[2.1] a failed Case run keeps the CR ID and the last good hashes, with no 
   await runCase(record);
   const goodHashes = { ...container.get(CLIENT_LINK_PK, CASE_LINK_ID).data.fieldHashes };
 
-  record.properties.allergies = "Shellfish";
+  record.properties.phi_first_name__cloned_ = "Changed";
   cr.fail(CLIENT_PUT, timeoutError());
   await assert.rejects(runCase(record));
 

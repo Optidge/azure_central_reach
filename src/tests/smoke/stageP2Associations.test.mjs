@@ -202,6 +202,7 @@ test("[P.2][BR17] the Case worker compares staffing by record ID and role from t
   const relationshipsHash = async (btRows) => {
     const { container, cr } = setup();
     cr.clients.set("2001", { contactId: "2001", externalSystemId: "deal-1", primaryEmail: null });
+    cr.labels.set("2001", [1052619]);
     const record = caseRecord({ client_id_number: "2001" });
     fakeHubSpotAssociations(({ url }) => ({
       results: url.endsWith(`/associations/${BT_RBT_TYPE}`) ? btRows : []

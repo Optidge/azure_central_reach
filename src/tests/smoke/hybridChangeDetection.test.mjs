@@ -17,7 +17,6 @@ import {
 import { hubspotPortalSettings } from "../../lib/config.mjs";
 import { retryDelayMs } from "../../lib/retry.mjs";
 import { filterWritebackProperties } from "../../lib/writebackAllowlist.mjs";
-import { isLinkedForOngoingRefresh } from "../../workflows/intakePollerWorkflow.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 
@@ -114,24 +113,6 @@ test("writeback allowlist drops unapproved properties", () => {
 test("retry delay honors Retry-After", () => {
   assert.equal(retryDelayMs({ response: { headers: { "retry-after": "2" } } }, 100, 5000), 2000);
   assert.equal(retryDelayMs({ response: { headers: {} } }, 100, 5000), 100);
-});
-
-test("linked recheck does not require stage or a newer timestamp", () => {
-  assert.equal(
-    isLinkedForOngoingRefresh(
-      {
-        properties: {
-          client_id_number: "42",
-          hs_lastmodifieddate: "2026-01-01T00:00:00.000Z",
-          integration_last_write: "2026-10-01T00:00:00.000Z",
-          dealstage: "other"
-        }
-      },
-      "client_id_number"
-    ),
-    true
-  );
-  assert.equal(isLinkedForOngoingRefresh({ properties: { dealstage: "intake" } }, "client_id_number"), false);
 });
 
 function clientDeps(overrides = {}) {

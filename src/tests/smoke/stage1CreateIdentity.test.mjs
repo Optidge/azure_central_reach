@@ -1171,24 +1171,30 @@ test("[G17] a Case run with nothing to send does not look up the client", async 
 });
 
 test("[GBR] the label post holds the labels CentralReach already has plus the required ones", async () => {
+  let held = [11];
   const cr = scriptCentralReach({
-    "GET /contacts/50/labels": () => ({ labels: [{ labelId: 11 }] }),
-    "POST /contacts/50/labels": () => ({})
+    "GET /contacts/50/labels": () => ({ labels: held.map((labelId) => ({ labelId })) }),
+    "GET /contacts/labels": () => ({ labels: [{ labelId: 11 }, { labelId: 1082499 }] }),
+    "POST /contacts/50/labels": () => {
+      held = [11, 1082499];
+      return {};
+    }
   });
-  await updateClientMetadata("50", {}, { labelIds: [22] });
-  assert.equal(cr.count("GET /contacts/50/labels"), 1);
+  await updateClientMetadata("50", {}, { labelIds: [1082499] });
+  // One read before the POST and one read-back after it (row L.3).
+  assert.equal(cr.count("GET /contacts/50/labels"), 2);
   const post = cr.calls.find((call) => call.method === "POST");
   const sent = JSON.parse(post.body);
-  const ids = (sent.labels || sent.labelIds || []).map((item) => Number(item.labelId ?? item));
+  const ids = sent.labels.map((item) => Number(item.labelId));
   assert.equal(ids.includes(11), true);
-  assert.equal(ids.includes(22), true);
+  assert.equal(ids.includes(1082499), true);
 });
 
 test("[GBR] a failed label read posts nothing and fails the run", async () => {
   const cr = scriptCentralReach({
     "GET /contacts/50/labels": () => ({ __httpError: httpError(500) })
   });
-  await assert.rejects(updateClientMetadata("50", {}, { labelIds: [22] }));
+  await assert.rejects(updateClientMetadata("50", {}, { labelIds: [1082499] }));
   assert.equal(cr.calls.some((call) => call.method === "POST"), false);
 });
 
@@ -1196,15 +1202,15 @@ test("[GBR] an unreadable label answer posts nothing and fails the run", async (
   const cr = scriptCentralReach({
     "GET /contacts/50/labels": () => ({ message: "ok" })
   });
-  await assert.rejects(updateClientMetadata("50", {}, { labelIds: [22] }));
+  await assert.rejects(updateClientMetadata("50", {}, { labelIds: [1082499] }));
   assert.equal(cr.calls.some((call) => call.method === "POST"), false);
 });
 
 test("[GBR] when every required label is already on the contact, nothing is posted", async () => {
   const cr = scriptCentralReach({
-    "GET /contacts/50/labels": () => ({ labels: [{ labelId: 22 }, { labelId: 11 }] })
+    "GET /contacts/50/labels": () => ({ labels: [{ labelId: 1082499 }, { labelId: 11 }] })
   });
-  await updateClientMetadata("50", {}, { labelIds: [22] });
+  await updateClientMetadata("50", {}, { labelIds: [1082499] });
   assert.equal(cr.count("GET /contacts/50/labels"), 1);
   assert.equal(cr.calls.some((call) => call.method === "POST"), false);
 });
@@ -1466,7 +1472,7 @@ for (const [name, answer] of [
 ]) {
   test(`[GBR] a label answer with ${name} is a failed read and posts nothing`, async () => {
     const cr = scriptCentralReach({ "GET /contacts/50/labels": () => answer });
-    await assert.rejects(updateClientMetadata("50", {}, { labelIds: [22] }));
+    await assert.rejects(updateClientMetadata("50", {}, { labelIds: [1082499] }));
     assert.equal(cr.calls.some((call) => call.method === "POST"), false);
   });
 }

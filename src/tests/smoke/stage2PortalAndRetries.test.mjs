@@ -145,10 +145,12 @@ function setup() {
 
 function linkedEmployee(cr, contactId = "7001", externalSystemId = "WD1") {
   cr.employees.set(contactId, { contactId, externalSystemId, primaryEmail: "stored@example.com" });
+  cr.labels.set(contactId, [1052618]);
 }
 
 function linkedClient(cr, contactId = "2001", externalSystemId = "deal-1") {
   cr.clients.set(contactId, { contactId, externalSystemId, primaryEmail: null });
+  cr.labels.set(contactId, [1052619]);
 }
 
 function runBt(record, options = {}) {
@@ -466,13 +468,6 @@ test("[2.6] the poller stamps the portal ID on every message it sends", async ()
   assert.deepEqual(sent.map((message) => message.portalId), [SANDBOX_PORTAL, SANDBOX_PORTAL]);
   assert.equal(sent[0].dealId, "1");
   assert.equal(sent[1].source, "linkedRecheck");
-});
-
-test("[2.6] the poller sends only through the portal-stamping senders", () => {
-  const source = readFileSync(path.join(ROOT, "src/workflows/intakePollerWorkflow.mjs"), "utf8");
-  const body = source.slice(source.indexOf("export async function runIntakePollerWorkflow"));
-  assert.equal(body.includes("portalSenders(config.hubspot.hubspotPortalId)"), true);
-  assert.equal(/sendClientSyncMessage\(|sendEmployeeSyncMessage\(/.test(body), false);
 });
 
 for (const queue of QUEUES) {
@@ -885,7 +880,7 @@ test("[2.7 decision 4] the three readers throw a permanent error that carries th
   });
 
   cr.answer(LABELS_GET, { labels: [{ name: "Secret Label" }] });
-  await assert.rejects(updateClientMetadata("7001", {}, { labelIds: [22] }), (error) => {
+  await assert.rejects(updateClientMetadata("7001", {}, { labelIds: [1052618] }), (error) => {
     assert.equal(error.code, "CR_LABEL_READ_FAILED");
     assert.equal(error.answerShape.call, "GET /contacts/{id}/labels");
     assert.equal(error.answerShape.expectedFieldTypes.labels, "list");

@@ -58,12 +58,6 @@ export const SWEEP_MAX_MESSAGES_PER_RUN = 3000;
 const STATUS_PROPERTY = "last_sync_status";
 const WAITING_STATUS = "waiting";
 
-// Kept for src/tests/smoke/hybridChangeDetection.test.mjs, which another lane owns. The linked
-// recheck that used it was removed in Stage 3 (row 3.2); the poller does not call it.
-export function isLinkedForOngoingRefresh(candidate, idProperty) {
-  return Boolean(String(candidate?.properties?.[idProperty] || "").trim());
-}
-
 // Every message the poller sends says which portal it is for. The poller sends only through
 // these two senders.
 export function portalSenders(

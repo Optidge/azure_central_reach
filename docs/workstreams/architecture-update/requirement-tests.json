@@ -1,1 +1,53 @@
-{}
+{
+  "gate skips a Case with test_record = true": ["BR7"],
+  "gate skips test_record = true unless test records are included": ["BR7"],
+
+  "[G17] linked ${employeeType} when CentralReach holds ${row.name}": ["BR8"],
+  "[GBR] the employee ID mismatch error keeps the saved field hashes": ["BR8"],
+  "[G17] a linked ${employeeType} with no External System ID in CentralReach and a blank workday_id sends no ID": ["BR8"],
+  "[G17] a linked ${employeeType} whose CentralReach ID is another value, with a blank workday_id and no tick, is success": ["BR8"],
+  "[G17] a linked Case found under a different CentralReach ID is an error and writes nothing to CentralReach": ["BR8"],
+  "[GBR] the Case ID mismatch error keeps the saved field hashes": ["BR8"],
+
+  "BT/RBT sends workday_id, not the HubSpot record id": ["BR11"],
+  "BCBA sends workday_id, not the HubSpot record id": ["BR11"],
+  "[G17] a Workday ID whose CentralReach employee is already on another HubSpot record is an error": ["BR11"],
+  "[2.3b] a pending Workday ID whose CentralReach employee another HubSpot record holds is an error, not a link": ["BR11"],
+  "[G17] two runs with one Workday ID started together create one employee": ["BR11"],
+
+  "gate keeps syncing a linked BT/RBT in No- Made Inactive": ["BR12"],
+
+  "[GER-REQ] a blank client date of birth on create is an error": ["C3"],
+  "[GER-REQ] client create errors on a blank ${fieldName} and does not call CentralReach": ["C3"],
+  "[GER-REQ] a blank client date of birth on update is left out of the request": ["C3"],
+  "[GER-REQ] an unreadable client date of birth is an error and is not treated as blank": ["C3"],
+
+  "[2.6] the portal table holds object types, excluded association types and staffing role IDs for both portals": ["C16"],
+  "[2.6] excluded association IDs follow the portal": ["C16"],
+  "[2.6] the Case worker drops the excluded association types of its own portal": ["C16"],
+  "[P.2] associationsForComparison reads the new shape and drops the portal's excluded types": ["C16"],
+  "association sets ignore order and excluded role types": ["C16"],
+
+  "[2.6] the HUBSPOT_PORTAL_ID_TEST override is gone: the Case link uses the portal it is given": ["C37"],
+  "[2.6] the Case worker gives its configured portal to the metadata mapper": ["C37"],
+
+  "[GER-REQ] employee names come from first_name and last_name": ["B3", "B4"],
+  "[GER-REQ] employee create ${employeeType} errors on a blank ${fieldName} and does not call CentralReach": ["B3", "B4"],
+  "[GER-REQ] a filled employee first_name with a blank last_name names last_name": ["B3"],
+  "[GER-REQ] employee update ${employeeType} errors when ${fieldName} is blank and does not call CentralReach": ["B3"],
+
+  "[GER-REQ] a malformed employee email on create is an error and the reason has no value": ["B4"],
+  "[G17] a linked update sends the primary email CentralReach holds on the ${label}": ["B4"],
+
+  "[GER-REQ] a blank employee date of birth on create sends the placeholder": ["B5"],
+  "[GER-REQ] a blank employee date of birth on update sends back the date CentralReach holds": ["B5"],
+  "[GER-REQ] a blank employee date of birth on update is left out when the CentralReach read does not hold the key": ["B5"],
+  "[GER-REQ] a missing employee date_of_birth property is an error": ["B5"],
+  "[GER-REQ] an unreadable employee date of birth is an error and is not sent as blank": ["B5"],
+  "a create with a blank date of birth sends 2000-01-01 and reports it": ["B5"],
+  "a create with a date of birth sends that date": ["B5"],
+
+  "sends active_cases_count to metadata field 147882": ["T7"],
+  "sends zero as a value, not as a blank": ["T7"],
+  "is not sent for a BCBA": ["T7"]
+}

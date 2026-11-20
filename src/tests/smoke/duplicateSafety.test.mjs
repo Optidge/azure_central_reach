@@ -16,9 +16,7 @@ import {
   createOrUpdateClient,
   createOrUpdateEmployee,
   findEmployeeByExternalSystemId,
-  externalIdLookupMissed,
-  extractCreateErrorReason,
-  readExternalIdLookup
+  extractCreateErrorReason
 } from "../../lib/centralReachClient.mjs";
 import { updateEmployeeWritebackWithFallback } from "../../lib/hubspotClient.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
@@ -62,7 +60,7 @@ function fakeCentralReach(handlers) {
 
 test("Hybrid minimum changes: a client create that fails with 500 is sent once, not retried", async () => {
   const cr = fakeCentralReach({
-    "PUT /contacts/client/byExternalSystemId": () => {
+    "GET /contacts/client/byExternalSystemId?ExternalSystemId=deal-1": () => {
       throw httpError(404);
     },
     "POST /contacts/client": () => {
@@ -99,7 +97,7 @@ test("Hybrid minimum changes: an employee create that fails with 500 is sent onc
 
 test("Requirement 1: a clear 404 on the external-id lookup allows one create", async () => {
   const cr = fakeCentralReach({
-    "PUT /contacts/client/byExternalSystemId": () => {
+    "GET /contacts/client/byExternalSystemId?ExternalSystemId=deal-1": () => {
       throw httpError(404);
     },
     "POST /contacts/client": () => ({ contact: { contactId: 77 } })
@@ -111,7 +109,8 @@ test("Requirement 1: a clear 404 on the external-id lookup allows one create", a
 
 test("Requirement 1: an external-id match updates and never creates", async () => {
   const cr = fakeCentralReach({
-    "PUT /contacts/client/byExternalSystemId": () => ({ contact: { contactId: 55 } })
+    "GET /contacts/client/byExternalSystemId?ExternalSystemId=deal-1": () => ({ contact: { contactId: 55 } }),
+    "PUT /contacts/client/55": () => ({})
   });
   const result = await createOrUpdateClient({ payload: { ExternalSystemId: "deal-1" } });
   assert.deepEqual(result, { operation: "update", crContactId: "55" });
@@ -121,7 +120,7 @@ test("Requirement 1: an external-id match updates and never creates", async () =
 test("Hybrid minimum changes: an unclear lookup answer never leads to a create", async () => {
   // A non-404 error whose text says "not found" is not proof that the record is absent.
   let cr = fakeCentralReach({
-    "PUT /contacts/client/byExternalSystemId": () => {
+    "GET /contacts/client/byExternalSystemId?ExternalSystemId=deal-1": () => {
       throw httpError(422, { message: "Unable to find contact" });
     }
   });
@@ -139,27 +138,6 @@ test("Hybrid minimum changes: an unclear lookup answer never leads to a create",
   );
   assert.equal(cr.count("POST /contacts/employee"), 0);
   assert.equal(cr.calls.some((call) => call.method === "PUT"), false);
-});
-
-test("external-id lookup classification", () => {
-  assert.equal(externalIdLookupMissed(httpError(404)), true);
-  assert.equal(externalIdLookupMissed(httpError(400, { message: "Contact not found" })), true);
-  assert.equal(externalIdLookupMissed(httpError(400, { message: "FirstName is required" })), false);
-  assert.equal(externalIdLookupMissed(httpError(500, { message: "not found" })), false);
-  assert.equal(externalIdLookupMissed(httpError(429, { message: "no match" })), false);
-  assert.equal(externalIdLookupMissed(new Error("timeout")), false);
-
-  assert.deepEqual(readExternalIdLookup({ contactId: 9 }, "client"), {
-    found: true,
-    crContactId: "9",
-    operation: "update"
-  });
-  assert.deepEqual(
-    readExternalIdLookup({ responseStatus: { message: "No match for external id" } }, "client"),
-    { found: false, crContactId: null }
-  );
-  assert.throws(() => readExternalIdLookup({}, "client"), (error) => error.code === "CR_LOOKUP_UNKNOWN");
-  assert.throws(() => readExternalIdLookup(null, "employee"), (error) => error.code === "CR_LOOKUP_UNKNOWN");
 });
 
 test("R11: a rejected employee create reports field names and codes, never CentralReach's text", async () => {

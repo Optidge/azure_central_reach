@@ -60,57 +60,104 @@ const CASE_DEAL = {
   properties: {
     hs_object_id: "deal-1",
     location: "New York",
-    allergies: "Peanuts",
+    allergies: "Denial",
     current_primary_bt: "Pat Doe",
     initial_assessment_bcba: "Lee Roe"
   }
 };
 
+// The labels the mappers manage, required now or not (contract P.5 (a); rows 4.19 to 4.21,
+// 5.4 to 5.8, 5.11, 5.12; decision 35). Sorted.
+const CASE_MANAGED_LABELS = [
+  1052656, 1082499, 1121488, 1125427, 1132647, 1132648, 1156742, 1156743, 1156744, 1156745,
+  1156746, 1156747
+];
+const BT_MANAGED_LABELS = [
+  1052630, 1052631, 1107686, 1107687, 1107692, 1132650, 1132651, 1132652, 1132655
+];
+const BCBA_MANAGED_LABELS = [
+  1052629, 1092164, 1103437, 1107647, 1107686, 1107687, 1124245, 1124246, 1132653, 1132655
+];
+const sorted = (ids) => [...ids].sort((left, right) => left - right);
+
+// Contract P.5 (b): the staff on the Case by role, as the worker passes them. The names differ
+// from the Case's own text properties, so a field that holds them was built from this input.
+const STAFF_NAMES = {
+  initialAssessmentBcba: [{ recordId: "11", firstName: "Kim", lastName: "Lowe" }],
+  reEvaluationBcba: [],
+  primaryBt1: [{ recordId: "21", firstName: "Sam", lastName: "Poe" }],
+  primaryBt2: []
+};
+
 // --- (a) every mapper returns requiredLabelIds and managedLabelIds ---
 
-test("[P.5a] the employee mapper returns requiredLabelIds and an empty managedLabelIds", () => {
-  const bt = mapEmployee(HUBSPOT_EMPLOYEE_TYPES.BT_RBT, { location_home: "New York", bt_rbt_type: "BT" });
-  const bcba = mapEmployee(HUBSPOT_EMPLOYEE_TYPES.BCBA, { home_state: "New York" });
+test("[P.5a] the employee mapper returns requiredLabelIds and the filled managedLabelIds", () => {
+  const bt = mapEmployee(HUBSPOT_EMPLOYEE_TYPES.BT_RBT, { location: "New York", bt_rbt_type: "BT" });
+  const bcba = mapEmployee(HUBSPOT_EMPLOYEE_TYPES.BCBA, { location: "New York" });
   for (const mapped of [bt, bcba]) {
     assert.equal(Array.isArray(mapped.requiredLabelIds), true);
     assert.equal(mapped.requiredLabelIds.length > 0, true);
-    assert.deepEqual(mapped.managedLabelIds, []);
+    // The New York employee label is required and managed.
+    assert.equal(mapped.requiredLabelIds.includes(1132655), true);
   }
+  // A New York BT also needs Behavior Technician NY.
+  assert.equal(bt.requiredLabelIds.includes(1052630), true);
+  assert.deepEqual(sorted(bt.managedLabelIds), BT_MANAGED_LABELS);
+  assert.deepEqual(sorted(bcba.managedLabelIds), BCBA_MANAGED_LABELS);
 });
 
-test("[P.5a] the Case metadata mapper returns requiredLabelIds and an empty managedLabelIds; labelIds stays the same list", () => {
+test("[P.5a] the Case metadata mapper returns requiredLabelIds and the filled managedLabelIds; labelIds stays the same list", () => {
   const mapped = buildClientMetadata({ deal: CASE_DEAL, portalId: SANDBOX_PORTAL });
   assert.deepEqual(mapped.requiredLabelIds, [1052619, 1082499]);
   assert.deepEqual(mapped.labelIds, mapped.requiredLabelIds);
-  assert.deepEqual(mapped.managedLabelIds, []);
+  assert.deepEqual(sorted(mapped.managedLabelIds), CASE_MANAGED_LABELS);
 });
 
 // --- (b) and (c) inputs of the Case metadata mapper ---
 
-test("[P.5b] the Case metadata mapper accepts staffNames and ownerName; until rows 4.14 and 4.16 use them it maps as before", () => {
-  // Lane C replaces this test when it builds rows 4.14 and 4.16.
+test("[P.5b] the Case metadata mapper builds the staff and owner fields from staffNames and ownerName, and maps the rest as without them", () => {
+  const { INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME, CARE_COORDINATOR } =
+    CENTRAL_REACH_CLIENT_METADATA_FIELDS;
+  const inputFieldIds = [INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME, CARE_COORDINATOR];
   const before = buildClientMetadata({ deal: CASE_DEAL, portalId: SANDBOX_PORTAL });
   const withInputs = buildClientMetadata({
     deal: CASE_DEAL,
     portalId: SANDBOX_PORTAL,
-    staffNames: {
-      initialAssessmentBcba: [{ recordId: "11", firstName: "Lee", lastName: "Roe" }],
-      reEvaluationBcba: [],
-      primaryBt1: [{ recordId: "21", firstName: "Pat", lastName: "Doe" }],
-      primaryBt2: []
-    },
+    staffNames: STAFF_NAMES,
     ownerName: "Care Coordinator",
     omitFieldIds: []
   });
-  assert.deepEqual(withInputs, before);
+
+  // Not passed means not read (contract P.5 (c)): the five fields are left out, not blanked.
+  for (const fieldId of inputFieldIds) {
+    assert.equal(Object.prototype.hasOwnProperty.call(before.metadataValues, fieldId), false);
+  }
+  // Passed: built from the inputs, never from the Case's own text properties. An empty role is a
+  // blank.
+  assert.equal(withInputs.metadataValues[INITIAL_ASSESSMENT_BCBA], "Kim Lowe");
+  assert.equal(withInputs.metadataValues[BT_1_NAME], "Sam Poe");
+  assert.equal(withInputs.metadataValues[REASSESSMENT_BCBA], null);
+  assert.equal(withInputs.metadataValues[BT_2_NAME], null);
+  assert.equal(withInputs.metadataValues[CARE_COORDINATOR], "Care Coordinator");
+  // Everything else maps as before.
+  const rest = { ...withInputs.metadataValues };
+  for (const fieldId of inputFieldIds) {
+    delete rest[fieldId];
+  }
+  assert.deepEqual({ ...withInputs, metadataValues: rest }, before);
 });
 
 test("[P.5c][BR16] a Case metadata field named in omitFieldIds is left out of the mapper's answer", () => {
   const { ALLERGIES, BT_2_NAME, BT_1_NAME } = CENTRAL_REACH_CLIENT_METADATA_FIELDS;
-  const all = buildClientMetadata({ deal: CASE_DEAL, portalId: SANDBOX_PORTAL }).metadataValues;
+  const all = buildClientMetadata({
+    deal: CASE_DEAL,
+    portalId: SANDBOX_PORTAL,
+    staffNames: STAFF_NAMES
+  }).metadataValues;
   const omitted = buildClientMetadata({
     deal: CASE_DEAL,
     portalId: SANDBOX_PORTAL,
+    staffNames: STAFF_NAMES,
     omitFieldIds: [BT_1_NAME, String(BT_2_NAME)]
   }).metadataValues;
 
@@ -120,7 +167,8 @@ test("[P.5c][BR16] a Case metadata field named in omitFieldIds is left out of th
   assert.equal(Object.prototype.hasOwnProperty.call(omitted, BT_1_NAME), false);
   assert.equal(Object.prototype.hasOwnProperty.call(omitted, BT_2_NAME), false);
   // Every other key is as before; a blank that was read stays a blank.
-  assert.equal(omitted[ALLERGIES], "Peanuts");
+  // allergies "Denial" is shown as No (row 4.9).
+  assert.equal(omitted[ALLERGIES], "No");
   assert.equal(Object.keys(omitted).length, Object.keys(all).length - 2);
 });
 
@@ -128,7 +176,7 @@ test("[P.5c][BR16] employee: a field in the worker's omit list is not sent, alth
   // The mapper is faked here to raise the one warning that fills the omit list today.
   setup();
   const sent = [];
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   await runEmployeeSyncWorkflow(
     { recordId: "HS1", employeeType: "bt_rbt" },
     {
@@ -139,8 +187,8 @@ test("[P.5c][BR16] employee: a field in the worker's omit list is not sent, alth
         requiredLabelIds: [],
         warnings: [{ code: "missing_hubspot_portal_id" }]
       }),
-      getEmployeeByContactId: async () => ({ contact: { contactId: "CR1", externalSystemId: "WD1" } }),
-      createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "CR1" }),
+      getEmployeeByContactId: async () => ({ contact: { contactId: "7001", externalSystemId: "WD1" } }),
+      createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "7001" }),
       updateClientMetadata: async (contactId, values, options) => {
         sent.push({ values, options });
         return { updatedCount: 0, failedCount: 0, failedFieldIds: [] };
@@ -264,7 +312,7 @@ test("[P.5e][BR19] with an empty managed list and nothing missing, the label sen
 test("[P.5a][P.5e] the Case worker passes the mapper's required and managed lists, the last label POST and the create flag to the label sender", async () => {
   // The mapper and the sender are faked here: the test is about what is passed between them.
   const { container } = setup();
-  const lastLabelPost = { labelIds: [1052619], postedAt: "2026-11-20T10:00:00.000Z" };
+  const lastLabelPost = { contactId: "2001", labelIds: [1052619], postedAt: "2026-11-20T10:00:00.000Z" };
   container.items.upsert({
     id: `${SANDBOX_PORTAL}:deal-1`,
     pk: "sync:client",
@@ -300,7 +348,7 @@ test("[P.5a][P.5e] the employee worker passes the mapper's required and managed 
   // The sender is faked here: the test is about what the worker passes to it.
   setup();
   const sent = [];
-  const record = btRecord({ location_home: "New York", bt_rbt_type: "BT" });
+  const record = btRecord({ location: "New York", bt_rbt_type: "BT" });
   const result = await runEmployeeSyncWorkflow(
     { recordId: "HS1", employeeType: "bt_rbt" },
     {
@@ -314,7 +362,7 @@ test("[P.5a][P.5e] the employee worker passes the mapper's required and managed 
   assert.equal(result.operation, "create");
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].labelIds, [1052618, 1052630, 1052643, 1132655]);
-  assert.deepEqual(sent[0].managedLabelIds, []);
+  assert.deepEqual(sorted(sent[0].managedLabelIds), BT_MANAGED_LABELS);
   assert.equal(sent[0].lastLabelPost, null);
   assert.equal(sent[0].contactCreatedThisRun, true);
 });
@@ -333,9 +381,9 @@ test("[P.5e][BR19] real path, Case: a label staff added by hand is kept and the 
 
 test("[P.5e][BR19] real path, BT/RBT: a label staff added by hand is kept and the required labels are added", async () => {
   const { cr } = setup();
-  cr.employees.set("CR1", { contactId: "CR1", externalSystemId: "WD1", primaryEmail: "stored@example.com" });
-  cr.labels.set("CR1", [777]);
-  const record = btRecord({ employee_id: "CR1", location_home: "New York", bt_rbt_type: "BT" });
+  cr.employees.set("7001", { contactId: "7001", externalSystemId: "WD1", primaryEmail: "stored@example.com" });
+  cr.labels.set("7001", [777]);
+  const record = btRecord({ employee_id: "7001", location: "New York", bt_rbt_type: "BT" });
   const result = await runEmployeeSyncWorkflow(
     { recordId: "HS1", employeeType: "bt_rbt" },
     employeeWorkflowDeps({ record })
@@ -344,7 +392,7 @@ test("[P.5e][BR19] real path, BT/RBT: a label staff added by hand is kept and th
   assert.equal(result.status, "success");
   assert.equal(cr.count(LABELS_POST), 1);
   assert.deepEqual(
-    [...cr.labels.get("CR1")].sort(),
+    [...cr.labels.get("7001")].sort(),
     [1052618, 1052630, 1052643, 1132655, 777].sort()
   );
 });

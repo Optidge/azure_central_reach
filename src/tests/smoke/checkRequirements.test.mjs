@@ -232,7 +232,9 @@ test("[BR1][3.19] the real BUILD-PLAN section 9 is read: every family of IDs, wi
   );
   const status = (id) => requirements.find((item) => item.id === id).status;
   assert.equal(classifyStatus(status("BR1")).built, true);
-  assert.deepEqual(classifyStatus(status("C22")), { built: false, toBuildStages: ["4"] });
+  // C22 was "to build (4)" until the wave 1 merge of 2026-11-20. These lines follow the plan's
+  // statuses: K1 below changes the same way when row 6.1 is merged.
+  assert.equal(classifyStatus(status("C22")).built, true);
   assert.deepEqual(classifyStatus(status("C13")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("CL5")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("BL6")), { built: false, toBuildStages: [] });

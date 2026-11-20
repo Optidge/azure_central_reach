@@ -254,8 +254,13 @@ test("[BR1][3.15] Case: lookup found inside the window: the Case is linked to it
   assert.equal(record.properties.client_id_number, createdId);
   assert.equal(link(container, CASE_LINK).pendingCreateExternalId, null);
   assert.equal(link(container, CASE_LINK).pendingCreateSentAt, null);
-  // Contract P.5 (e): the Case was linked to its own earlier create.
-  assert.equal(link(container, CASE_LINK).labelsPending, true);
+  // Contract P.5 (e): the Case was linked to its own earlier create, so the worker set
+  // labelsPending for that client. The label sender then accepted the empty label read, posted
+  // the required labels and confirmed them on the read-back, and the worker cleared the flag
+  // (step 2 of the contract).
+  assert.equal(link(container, CASE_LINK).labelsPendingContactId, createdId);
+  assert.equal((cr.labels.get(createdId) || []).length > 0, true);
+  assert.equal(link(container, CASE_LINK).labelsPending, false);
 });
 
 test("[BR1][3.15] Case: when saving the marker fails, no create is sent", async () => {

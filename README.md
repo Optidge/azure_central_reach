@@ -86,11 +86,10 @@ These are used in code but are not required by `config.mjs` validation:
 - `HUBSPOT_PORTAL_ID` — employee HubSpot record link writeback (`buildEmployeePayload.mjs`)
 - `HUBSPOT_PORTAL_ID_TEST`, `HUBSPOT_DEAL_OBJECT_TYPE_ID` — client metadata HubSpot links (`buildClientMetadata.mjs`)
 - `HUBSPOT_EMPLOYEE_ID_PROPERTY`, `ALLOW_EMPLOYEE_CREATE`, `PUT_ONLY_MODE` — employee sync behavior (`config.mjs` runtime flags)
-- `MAX_SEARCH_REQUESTS_PER_SECTION`, `LOOKBACK_MINUTES` — intake search paging/window
+- `INTAKE_POLLER_SCHEDULE`: optional six-field NCRONTAB schedule for the intake poller; hourly (`0 0 * * * *`) when not set
 - `CR_CLIENT_CONTACT_FORM` — client payload ContactForm default
 - `HUBSPOT_WEBHOOK_CLIENT_SECRET` — legacy private-app **client secret** (Auth → Show secret) for `POST /api/hubspot-webhook`. Not the access token. One secret per portal.
 - `HUBSPOT_WEBHOOK_URI` — public URL HubSpot calls, including `https` and path. Required when the function host URL differs from that workflow URL, because v2 signature validation hashes that exact URI.
-- `HUBSPOT_WEBHOOK_COALESCE_SECONDS` — drop repeat notices for the same record inside this window (default 30). `0` disables coalescing.
 
 ### Local-only keys (not used by this Functions repo)
 
