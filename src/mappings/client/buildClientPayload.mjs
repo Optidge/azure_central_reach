@@ -136,15 +136,13 @@ export function buildClientPayload({ deal, config }) {
     dateOfBirthStatus: dateOfBirth.dateOfBirthStatus,
     Gender: mapGender(props.phi_gender),
     PrimaryEmail: isValidEmail(email) ? email : null,
+    // Decision 36: no second phone. phone_number__second_ is not read and PhoneHome is not sent.
     PhoneCell: normalizePhone(props.phone),
-    PhoneHome: normalizePhone(props.phone_number__second_),
-    AddressLine1:
-      props.if_services_will_be_in_more_than_one_location__list_the_other_addres ||
-      props.street_address ||
-      null,
+    // C8, row 4.1: the Case mailing address. Line 1 is street_address only; the state is stateregion.
+    AddressLine1: props.street_address || null,
     AddressLine2: props.home_apt || null,
     City: props.location_city || null,
-    StateProvince: normalizeStateProvince(props.location_central_reach || props.location),
+    StateProvince: normalizeStateProvince(props.stateregion),
     ZipPostalCode: props.postal_code || null,
     GuardianFirstName: props.guardian_first_name || null,
     GuardianLastName: props.guardian_last_name || null

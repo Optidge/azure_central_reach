@@ -7,7 +7,9 @@
   "description": "Azure Functions scaffold for HubSpot to CentralReach integration",
   "scripts": {
     "start": "func start",
-    "test": "node --test"
+    "test": "node --test",
+    "check:triggers": "node scripts/check-triggers.mjs",
+    "check:requirements": "node scripts/check-requirements.mjs"
   },
   "dependencies": {
     "@azure/cosmos": "^4.2.0",

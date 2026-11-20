@@ -12,7 +12,8 @@ const config = {
   }
 };
 
-test("BT/RBT mapping builds expected safe payload", () => {
+// Changed in Stage 5 (row 5.9): the mailing state is state_home; `location` is the Work State.
+test("[T4][5.9] BT/RBT mapping builds expected safe payload", () => {
   const mapped = buildEmployeePayload({
     employeeType: "bt_rbt",
     config,
@@ -29,7 +30,8 @@ test("BT/RBT mapping builds expected safe payload", () => {
         street_home: "1 Main",
         home_apt: "Apt 2",
         location_city: "Denver",
-        location_home: "Colorado",
+        state_home: "Colorado",
+        location: "Colorado",
         postal_code_home: "80014",
         employee_phone: "(555) 111-2222",
         bt_rbt_type: "BT"
@@ -47,7 +49,8 @@ test("BT/RBT mapping builds expected safe payload", () => {
   assert.equal(validateEmployeePayload(mapped.employeePayload).isValid, true);
 });
 
-test("BCBA mapping builds expected payload and metadata", () => {
+// Changed in Stage 5 (row 5.2): the city and state are city_home and state_home.
+test("[B7][5.2] BCBA mapping builds expected payload and metadata", () => {
   const mapped = buildEmployeePayload({
     employeeType: "bcba",
     config,
@@ -62,8 +65,9 @@ test("BCBA mapping builds expected payload and metadata", () => {
         ucaba_email_address: "pat@work.test",
         email: "pat@home.test",
         address: "22 Oak",
-        city_work: "Aurora",
-        home_state: "CO",
+        city_home: "Aurora",
+        state_home: "CO",
+        location: "Colorado",
         employee_phone: "5552223333",
         medicaid_id__ny: "ny1"
       }
@@ -79,7 +83,9 @@ test("BCBA mapping builds expected payload and metadata", () => {
   assert.equal(validateEmployeePayload(mapped.employeePayload).isValid, true);
 });
 
-test("BT in CO includes CO employee label", () => {
+// Changed in Stage 5 (rows 5.4 and 5.11): the state label comes from the Work State(s) `location`,
+// with the stored state names. It no longer comes from location_home or home_state.
+test("[TL1][5.11] BT in CO includes CO employee label", () => {
   const mapped = buildEmployeePayload({
     employeeType: "bt_rbt",
     config,
@@ -87,8 +93,7 @@ test("BT in CO includes CO employee label", () => {
       id: "co-bt",
       properties: {
         hs_object_id: "co-bt",
-        bt_name: "Casey Quinn",
-        location_home: "Colorado",
+        location: "Colorado",
         bt_rbt_type: "BT"
       }
     }
@@ -100,7 +105,7 @@ test("BT in CO includes CO employee label", () => {
   );
 });
 
-test("RBT in CO includes CO employee label", () => {
+test("[TL1][5.11] RBT in CO includes CO employee label", () => {
   const mapped = buildEmployeePayload({
     employeeType: "bt_rbt",
     config,
@@ -108,8 +113,7 @@ test("RBT in CO includes CO employee label", () => {
       id: "co-rbt",
       properties: {
         hs_object_id: "co-rbt",
-        bt_name: "Jamie North",
-        location_home: "CO",
+        location: "Colorado",
         bt_rbt_type: "RBT"
       }
     }
@@ -121,7 +125,7 @@ test("RBT in CO includes CO employee label", () => {
   );
 });
 
-test("BT/RBT in NY include NY employee label", () => {
+test("[TL1][5.11] BT/RBT in NY include NY employee label", () => {
   const btMapped = buildEmployeePayload({
     employeeType: "bt_rbt",
     config,
@@ -129,8 +133,7 @@ test("BT/RBT in NY include NY employee label", () => {
       id: "ny-bt",
       properties: {
         hs_object_id: "ny-bt",
-        bt_name: "Taylor West",
-        location_home: "NY",
+        location: "New York",
         bt_rbt_type: "BT"
       }
     }
@@ -143,8 +146,7 @@ test("BT/RBT in NY include NY employee label", () => {
       id: "ny-rbt",
       properties: {
         hs_object_id: "ny-rbt",
-        bt_name: "Avery East",
-        location_home: "New York",
+        location: "New York",
         bt_rbt_type: "RBT"
       }
     }
@@ -160,7 +162,7 @@ test("BT/RBT in NY include NY employee label", () => {
   );
 });
 
-test("BCBA in NY/CO include the correct state employee labels", () => {
+test("[BL2][5.4] BCBA in NY/CO include the correct state employee labels", () => {
   const nyMapped = buildEmployeePayload({
     employeeType: "bcba",
     config,
@@ -168,8 +170,7 @@ test("BCBA in NY/CO include the correct state employee labels", () => {
       id: "ny-bcba",
       properties: {
         hs_object_id: "ny-bcba",
-        bcba_name: "Morgan Hale",
-        home_state: "NY"
+        location: "New York"
       }
     }
   });
@@ -181,8 +182,7 @@ test("BCBA in NY/CO include the correct state employee labels", () => {
       id: "co-bcba",
       properties: {
         hs_object_id: "co-bcba",
-        bcba_name: "Jordan Vale",
-        home_state: "Colorado"
+        location: "Colorado"
       }
     }
   });
@@ -209,8 +209,7 @@ test("mapping returns warning when HUBSPOT_PORTAL_ID is missing", () => {
     record: {
       id: "r3",
       properties: {
-        hs_object_id: "r3",
-        bcba_name: "Jordan Lee"
+        hs_object_id: "r3"
       }
     }
   });

@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs";
 import { validateClientPayload } from "../../mappings/client/validateClientPayload.mjs";
 
-test("buildClientPayload maps and normalizes AWS canonical fields", () => {
+// Changed in Stage 4 (row 4.1): the state is read from stateregion, not location_central_reach.
+// Changed by decision 36: phone_number__second_ is not read and PhoneHome is not in the payload.
+test("[C8][4.1] buildClientPayload maps and normalizes AWS canonical fields", () => {
   const payload = buildClientPayload({
     deal: {
       id: "deal-1",
@@ -15,11 +17,10 @@ test("buildClientPayload maps and normalizes AWS canonical fields", () => {
         phi_gender: "male",
         email: "  TeSt@Example.com ",
         phone: "+1 (212) 555-0101",
-        phone_number__second_: "(212) 555-0202",
         street_address: "123 Main St",
         home_apt: "Apt 2",
         location_city: "Albany",
-        location_central_reach: "New York",
+        stateregion: "New York",
         postal_code: "12207",
         guardian_first_name: "Jordan",
         guardian_last_name: "Rivera"
@@ -30,7 +31,7 @@ test("buildClientPayload maps and normalizes AWS canonical fields", () => {
   assert.equal(payload.ExternalSystemId, "deal-1");
   assert.equal(payload.PrimaryEmail, "test@example.com");
   assert.equal(payload.PhoneCell, "2125550101");
-  assert.equal(payload.PhoneHome, "2125550202");
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, "PhoneHome"), false);
   assert.equal(payload.StateProvince, "NY");
   assert.equal(payload.Gender, "Male");
   assert.equal(payload.DateOfBirth, "2017-01-14T00:00:00.000Z");
