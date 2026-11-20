@@ -106,6 +106,48 @@ export async function sendEmployeeSyncMessage(message) {
   );
 }
 
+// Row 6.1 (K1, K3): a Contact notice goes on the client queue as a `contactChange` message that
+// holds the Contact ID and the portal ID. The Contact fan-out (src/workflows/
+// contactFanOutWorkflow.mjs) then queues an ordinary sync message for each linked Case and BCBA.
+export const CONTACT_CHANGE_WORKFLOW = "contactChange";
+
+export function buildContactChangeMessage({
+  contactId,
+  portalId,
+  source = "hubspotWorkflow",
+  enqueuedAt = new Date().toISOString()
+}) {
+  const normalizedContactId = String(contactId ?? "").trim();
+  if (!normalizedContactId) {
+    throw new Error("Queue message: contactId is required");
+  }
+  const body = {
+    workflow: CONTACT_CHANGE_WORKFLOW,
+    source,
+    portalId: requirePortalId(portalId),
+    contactId: normalizedContactId,
+    enqueuedAt
+  };
+  return {
+    body,
+    messageId: sha256(`${CONTACT_CHANGE_WORKFLOW}:${normalizedContactId}:${enqueuedAt}`)
+  };
+}
+
+export async function sendContactChangeMessage(message) {
+  if (!clientSyncSender) {
+    throw new Error("Service Bus client is not initialized");
+  }
+  await clientSyncSender.sendMessages(
+    buildContactChangeMessage({
+      contactId: message.contactId,
+      portalId: message.portalId,
+      source: message.source || "hubspotWorkflow",
+      enqueuedAt: message.enqueuedAt
+    })
+  );
+}
+
 export function buildEmployeeSyncMessage({
   recordId,
   portalId,
@@ -146,9 +188,9 @@ export function buildRetryMessage({ body, originalMessageId, attempt, delaySecon
   };
 }
 
-// The queue workers send retries, so they create the Service Bus client from the app settings
-// the first time one is needed.
-function ensureServiceBusClient() {
+// The queue workers send retries, and the Contact fan-out sends sync messages, so they create
+// the Service Bus client from the app settings the first time one is needed.
+export function ensureServiceBusClient() {
   if (serviceBusClient) {
     return;
   }

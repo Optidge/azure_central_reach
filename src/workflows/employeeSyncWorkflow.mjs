@@ -6,6 +6,8 @@ import {
   createHubSpotClient,
   getBtRbtRecordById,
   getBcbaRecordById,
+  getObjectById,
+  listAssociations,
   updateEmployeeWritebackWithFallback
 } from "../lib/hubspotClient.mjs";
 import {
@@ -55,6 +57,7 @@ import {
   savedHashesForContact
 } from "../lib/linkRecord.mjs";
 import { unreadableAnswerError } from "../lib/unreadableAnswer.mjs";
+import { createSyncRunSummary, reasonCodeOfError } from "../lib/syncRunSummary.mjs";
 import {
   FAILURE_KINDS,
   classifyFailure,
@@ -66,6 +69,7 @@ import {
 import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { buildEmployeePayload } from "../mappings/employees/buildEmployeePayload.mjs";
 import {
+  employeeMappedProperties,
   employeeRequestProperties,
   knownMetadataFieldIds
 } from "../mappings/employees/employeeProperties.mjs";
@@ -74,17 +78,23 @@ import { STATE_TYPES } from "../constants/state.mjs";
 import {
   BCBA_CHECKLIST_PROPERTY,
   BT_RBT_CHECKLIST_PROPERTY,
-  HUBSPOT_EMPLOYEE_TYPES
+  EMPLOYEE_ENTRY_PROPERTY,
+  HUBSPOT_EMPLOYEE_TYPES,
+  TEST_RECORD_PROPERTY
 } from "../constants/hubspot.mjs";
 import {
   ANOTHER_HUBSPOT_RECORD_LINKED,
+  CHECKLIST_BLANK_WORKDAY,
+  CHECKLIST_STILL_TEMPORARY,
   CONFLICTING_EXTERNAL_IDS,
   crIdNotDigits,
   missingDateProperty,
+  REPLACE_TEMPORARY_ID,
   RETRIES_USED_UP,
   unreadableDate,
   WAITING_FOR_WORKDAY_ID,
-  WORKDAY_ALREADY_IN_CENTRALREACH
+  WORKDAY_ALREADY_IN_CENTRALREACH,
+  WORKDAY_ID_MISMATCH
 } from "../constants/syncReasons.mjs";
 import { checklistTicked, employeeCreateLookupDecision, linkedEmployeeIdentity } from "../lib/syncDecisions.mjs";
 import { employeeSyncEligibility } from "../lib/syncEligibility.mjs";
@@ -93,6 +103,38 @@ import { employeeSyncEligibility } from "../lib/syncEligibility.mjs";
 // that may expire. Both ids start with the portal ID.
 const EMPLOYEE_LINK_PK = "sync:employee";
 const EMPLOYEE_ATTEMPT_PK = "sync-attempt:employee";
+
+// Row 3.20: the reason codes of the summary line, for the outcomes this worker decides on
+// purpose. A code, never the sentence written to HubSpot.
+const DECIDED_CODES = Object.freeze({
+  CR_ID_NOT_DIGITS: "CR_ID_NOT_DIGITS",
+  HUBSPOT_PROPERTY_MISSING: "HUBSPOT_PROPERTY_MISSING",
+  UNREADABLE_DATE: "UNREADABLE_DATE",
+  VALIDATION_FAILED: "VALIDATION_FAILED",
+  ANOTHER_HUBSPOT_RECORD_LINKED: "ANOTHER_HUBSPOT_RECORD_LINKED",
+  CONFLICTING_EXTERNAL_IDS: "CONFLICTING_EXTERNAL_IDS",
+  WORKDAY_ALREADY_IN_CENTRALREACH: "WORKDAY_ALREADY_IN_CENTRALREACH",
+  EMPLOYEE_CREATE_TURNED_OFF: "EMPLOYEE_CREATE_TURNED_OFF",
+  CR_CREATE_REJECTED: "CR_CREATE_REJECTED"
+});
+
+// Rule 5.4: the code of each identity check sentence (src/lib/syncDecisions.mjs).
+const IDENTITY_CODES = new Map([
+  [WAITING_FOR_WORKDAY_ID, "WAITING_FOR_WORKDAY_ID"],
+  [REPLACE_TEMPORARY_ID, "REPLACE_TEMPORARY_ID"],
+  [CHECKLIST_STILL_TEMPORARY, "CHECKLIST_STILL_TEMPORARY"],
+  [CHECKLIST_BLANK_WORKDAY, "CHECKLIST_BLANK_WORKDAY"],
+  [WORKDAY_ID_MISMATCH, "WORKDAY_ID_MISMATCH"]
+]);
+
+function identityCode(reason) {
+  return IDENTITY_CODES.get(reason) ?? null;
+}
+
+// A run that is held on purpose and retried: another run holds the record, or a create was sent
+// a short time ago and CentralReach does not show it yet. The summary line says `waiting`, as the
+// Case worker's does.
+const WAITING_CODES = new Set(["SYNC_IN_PROGRESS", "CR_CREATE_PENDING"]);
 
 function ensureRecordId(recordId) {
   const normalized = String(recordId || "").trim();
@@ -203,6 +245,111 @@ function statusIsShown(properties, status, reason) {
   );
 }
 
+// Row 4.18 (rule 5.8): HubSpot answers a blank property with a null key (P.7 (b), 2026-11-20),
+// so a requested property whose key is missing from the answer was not read. Returns those names.
+function missingKeys(properties, names) {
+  const answer = properties && typeof properties === "object" ? properties : {};
+  return names.filter((name) => !Object.hasOwn(answer, name));
+}
+
+function missingMappedProperties(employeeType, properties) {
+  return missingKeys(properties, employeeMappedProperties(employeeType));
+}
+
+// The requested properties, besides the mapped ones, that the gate and the status check read
+// before anything is mapped (rule 5.1, row 3.7). The configured record gate property is added by
+// the worker. The CR ID property and the checklist are checked after the gate.
+const EMPLOYEE_GATE_AND_STATUS_PROPERTIES = Object.freeze([
+  EMPLOYEE_ENTRY_PROPERTY,
+  TEST_RECORD_PROPERTY,
+  "last_sync_status",
+  "last_sync_error"
+]);
+
+// The 4.18 status sentence, the same as the Case worker's. Property names only, never a value.
+// Rule 5.2 keeps every sentence in src/constants/syncReasons.mjs: this one moves there at the
+// merge, shared with the Case worker.
+const NAMES_LISTED = 10;
+function missingPropertiesReason(names) {
+  const listed = names.slice(0, NAMES_LISTED).join(", ");
+  const more = names.length > NAMES_LISTED ? ` and ${names.length - NAMES_LISTED} more` : "";
+  return `Missing from the HubSpot answer: ${listed}${more}`;
+}
+
+const CONTACT_OBJECT_TYPE_ID = "0-1";
+
+// Row 6.4 (B9, K3): the BCBA's personal email is the email of the Contact linked by BCBA ->
+// Contact (associationTypeId: 191 in the sandbox, 17 in production). Answers one of:
+//   { email }                    one Contact: its email (null when blank); no Contact: null
+//   { omitted: true, reason }    more than one Contact (several_contacts), or a read that failed
+//                                (contact_read_failed), with the error's code and status for the log
+// Never a value in the reason. A failed read never becomes a blank (rule 5.8).
+async function readBcbaContactEmail({
+  recordId,
+  objectTypeId,
+  associationTypeId,
+  readAssociations,
+  readContact
+}) {
+  const failed = (error) => ({
+    omitted: true,
+    reason: "contact_read_failed",
+    errorCode: error?.code ?? null,
+    httpStatus: error?.response?.status ?? error?.httpStatus ?? null
+  });
+  let rows;
+  try {
+    rows = await readAssociations({
+      fromObjectType: objectTypeId,
+      fromId: recordId,
+      toObjectType: CONTACT_OBJECT_TYPE_ID
+    });
+  } catch (error) {
+    return failed(error);
+  }
+  if (!Array.isArray(rows)) {
+    return failed(null);
+  }
+  const contactIds = [
+    ...new Set(
+      rows
+        .filter((row) =>
+          (Array.isArray(row?.types) ? row.types : []).some(
+            (type) => Number(type?.typeId) === Number(associationTypeId)
+          )
+        )
+        .map((row) => String(row?.toObjectId ?? "").trim())
+        .filter(Boolean)
+    )
+  ];
+  if (contactIds.length === 0) {
+    return { email: null };
+  }
+  if (contactIds.length > 1) {
+    return { omitted: true, reason: "several_contacts", contactCount: contactIds.length };
+  }
+  let contact;
+  try {
+    contact = await readContact(contactIds[0], ["email"]);
+  } catch (error) {
+    return failed(error);
+  }
+  const properties = contact?.properties;
+  if (!properties || typeof properties !== "object" || !Object.hasOwn(properties, "email")) {
+    return failed(null);
+  }
+  return { email: properties.email ?? null };
+}
+
+// Row 3.20: the operation of the summary line from the answer of createOrUpdateEmployee. A create
+// that CentralReach rejected was still sent; a create that is turned off was not.
+function operationOf(syncResult) {
+  if (syncResult?.operation === "create" || syncResult?.operation === "create_rejected") {
+    return "create";
+  }
+  return syncResult?.operation === "update" ? "update" : "none";
+}
+
 function getWorkflowStateId(portalId, employeeType, recordId) {
   return `${portalId}:${employeeType}:${recordId}`;
 }
@@ -213,9 +360,10 @@ function syncInProgress() {
   return busy;
 }
 
-// lastAttempt is set by the queue worker when this message has used its five retries.
+// lastAttempt is set by the queue worker when this message has used its five retries. attempt is
+// the number of retries the message has used (row 3.20, the summary line); null when not passed.
 export async function runEmployeeSyncWorkflow(
-  { recordId, employeeType, hsLastModifiedDate, source, context, lastAttempt = false },
+  { recordId, employeeType, hsLastModifiedDate, source, context, lastAttempt = false, attempt = null },
   dependencies = {}
 ) {
   const getRuntimeConfig = dependencies.getConfig || getConfig;
@@ -224,6 +372,11 @@ export async function runEmployeeSyncWorkflow(
   const initState = dependencies.createStateClient || createStateClient;
   const fetchBtRbt = dependencies.getBtRbtRecordById || getBtRbtRecordById;
   const fetchBcba = dependencies.getBcbaRecordById || getBcbaRecordById;
+  // Row 6.4: the BCBA's Contact.
+  const readAssociations = dependencies.listAssociations || listAssociations;
+  const readContact =
+    dependencies.getContactById ||
+    ((id, contactProperties) => getObjectById(CONTACT_OBJECT_TYPE_ID, id, contactProperties));
   const upsertEmployee = dependencies.createOrUpdateEmployee || createOrUpdateEmployee;
   const findByExternalId =
     dependencies.findEmployeeByExternalSystemId || findEmployeeByExternalSystemId;
@@ -262,30 +415,60 @@ export async function runEmployeeSyncWorkflow(
 
   const normalizedRecordId = ensureRecordId(recordId);
   const normalizedEmployeeType = ensureEmployeeType(employeeType);
-  const config = getRuntimeConfig();
-  // Any portal that is not in the table is invalid configuration: nothing is read or written.
-  const { portalId } = hubspotPortalSettings(config.hubspot?.hubspotPortalId);
 
-  const objectTypeId =
-    normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
-      ? config.hubspot.btRbtObjectTypeId
-      : config.hubspot.bcbaObjectTypeId;
-  const employeeIdProperty = config.hubspot.employeeIdProperty || "employee_id";
-  const recordGateProperty = config.sync?.recordGateProperty || null;
-  const checklistProperty =
-    normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
-      ? BT_RBT_CHECKLIST_PROPERTY
-      : BCBA_CHECKLIST_PROPERTY;
-  const properties = [...employeeRequestProperties(normalizedEmployeeType), employeeIdProperty];
-  if (recordGateProperty && !properties.includes(recordGateProperty)) {
-    properties.push(recordGateProperty);
-  }
+  // Row 3.20: one `Sync run summary.` line per run, logged in `finally`, also when configuration
+  // or a client fails (the portal is set once it is known). Only names, IDs, codes and counts:
+  // never a field value, and never the BCBA Contact's email (row 6.4).
+  const summary = createSyncRunSummary({
+    workflow: `employeeSync:${normalizedEmployeeType}`,
+    recordId: normalizedRecordId,
+    portalId: null,
+    source: source || null,
+    invocationId: context?.invocationId || null,
+    attempt
+  });
+  // Every CentralReach call of the run reports itself here (src/lib/centralReachClient.mjs).
+  const onCall = summary.onCall;
 
-  initHubSpot(config);
-  initCentralReach(config);
-  initState(config);
+  // Set at the start of the `try` below, so a configuration or client failure still ends in
+  // `finally` with its summary line. Until they are set, nothing is read or written.
+  let config = null;
+  let portalId = null;
+  let bcbaContactAssociationTypeId = null;
+  let objectTypeId = null;
+  let employeeIdProperty = "employee_id";
+  let recordGateProperty = null;
+  let checklistProperty = null;
+  let properties = [];
+  let stateId = null;
+  const prepareRun = () => {
+    config = getRuntimeConfig();
+    // Any portal that is not in the table is invalid configuration: nothing is read or written.
+    ({ portalId, bcbaContactAssociationTypeId } = hubspotPortalSettings(
+      config.hubspot?.hubspotPortalId
+    ));
+    summary.setPortalId(portalId);
+    objectTypeId =
+      normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
+        ? config.hubspot.btRbtObjectTypeId
+        : config.hubspot.bcbaObjectTypeId;
+    employeeIdProperty = config.hubspot.employeeIdProperty || "employee_id";
+    recordGateProperty = config.sync?.recordGateProperty || null;
+    checklistProperty =
+      normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
+        ? BT_RBT_CHECKLIST_PROPERTY
+        : BCBA_CHECKLIST_PROPERTY;
+    properties = [...employeeRequestProperties(normalizedEmployeeType), employeeIdProperty];
+    if (recordGateProperty && !properties.includes(recordGateProperty)) {
+      properties.push(recordGateProperty);
+    }
 
-  const stateId = getWorkflowStateId(portalId, normalizedEmployeeType, normalizedRecordId);
+    initHubSpot(config);
+    initCentralReach(config);
+    initState(config);
+    stateId = getWorkflowStateId(portalId, normalizedEmployeeType, normalizedRecordId);
+  };
+
   const readLink = () => readPriorSyncState(readState, EMPLOYEE_LINK_PK, stateId);
   // Every link record write merges into what is stored (src/lib/linkRecord.mjs).
   const saveLinkFields = (changes) =>
@@ -335,6 +518,7 @@ export async function runEmployeeSyncWorkflow(
         idProperty: employeeIdProperty
       })
     });
+    summary.noteWriteback(patch.last_sync_status);
     if (patch.last_sync_status !== undefined) {
       shown = {
         last_sync_status: patch.last_sync_status,
@@ -347,6 +531,7 @@ export async function runEmployeeSyncWorkflow(
   // earlier create. The catch block then saves labelsPending with the CR id.
   let ownCreateThisRun = false;
   try {
+    prepareRun();
     lease = await claimRecordLock(claimLock, {
       pk: "sync-lock:employee",
       id: stateId,
@@ -377,6 +562,19 @@ export async function runEmployeeSyncWorkflow(
       last_sync_error: hubspotProps.last_sync_error
     };
 
+    // Rule 5.8, row 4.18: a key the gate or the status check reads that is not in the HubSpot
+    // answer was not read. A missing test_record would let a test record through, a missing
+    // entry or gate key would decide the gate from nothing, and a missing status key would write
+    // the status again on every run. Nothing is decided and nothing is written to HubSpot (rule
+    // 5.1: the gate has not passed); the run is retried.
+    const missingGateKeys = missingKeys(hubspotProps, [
+      ...EMPLOYEE_GATE_AND_STATUS_PROPERTIES,
+      ...(recordGateProperty ? [recordGateProperty] : [])
+    ]);
+    if (missingGateKeys.length > 0) {
+      throw new HubSpotReadError(`employee:${missingGateKeys.join(",")}`);
+    }
+
     const prior = (await readLink())?.data || {};
     const hubspotContactId = String(hubspotProps?.[employeeIdProperty] || "").trim();
     let existingContactId = hubspotContactId || String(prior.crContactId || "").trim() || null;
@@ -392,6 +590,7 @@ export async function runEmployeeSyncWorkflow(
     });
     if (!eligibility.eligible) {
       // No Central Reach call and no HubSpot writeback for a skipped employee.
+      summary.setOutcome("skipped", eligibility.reason);
       logger("info", "Employee sync skipped by eligibility gate.", {
         workflow: "employeeSync",
         recordId: normalizedRecordId,
@@ -411,24 +610,11 @@ export async function runEmployeeSyncWorkflow(
     }
     gatePassed = true;
 
-    const mapped = mapPayload({
-      record: hubspotRecord,
-      employeeType: normalizedEmployeeType,
-      config
-    });
-    const mappingWarnings = Array.isArray(mapped.warnings) ? mapped.warnings : [];
-    if (mappingWarnings.length > 0) {
-      logger("warn", "Employee mapping warnings.", {
-        workflow: "employeeSync",
-        recordId: normalizedRecordId,
-        employeeType: normalizedEmployeeType,
-        warningCodes: mappingWarnings.map((item) => item?.code).filter(Boolean),
-        invocationId: context?.invocationId || null
-      });
-    }
     // The status is written only when HubSpot does not show it yet; the CR id and the link when
     // HubSpot lacks them.
-    const decided = async ({ status, reason, contactId = null, fail = false }) => {
+    // Row 3.20: callers write `return await decided(...)`, so the summary line in `finally` is
+    // logged after the writes.
+    const decided = async ({ status, reason, code, contactId = null, fail = false }) => {
       const patch = {
         ...(statusIsShown(shown, status, reason)
           ? {}
@@ -455,6 +641,7 @@ export async function runEmployeeSyncWorkflow(
           errorMessage: String(reason || "").slice(0, 500)
         });
       }
+      summary.setOutcome(status, code);
       return {
         ok: true,
         recordId: normalizedRecordId,
@@ -464,18 +651,124 @@ export async function runEmployeeSyncWorkflow(
       };
     };
 
+    // Row 4.18: a mapped property missing from the HubSpot answer is a failed read. It never
+    // becomes a blank sent to CentralReach (rule 5.8): error, no CentralReach call. The reason
+    // names the first ten missing properties; the log names all of them.
+    // Row 4.18 (D-R1 on the Case side): the CR ID property decides "linked" or "not linked", and
+    // so a create. A missing key is not "not linked" (a null key is). Checked before anything
+    // uses the CR ID; the link record is not touched.
+    if (missingKeys(hubspotProps, [employeeIdProperty]).length > 0) {
+      linkedContactId = null;
+      logger("warn", "Employee HubSpot answer is missing requested properties.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        missingProperties: [employeeIdProperty],
+        invocationId: context?.invocationId || null
+      });
+      return await decided({
+        status: "error",
+        reason: missingPropertiesReason([employeeIdProperty]),
+        code: DECIDED_CODES.HUBSPOT_PROPERTY_MISSING,
+        fail: true
+      });
+    }
+
+    // The mapped properties, and the checklist the identity check reads (rule 5.4).
+    const missingProperties = [
+      ...missingMappedProperties(normalizedEmployeeType, hubspotProps),
+      ...missingKeys(hubspotProps, [checklistProperty])
+    ];
+    if (missingProperties.length > 0) {
+      logger("warn", "Employee HubSpot answer is missing requested properties.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        missingProperties,
+        invocationId: context?.invocationId || null
+      });
+      return await decided({
+        status: "error",
+        reason: missingPropertiesReason(missingProperties),
+        code: DECIDED_CODES.HUBSPOT_PROPERTY_MISSING,
+        fail: true
+      });
+    }
+
+    // Row 6.4 (B9, K3): a BCBA's personal email comes from its Contact. A BT/RBT has none.
+    // undefined means "not read": the mapper leaves field 138069 out and it goes in omitFieldIds.
+    let contactEmail;
+    let personalEmailOmitted = false;
+    if (normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BCBA) {
+      const personalEmail = await readBcbaContactEmail({
+        recordId: normalizedRecordId,
+        objectTypeId,
+        associationTypeId: bcbaContactAssociationTypeId,
+        readAssociations,
+        readContact
+      });
+      if (personalEmail.omitted) {
+        personalEmailOmitted = true;
+        logger("warn", "BCBA personal email not sent: its Contact could not be read, or more than one is linked.", {
+          workflow: "employeeSync",
+          recordId: normalizedRecordId,
+          employeeType: normalizedEmployeeType,
+          fieldId: CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL,
+          reason: personalEmail.reason,
+          contactCount: personalEmail.contactCount ?? null,
+          errorCode: personalEmail.errorCode ?? null,
+          httpStatus: personalEmail.httpStatus ?? null,
+          invocationId: context?.invocationId || null
+        });
+      } else {
+        contactEmail = personalEmail.email;
+      }
+    }
+
+    const mapped = mapPayload({
+      record: hubspotRecord,
+      employeeType: normalizedEmployeeType,
+      config,
+      contactEmail
+    });
+    const mappingWarnings = Array.isArray(mapped.warnings) ? mapped.warnings : [];
+    if (mappingWarnings.length > 0) {
+      logger("warn", "Employee mapping warnings.", {
+        workflow: "employeeSync",
+        recordId: normalizedRecordId,
+        employeeType: normalizedEmployeeType,
+        warningCodes: mappingWarnings.map((item) => item?.code).filter(Boolean),
+        invocationId: context?.invocationId || null
+      });
+    }
+
     // Rule 5.5, row 3.16: a CR ID from HubSpot must be digits only. The value is not used, not
     // saved and not logged.
     if (hubspotContactId && !isDigitsOnly(hubspotContactId)) {
       linkedContactId = null;
-      return decided({ status: "error", reason: crIdNotDigits(employeeIdProperty), fail: true });
+      return await decided({
+        status: "error",
+        reason: crIdNotDigits(employeeIdProperty),
+        code: DECIDED_CODES.CR_ID_NOT_DIGITS,
+        fail: true
+      });
     }
 
     if (mapped.dateOfBirthStatus === "missing") {
-      return decided({ status: "error", reason: missingDateProperty("date_of_birth"), fail: true });
+      return await decided({
+        status: "error",
+        reason: missingDateProperty("date_of_birth"),
+        code: DECIDED_CODES.HUBSPOT_PROPERTY_MISSING,
+        fail: true
+      });
     }
     if (mapped.dateOfBirthStatus === "unreadable") {
-      return decided({ status: "error", reason: unreadableDate("date_of_birth"), fail: true });
+      return await decided({
+        status: "error",
+        reason: unreadableDate("date_of_birth"),
+        code: DECIDED_CODES.UNREADABLE_DATE,
+        fail: true
+      });
     }
 
     const validation = validatePayload(mapped.employeePayload, {
@@ -483,9 +776,10 @@ export async function runEmployeeSyncWorkflow(
       emailField: mapped.emailField || "email"
     });
     if (!validation.isValid) {
-      return decided({
+      return await decided({
         status: "error",
         reason: validation.errors?.[0] || "Employee sync failed",
+        code: DECIDED_CODES.VALIDATION_FAILED,
         fail: true
       });
     }
@@ -534,6 +828,7 @@ export async function runEmployeeSyncWorkflow(
             { kind: "employee", idProperty: employeeIdProperty }
           )
         });
+        summary.noteWriteback();
       } catch (linkError) {
         // Not fatal: Cosmos holds the id and the final writeback sends it again.
         logger(
@@ -550,9 +845,11 @@ export async function runEmployeeSyncWorkflow(
     };
 
     // Contract P.5 (c) in src/mappings/employees/buildEmployeePayload.mjs: a field whose input
-    // could not be read is named here, so it is not compared, not sent and not cleared. Rows
-    // 4.18 and 6.4 add the reads that fill the list.
+    // could not be read is named here, so it is not compared, not sent and not cleared. Row 6.4:
+    // the BCBA's personal email when its Contact could not be read. `dependencies.omitFieldIds`
+    // is a seam for tests (lane B I-1).
     const omitFieldIds = [
+      ...(personalEmailOmitted ? [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL] : []),
       ...(mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
         ? [
             CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
@@ -599,7 +896,7 @@ export async function runEmployeeSyncWorkflow(
         const lookedUp = new Map();
         const lookup = async (id) => {
           if (!lookedUp.has(id)) {
-            lookedUp.set(id, await findByExternalId(id));
+            lookedUp.set(id, await findByExternalId(id, { onCall }));
           }
           return lookedUp.get(id);
         };
@@ -629,7 +926,12 @@ export async function runEmployeeSyncWorkflow(
             const holders =
               pendingId === normalizedRecordId ? [] : await otherHolders(byPending.crContactId);
             if (holders.length > 0) {
-              return decided({ status: "error", reason: ANOTHER_HUBSPOT_RECORD_LINKED, fail: true });
+              return await decided({
+                status: "error",
+                reason: ANOTHER_HUBSPOT_RECORD_LINKED,
+                code: DECIDED_CODES.ANOTHER_HUBSPOT_RECORD_LINKED,
+                fail: true
+              });
             }
             decision = {
               outcome: "link_own",
@@ -657,16 +959,27 @@ export async function runEmployeeSyncWorkflow(
           });
         }
         if (decision.outcome === "conflicting_ids") {
-          return decided({ status: "error", reason: CONFLICTING_EXTERNAL_IDS, fail: true });
+          return await decided({
+            status: "error",
+            reason: CONFLICTING_EXTERNAL_IDS,
+            code: DECIDED_CODES.CONFLICTING_EXTERNAL_IDS,
+            fail: true
+          });
         }
         if (decision.outcome === "found_by_workday") {
           const holders = await otherHolders(decision.crContactId);
           if (holders.length > 0) {
-            return decided({ status: "error", reason: ANOTHER_HUBSPOT_RECORD_LINKED, fail: true });
+            return await decided({
+              status: "error",
+              reason: ANOTHER_HUBSPOT_RECORD_LINKED,
+              code: DECIDED_CODES.ANOTHER_HUBSPOT_RECORD_LINKED,
+              fail: true
+            });
           }
-          return decided({
+          return await decided({
             status: "waiting",
             reason: WORKDAY_ALREADY_IN_CENTRALREACH,
+            code: DECIDED_CODES.WORKDAY_ALREADY_IN_CENTRALREACH,
             fail: false
           });
         }
@@ -704,16 +1017,28 @@ export async function runEmployeeSyncWorkflow(
             workStates: mapped.workStates,
             existingContactId: null,
             allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate),
-            putOnlyMode: config.features?.putOnlyMode !== false
+            putOnlyMode: config.features?.putOnlyMode !== false,
+            onCall
           });
+          summary.setOperation(operationOf(syncResult));
           createdThisRun = syncResult?.operation === "create";
           if (syncResult?.operation === "create_turned_off") {
-            return decided({ status: "waiting", reason: syncResult.reason, fail: false });
+            return await decided({
+              status: "waiting",
+              reason: syncResult.reason,
+              code: DECIDED_CODES.EMPLOYEE_CREATE_TURNED_OFF,
+              fail: false
+            });
           }
           if (syncResult?.operation === "create_rejected") {
             // CentralReach said no (400 or 409): nothing was created, so nothing is pending.
             await saveLinkFields(NO_PENDING_CREATE);
-            return decided({ status: "error", reason: syncResult.reason, fail: true });
+            return await decided({
+              status: "error",
+              reason: syncResult.reason,
+              code: DECIDED_CODES.CR_CREATE_REJECTED,
+              fail: true
+            });
           }
           // Row 1.8: the lease also covers saving the new CR id, so a second record with the
           // same Workday ID finds this record as its holder.
@@ -754,6 +1079,7 @@ export async function runEmployeeSyncWorkflow(
       omitFieldIds
     );
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
+    summary.setChangedFieldNames(changedFields);
     // Rows 2.4 and 3.7: "nothing changed" needs a clean last run and matching hashes in Cosmos.
     // HubSpot's last_sync_hash is not asked.
     const lastRunClean = prior.clean === true;
@@ -784,6 +1110,8 @@ export async function runEmployeeSyncWorkflow(
       if (Object.keys(patch).length > 0) {
         writebackResult = await writeHubSpot(patch);
       }
+      // `noop` is a log value only; the status written above, if any, is the real one.
+      summary.setOutcome("noop", identityCode(reason));
       logger("info", "Employee sync compared mapped state.", {
         workflow: "employeeSync",
         recordId: normalizedRecordId,
@@ -809,9 +1137,9 @@ export async function runEmployeeSyncWorkflow(
       // Row 3.7: the CentralReach read for the ID check is skipped only when the last status is
       // success and nothing changed. No update is sent then either.
       if (unchanged && String(hubspotProps.last_sync_status ?? "").trim() === "success") {
-        return finishUnchanged({ status: "success", reason: "" });
+        return await finishUnchanged({ status: "success", reason: "" });
       }
-      const existingCrEmployee = await fetchCrEmployeeById(existingContactId);
+      const existingCrEmployee = await fetchCrEmployeeById(existingContactId, { onCall });
       // Row 3.13: an update sends back what this read holds under `contact`. A read with no
       // `contact` object would leave every blank core field out, and a field that is left out
       // is cleared in CentralReach. So no update is sent: the answer cannot be read (Stage 2
@@ -853,16 +1181,17 @@ export async function runEmployeeSyncWorkflow(
         });
       }
       if (!identity.sendUpdate) {
-        return decided({
+        return await decided({
           status: identity.status,
           reason: identity.reason,
+          code: identityCode(identity.reason),
           fail: true,
           contactId: existingContactId
         });
       }
       // Row 3.7: the ID check ran; with no change only the status can differ.
       if (unchanged) {
-        return finishUnchanged({ status: identity.status, reason: identity.reason });
+        return await finishUnchanged({ status: identity.status, reason: identity.reason });
       }
     }
 
@@ -894,13 +1223,25 @@ export async function runEmployeeSyncWorkflow(
         employeeType: normalizedEmployeeType,
         existingContactId,
         allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate),
-        putOnlyMode: config.features?.putOnlyMode !== false
+        putOnlyMode: config.features?.putOnlyMode !== false,
+        onCall
       });
+      summary.setOperation(operationOf(syncResult));
       if (syncResult?.operation === "create_turned_off") {
-        return decided({ status: "waiting", reason: syncResult.reason, fail: false });
+        return await decided({
+          status: "waiting",
+          reason: syncResult.reason,
+          code: DECIDED_CODES.EMPLOYEE_CREATE_TURNED_OFF,
+          fail: false
+        });
       }
       if (syncResult?.operation === "create_rejected") {
-        return decided({ status: "error", reason: syncResult.reason, fail: true });
+        return await decided({
+          status: "error",
+          reason: syncResult.reason,
+          code: DECIDED_CODES.CR_CREATE_REJECTED,
+          fail: true
+        });
       }
     }
 
@@ -949,13 +1290,17 @@ export async function runEmployeeSyncWorkflow(
             lastLabelPost: lastLabelPostFor(prior, contactId),
             contactCreatedThisRun: createdThisRun || labelsPending,
             clearFieldIds,
-            ...labelReadBackOptions
+            ...labelReadBackOptions,
+            onCall
           }
         );
+        summary.setLabels(metadataSyncSummary?.labelResult);
       } catch (error) {
         // Row L.3: a label POST that failed with a timeout or a 5xx may still have been applied.
         // The sender attaches it to the error; it is saved, then the same error is rethrown. If
         // the save fails, that is logged and the label error still stands.
+        // Row 3.20: a POST that was sent and not confirmed is still shown in the summary line.
+        summary.setLabelsFromError(error);
         const failedPost = labelPostFromError(error);
         if (Object.keys(failedPost).length > 0) {
           try {
@@ -1003,10 +1348,17 @@ export async function runEmployeeSyncWorkflow(
     }
 
     const confirmedRecord = await fetchRecord();
+    // Row 4.18: the confirm read is a HubSpot answer too. A missing key there is a failed read
+    // (temporary): the writes are done, and the run is retried.
+    if (missingMappedProperties(normalizedEmployeeType, confirmedRecord?.properties).length > 0) {
+      throw new HubSpotReadError("employee");
+    }
+    // Both mappings of the run get the same inputs: the Contact is not read again.
     const confirmedMapped = mapPayload({
       record: confirmedRecord,
       employeeType: normalizedEmployeeType,
-      config
+      config,
+      contactEmail
     });
     const confirmedHash = digestPayload(
       comparedStateOf(confirmedMapped, confirmedRecord?.properties || {})
@@ -1055,6 +1407,7 @@ export async function runEmployeeSyncWorkflow(
       ...NO_IN_PROGRESS,
       clean: true
     });
+    summary.setOutcome(status, status === "success" ? null : identityCode(syncResult.reason));
     await saveAttempt(STATE_TYPES.SUCCESS, {
       status,
       operation: syncResult.operation,
@@ -1082,6 +1435,10 @@ export async function runEmployeeSyncWorkflow(
     // retry. HubSpot keeps its last status until the last attempt (decision 1).
     const failureKind = classifyFailure(error);
     const permanent = failureKind === FAILURE_KINDS.PERMANENT;
+    summary.setOutcome(
+      WAITING_CODES.has(error?.code) ? "waiting" : "error",
+      reasonCodeOfError(error)
+    );
     logger(
       permanent || lastAttempt ? "error" : "warn",
       "Employee sync workflow failed.",
@@ -1136,6 +1493,7 @@ export async function runEmployeeSyncWorkflow(
             idProperty: employeeIdProperty
           })
         });
+        summary.noteWriteback(errorPatch.last_sync_status);
       } catch (failed) {
         writebackError = failed;
         logger(
@@ -1206,6 +1564,8 @@ export async function runEmployeeSyncWorkflow(
       crContactId: linkedContactId
     };
   } finally {
+    // Row 3.20: one summary line per run, on every outcome, once the run has ended.
+    summary.log(logger);
     if (lease) {
       try {
         await unlock({ pk: "sync-lock:employee", id: stateId, etag: lease.etag });

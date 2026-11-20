@@ -93,6 +93,23 @@ export function memoryContainer() {
   return container;
 }
 
+// Row 4.18 (lane E): HubSpot answers every requested property, a blank one as a null key (P.7 (b),
+// 2026-11-20). An answer that leaves a requested key out is a failed read. So the employee
+// readers below fill each requested property the fake record does not hold with null, as
+// HubSpot does.
+export function hubspotAnswer(answer, propertyNames) {
+  const nulls = Object.fromEntries((propertyNames || []).map((name) => [name, null]));
+  return { ...answer, properties: { ...nulls, ...(answer?.properties || {}) } };
+}
+
+// The same for a test's own reader: wraps it so its answer holds every requested property.
+export function answersLikeHubSpot(read) {
+  return async (id, type, names) => {
+    const answer = await read(id, type, names);
+    return answer ? hubspotAnswer(answer, names) : answer;
+  };
+}
+
 export function hubspotRecord(properties) {
   const state = { ...properties };
   const writes = [];
@@ -362,8 +379,10 @@ export function employeeWorkflowDeps({ record, logs = [], config = workflowConfi
     createHubSpotClient: () => {},
     createCentralReachClient: () => {},
     createStateClient: () => {},
-    getBtRbtRecordById: async () => record.read(),
-    getBcbaRecordById: async () => record.read(),
+    getBtRbtRecordById: async (id, type, names) => hubspotAnswer(record.read(), names),
+    getBcbaRecordById: async (id, type, names) => hubspotAnswer(record.read(), names),
+    // Row 6.4 (lane E): the BCBA's Contact. By default no Contact is linked.
+    listAssociations: async () => [],
     findHubSpotRecordsByEmployeeId: async () => holders,
     writeEmployeeWriteback: async ({ properties }) => {
       record.write(properties);

@@ -71,8 +71,8 @@ export const BCBA_PROPERTIES = Object.freeze({
     "last_name",
     "date_of_birth",
     "gender_new",
-    // Personal email (B9). Read from the BCBA record until row 6.4 reads the BCBA's Contact.
-    "email",
+    // The personal email (B9) is not a BCBA property: row 6.4 reads the email of the BCBA's
+    // Contact (BCBA -> Contact) in src/workflows/employeeSyncWorkflow.mjs.
     "ucaba_email_address",
     // Mailing address and phone: read-only Contact mirrors (B7)
     "address",
@@ -112,6 +112,12 @@ export const BCBA_PROPERTIES = Object.freeze({
 
 function listsFor(employeeType) {
   return employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT ? BT_RBT_PROPERTIES : BCBA_PROPERTIES;
+}
+
+// Row 4.18: the properties the mappers read. Every one must be a key in the HubSpot answer
+// (HubSpot answers a blank property with a null key); a missing key is a failed read.
+export function employeeMappedProperties(employeeType) {
+  return [...listsFor(employeeType).mapped];
 }
 
 // Every property the worker asks HubSpot for on one employee object, before the configured CR ID

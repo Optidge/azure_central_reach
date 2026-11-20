@@ -16,7 +16,7 @@ import { validateEmployeePayload } from "../../mappings/employees/validateEmploy
 import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
-import { withBlankKeys } from "./stage2Fakes.mjs";
+import { hubspotAnswer, withBlankKeys } from "./stage2Fakes.mjs";
 import {
   buildEmployeePayloadForContactId,
   createCentralReachClient,
@@ -142,14 +142,17 @@ function employeeHarness({
       calls.events.push(`release:${pk}`);
     },
     getState: async () => prior,
+    // Row 4.18 (lane E): HubSpot answers every requested property, a blank one as a null key.
     getBtRbtRecordById: async (id, type, propertyNames) => {
       calls.reads.push(propertyNames);
-      return record;
+      return hubspotAnswer(record, propertyNames);
     },
     getBcbaRecordById: async (id, type, propertyNames) => {
       calls.reads.push(propertyNames);
-      return record;
+      return hubspotAnswer(record, propertyNames);
     },
+    // Row 6.4 (lane E): the BCBA's Contact. No Contact is linked.
+    listAssociations: async () => [],
     getEmployeeByContactId: async (id) => {
       calls.crGets.push(id);
       return crEmployee;
@@ -694,10 +697,12 @@ test("[GER-REQ] a missing employee date_of_birth property is an error", async ()
   const { deps, calls } = employeeHarness({ properties });
   delete deps.getBtRbtRecordById;
   const record = employeeRecord("bt_rbt", properties);
-  delete record.properties.date_of_birth;
   deps.getBtRbtRecordById = async (id, type, propertyNames) => {
     calls.reads.push(propertyNames);
-    return record;
+    // Row 4.18 (lane E): every other requested key is in the answer; date_of_birth is not.
+    const answer = hubspotAnswer(record, propertyNames);
+    delete answer.properties.date_of_birth;
+    return answer;
   };
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "error");

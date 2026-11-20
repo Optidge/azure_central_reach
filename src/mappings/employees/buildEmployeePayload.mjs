@@ -343,7 +343,7 @@ function buildBtRbtPayload({ record, config }) {
   };
 }
 
-function buildBcbaPayload({ record, config }) {
+function buildBcbaPayload({ record, config, contactEmail }) {
   const properties = record?.properties || {};
   const recordId = properties.hs_object_id || record?.id;
   const dateFields = employeeDateFields(properties);
@@ -375,7 +375,12 @@ function buildBcbaPayload({ record, config }) {
   });
 
   const metadataValues = {
-    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL]: cleanEmail(properties.email),
+    // B9, row 6.4: the personal email is the email of the BCBA's Contact, which the worker reads
+    // and passes in. Not passed (the Contact could not be read): the key is left out, and the
+    // worker names the field in omitFieldIds (contract P.5 (c) below).
+    ...(contactEmail === undefined
+      ? {}
+      : { [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL]: cleanEmail(contactEmail) }),
     [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY]: trimOrNull(
       properties.medicaid_id__ny
     ),
@@ -439,12 +444,17 @@ function buildBcbaPayload({ record, config }) {
 // field is then not sent and not cleared. Row 3.18: the worker also keeps the field's saved hash
 // in the link record and leaves the field out of the changed fields, so a later blank in HubSpot
 // still sends the clear.
-export function buildEmployeePayload({ record, employeeType, config }) {
+//   contactEmail  (BCBA only, row 6.4) the `email` of the Contact linked by BCBA -> Contact, as
+//                 read by the worker: a text, or null when no Contact is linked or its email is
+//                 blank (Meta 138069 is then blank). Left undefined when the Contact could not be
+//                 read or more than one is linked: the mapper leaves 138069 out and the worker
+//                 names it in omitFieldIds. Both mappings of one run get the same value.
+export function buildEmployeePayload({ record, employeeType, config, contactEmail }) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return buildBtRbtPayload({ record, config });
   }
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BCBA) {
-    return buildBcbaPayload({ record, config });
+    return buildBcbaPayload({ record, config, contactEmail });
   }
   throw new Error("Unsupported employeeType");
 }

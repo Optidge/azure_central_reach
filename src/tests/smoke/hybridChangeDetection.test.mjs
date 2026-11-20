@@ -20,6 +20,7 @@ import { filterWritebackProperties } from "../../lib/writebackAllowlist.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { withBlankKeys } from "./stage2Fakes.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+import { answersLikeHubSpot } from "./stage2Fakes.mjs";
 
 test("association sets ignore order and excluded role types", () => {
   // Stage 2 (row 2.6): the excluded types are passed in from the portal table. These rows use
@@ -235,7 +236,8 @@ test("employee timestamp shortcut no longer skips a mapped change", async () => 
       acquireLease: async () => true,
       releaseLease: async () => {},
       getState: async () => null,
-      getBtRbtRecordById: async () => ({
+      // Row 4.18 (lane E): HubSpot answers every requested property, a blank one as a null key.
+      getBtRbtRecordById: answersLikeHubSpot(async () => ({
         id: "1",
         properties: {
           hs_object_id: "1",
@@ -244,7 +246,7 @@ test("employee timestamp shortcut no longer skips a mapped change", async () => 
           employee_id: "100",
           last_sync_hash: "old"
         }
-      }),
+      })),
       buildEmployeePayload: () => ({
         employeePayload: { externalSystemId: "1", firstName: "Ada" },
         metadataValues: { 133819: "New address" },

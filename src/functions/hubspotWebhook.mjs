@@ -8,7 +8,12 @@ import {
   readWebhookSettings,
   resolveWebhookTarget
 } from "../lib/hubspotWebhook.mjs";
-import { createServiceBusClient, sendClientSyncMessage, sendEmployeeSyncMessage } from "../lib/serviceBusClient.mjs";
+import {
+  createServiceBusClient,
+  sendClientSyncMessage,
+  sendContactChangeMessage,
+  sendEmployeeSyncMessage
+} from "../lib/serviceBusClient.mjs";
 
 let busReady = false;
 
@@ -111,13 +116,26 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
     );
   }
 
-  const recordId = resolved.dealId || resolved.recordId;
+  const recordId = resolved.dealId || resolved.contactId || resolved.recordId;
   const enqueuedAt = dependencies.enqueuedAt || new Date().toISOString();
   try {
-    if (!dependencies.sendClientSyncMessage && !dependencies.sendEmployeeSyncMessage) {
+    if (
+      !dependencies.sendClientSyncMessage &&
+      !dependencies.sendEmployeeSyncMessage &&
+      !dependencies.sendContactChangeMessage
+    ) {
       ensureServiceBus();
     }
-    if (resolved.target === "client") {
+    if (resolved.target === "contact") {
+      // Row 6.1: one contactChange message on the client queue; the fan-out does the rest.
+      const send = dependencies.sendContactChangeMessage || sendContactChangeMessage;
+      await send({
+        contactId: resolved.contactId,
+        portalId: settings.portalId,
+        source: "hubspotWorkflow",
+        enqueuedAt
+      });
+    } else if (resolved.target === "client") {
       const send = dependencies.sendClientSyncMessage || sendClientSyncMessage;
       await send({
         dealId: resolved.dealId,

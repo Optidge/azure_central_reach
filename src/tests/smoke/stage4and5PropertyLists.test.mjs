@@ -255,8 +255,7 @@ const BCBA_MAPPED = [
   "medicaid_id__ny",
   "medicaid_id__nj",
   "medicaid_id__co",
-  // B9: read from the BCBA record until row 6.4 (lane E) reads the Contact
-  "email",
+  // B9: not a BCBA property since row 6.4 (lane E): the email of the BCBA's Contact
   // BL2 (5.4), BL4 (5.5), BL5 (5.6), B10 (5.7), BL7 (5.8)
   "location",
   "assign_states",
