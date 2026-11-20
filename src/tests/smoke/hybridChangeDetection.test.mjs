@@ -18,6 +18,7 @@ import { hubspotPortalSettings } from "../../lib/config.mjs";
 import { retryDelayMs } from "../../lib/retry.mjs";
 import { filterWritebackProperties } from "../../lib/writebackAllowlist.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
+import { withBlankKeys } from "./stage2Fakes.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 
 test("association sets ignore order and excluded role types", () => {
@@ -133,7 +134,7 @@ function clientDeps(overrides = {}) {
     acquireLease: async () => true,
     releaseLease: async () => {},
     getState: async () => overrides.prior || null,
-    getDealById: async () => overrides.deal,
+    getDealById: async (_id, requested) => withBlankKeys(overrides.deal, requested),
     buildClientPayload: () => overrides.payload || { FirstName: "Ada" },
     validateClientPayload: () => ({ isValid: true, errors: [] }),
     buildClientMetadata: () => overrides.metadata || { labelIds: [1], metadataValues: { 126214: null } },

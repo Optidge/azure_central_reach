@@ -20,6 +20,7 @@ import {
 } from "../../lib/centralReachClient.mjs";
 import { updateEmployeeWritebackWithFallback } from "../../lib/hubspotClient.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
+import { withBlankKeys } from "./stage2Fakes.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 
 function httpError(status, data = {}) {
@@ -418,10 +419,14 @@ function clientDeps(overrides = {}) {
     acquireLease: async () => true,
     releaseLease: async () => {},
     getState: async () => stored,
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: { hs_object_id: "deal-1", enter_in_central_reach: "Yes", client_id_number: "" }
-    }),
+    getDealById: async (_id, requested) =>
+      withBlankKeys(
+        {
+          id: "deal-1",
+          properties: { hs_object_id: "deal-1", enter_in_central_reach: "Yes", client_id_number: "" }
+        },
+        requested
+      ),
     buildClientPayload: () => ({ FirstName: "A", LastName: "B" }),
     validateClientPayload: () => ({ isValid: true, errors: [] }),
     buildClientMetadata: () => ({ labelIds: [1], metadataValues: { 126214: "x" } }),

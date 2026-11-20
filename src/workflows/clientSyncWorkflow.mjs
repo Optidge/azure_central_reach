@@ -1,7 +1,14 @@
 import { getConfig, hubspotPortalSettings } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
-import { createHubSpotClient, getDealById, listAssociations, updateDealProperties } from "../lib/hubspotClient.mjs";
+import {
+  createHubSpotClient,
+  getDealById,
+  getOwnerById,
+  listAssociations,
+  readObjectsBatch,
+  updateDealProperties
+} from "../lib/hubspotClient.mjs";
 import {
   createCentralReachClient,
   createOrUpdateClient,
@@ -62,15 +69,43 @@ import { STATE_TYPES } from "../constants/state.mjs";
 import {
   CASE_CLIENT_ID_MISMATCH,
   RETRIES_USED_UP,
-  crIdNotDigits
+  crIdNotDigits,
+  unreadableDate
 } from "../constants/syncReasons.mjs";
 import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
+import {
+  createSyncRunSummary,
+  reasonCodeOfError
+} from "../lib/syncRunSummary.mjs";
+import {
+  PROPERTY_MISSING_CODE,
+  DECISION_PROPERTIES,
+  missingMappedProperties,
+  missingProperties,
+  missingPropertiesReason,
+  omitFieldIdsFor,
+  readOwnerName,
+  readStaffNames,
+  staffRecordIdsByRole
+} from "./clientSyncInputs.mjs";
 
 // The link record never expires. Attempt details (last error, invocation) are a second record
 // that may expire. Both ids start with the portal ID.
 const CLIENT_LINK_PK = "sync:client";
 const CLIENT_ATTEMPT_PK = "sync-attempt:client";
 const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
+
+// Reason codes of the run summary line (row 3.20) for the errors this worker decides on purpose.
+const DECIDED_CODES = Object.freeze({
+  CR_ID_NOT_DIGITS: "CR_ID_NOT_DIGITS",
+  VALIDATION_FAILED: "VALIDATION_FAILED",
+  UNREADABLE_DATE: "UNREADABLE_DATE",
+  CASE_CLIENT_ID_MISMATCH: "CASE_CLIENT_ID_MISMATCH"
+});
+
+// A run that is held on purpose and retried: another run holds the record, or a create was sent
+// a short time ago and CentralReach does not show it yet. The summary line says `waiting`.
+const WAITING_CODES = new Set(["SYNC_IN_PROGRESS", "CR_CREATE_PENDING"]);
 
 function hashPayload(payload) {
   return hashMappedState(payload);
@@ -170,9 +205,10 @@ function statusIsShown(properties, status, reason) {
   );
 }
 
-// lastAttempt is set by the queue worker when this message has used its five retries.
+// lastAttempt is set by the queue worker when this message has used its five retries. attempt is
+// the number of retries the message has already used; it is only logged (row 3.20).
 export async function runClientSyncWorkflow(
-  { dealId, hsLastModifiedDate, source, context, lastAttempt = false },
+  { dealId, hsLastModifiedDate, source, context, lastAttempt = false, attempt = null },
   dependencies = {}
 ) {
   const getRuntimeConfig = dependencies.getConfig || getConfig;
@@ -189,6 +225,8 @@ export async function runClientSyncWorkflow(
   const claimLock = dependencies.acquireLease || acquireLease;
   const unlock = dependencies.releaseLease || releaseLease;
   const loadAssociations = dependencies.listAssociations || listAssociations;
+  const readBatch = dependencies.readObjectsBatch || readObjectsBatch;
+  const readOwner = dependencies.getOwnerById || getOwnerById;
   const mapPayload = dependencies.buildClientPayload || buildClientPayload;
   const mapMetadata = dependencies.buildClientMetadata || buildClientMetadata;
   const validatePayload = dependencies.validateClientPayload || validateClientPayload;
@@ -205,17 +243,22 @@ export async function runClientSyncWorkflow(
       : { labelReadBackDelayMs: dependencies.labelReadBackDelayMs };
 
   const normalizedDealId = ensureDealId(dealId);
-  const config = getRuntimeConfig();
-  // Any portal that is not in the table is invalid configuration: nothing is read or written.
-  const portal = hubspotPortalSettings(config.hubspot?.hubspotPortalId);
-  const crContactIdProperty =
-    config.hubspot.crContactIdProperty || FALLBACK_CR_CONTACT_ID_PROPERTY;
-
-  initHubSpot(config);
-  initCentralReach(config);
-  initState(config);
-
-  const stateId = `${portal.portalId}:${normalizedDealId}`;
+  // Row 3.20: what this run did, logged once at the end (see the finally block). It exists before
+  // the configuration is read, so a run that cannot start still logs one line. The portal ID is
+  // set as soon as it is known.
+  const summary = createSyncRunSummary({
+    workflow: "clientSync",
+    recordId: normalizedDealId,
+    portalId: null,
+    source: source || null,
+    invocationId: context?.invocationId || null,
+    attempt
+  });
+  // Set at the start of the try block below. Nothing that uses them runs before that.
+  let config = null;
+  let portal = null;
+  let crContactIdProperty = FALLBACK_CR_CONTACT_ID_PROPERTY;
+  let stateId = null;
   const readLink = () => readPriorSyncState(readState, CLIENT_LINK_PK, stateId);
   // Every link record write merges into what is stored (src/lib/linkRecord.mjs).
   const saveLinkFields = (changes) =>
@@ -252,6 +295,16 @@ export async function runClientSyncWorkflow(
   // earlier create. The catch block then saves labelsPending with the CR id.
   let ownCreate = false;
   try {
+    config = getRuntimeConfig();
+    // Any portal that is not in the table is invalid configuration: nothing is read or written.
+    portal = hubspotPortalSettings(config.hubspot?.hubspotPortalId);
+    summary.setPortalId(portal.portalId);
+    crContactIdProperty = config.hubspot.crContactIdProperty || FALLBACK_CR_CONTACT_ID_PROPERTY;
+    initHubSpot(config);
+    initCentralReach(config);
+    initState(config);
+    stateId = `${portal.portalId}:${normalizedDealId}`;
+
     lease = await claimRecordLock(claimLock, {
       pk: "sync-lock:client",
       id: stateId,
@@ -289,6 +342,18 @@ export async function runClientSyncWorkflow(
     knownContactId = existingContactId;
     hubspotHasContactId = Boolean(hubspotContactId);
 
+    // Rule 5.8, row 4.18: a key the gate reads that is not in the HubSpot answer was not read. A
+    // missing `dealstage` or `test_record` would let an excluded-stage or test Case through, and a
+    // missing status key would write the status again on every run. Nothing is decided and nothing
+    // is written to HubSpot (rule 5.1: the gate has not passed); the run is retried.
+    const missingGateKeys = missingProperties(deal?.properties, [
+      ...DECISION_PROPERTIES,
+      ...(recordGateProperty ? [recordGateProperty] : [])
+    ]);
+    if (missingGateKeys.length > 0) {
+      throw new HubSpotReadError(`deal:${missingGateKeys.join(",")}`);
+    }
+
     const eligibility = caseSyncEligibility({
       properties: deal?.properties,
       linked: Boolean(existingContactId),
@@ -305,6 +370,7 @@ export async function runClientSyncWorkflow(
         linked: Boolean(existingContactId),
         invocationId: context?.invocationId || null
       });
+      summary.setOutcome("skipped", eligibility.reason);
       return {
         ok: true,
         dealId: normalizedDealId,
@@ -319,6 +385,7 @@ export async function runClientSyncWorkflow(
         normalizedDealId,
         filterWritebackProperties(properties, { kind: "client", idProperty: crContactIdProperty })
       );
+      summary.noteWriteback(properties.last_sync_status);
       if (properties.last_sync_status !== undefined) {
         shown = {
           last_sync_status: properties.last_sync_status,
@@ -329,7 +396,9 @@ export async function runClientSyncWorkflow(
     // An error decided on purpose: write the status and finish. The link record is not touched,
     // so the CR id and the last good field hashes stay as they are. The status is written only
     // when HubSpot does not show it yet; the CR id and the link when HubSpot lacks them.
-    const decidedError = async (reason) => {
+    // Callers write `return await decidedError(...)`: without the await the `finally` block would
+    // release the lease and log the run summary before the status write has finished.
+    const decidedError = async (reason, code) => {
       const patch = {
         ...(statusIsShown(shown, "error", reason) ? {} : statusProperties("error", reason)),
         ...(knownContactId && !hubspotContactId
@@ -340,6 +409,7 @@ export async function runClientSyncWorkflow(
         await writeback(patch);
       }
       await saveAttempt(STATE_TYPES.FAIL, { status: "error", errorMessage: reason });
+      summary.setOutcome("error", code);
       return {
         ok: true,
         dealId: normalizedDealId,
@@ -348,11 +418,29 @@ export async function runClientSyncWorkflow(
       };
     };
 
+    // Row 4.18 (D-R1): the CR ID property decides "linked" or "not linked", and so a create. A
+    // missing key is not "not linked" (a null key is). Checked before anything uses the CR ID.
+    if (missingProperties(deal?.properties, [crContactIdProperty]).length > 0) {
+      knownContactId = null;
+      return await decidedError(
+        missingPropertiesReason([crContactIdProperty]),
+        PROPERTY_MISSING_CODE
+      );
+    }
+
     // Rule 5.5, row 3.16: a CR ID from HubSpot must be digits only. The value is not used, not
     // saved and not logged.
     if (hubspotContactId && !isDigitsOnly(hubspotContactId)) {
       knownContactId = null;
-      return decidedError(crIdNotDigits(crContactIdProperty));
+      return await decidedError(crIdNotDigits(crContactIdProperty), DECIDED_CODES.CR_ID_NOT_DIGITS);
+    }
+
+    // Row 4.18 (rule 5.8): a mapped property that is not a key of the HubSpot answer was not
+    // read. HubSpot answers a blank property as a null key, so this is never "blank". The run
+    // stops here: nothing is sent to CentralReach.
+    const missingMapped = missingMappedProperties(deal?.properties);
+    if (missingMapped.length > 0) {
+      return await decidedError(missingPropertiesReason(missingMapped), PROPERTY_MISSING_CODE);
     }
 
     // Rows 2.2 and 3.7: the saved hashes count only for the CR id they were synced to and for
@@ -371,19 +459,22 @@ export async function runClientSyncWorkflow(
     const mappedPayload = mapPayload({ deal, config });
     const validation = validatePayload(mappedPayload, { linked: Boolean(existingContactId) });
     if (!validation.isValid) {
-      return decidedError(validation.errors?.[0] || "Client sync failed");
+      return await decidedError(
+        validation.errors?.[0] || "Client sync failed",
+        DECIDED_CODES.VALIDATION_FAILED
+      );
     }
     const payload = centralReachPayload(mappedPayload);
 
-    // Contract P.5 (c) in src/mappings/client/buildClientMetadata.mjs: the CentralReach metadata
-    // fields whose input could not be read in this run. No read of this worker fills the list
-    // yet; rows 4.14 and 4.16 add those reads. Both mappings of the run get the same list.
-    const omitFieldIds = [...(dependencies.omitFieldIds || [])];
-    const metadata = mapMetadata({ deal, portalId: portal.portalId, omitFieldIds });
+    // Rows 4.14 and 4.16: the staff on the Case and the owner are read here and passed to the
+    // mapper. A failed association or name read stops the run; it never becomes a blank (rule
+    // 5.8). The association rows also give the relationships of the compared state (BR17).
     let includeRelationships = false;
     let relationships = [];
+    let staffNames;
     const bcbaType = config.hubspot.bcbaObjectTypeId;
     const btType = config.hubspot.btRbtObjectTypeId;
+    let staffAssociations = null;
     if (bcbaType && btType) {
       try {
         const [bcbaAssociations, btAssociations] = await Promise.all([
@@ -403,6 +494,7 @@ export async function runClientSyncWorkflow(
           portal.excludedStaffingAssociationTypeIds
         );
         includeRelationships = true;
+        staffAssociations = { bcbaAssociations, btRbtAssociations: btAssociations };
       } catch (error) {
         if (!String(error?.message || "").includes("not initialized")) {
           const readError = asReadFailure(error, "associations");
@@ -412,6 +504,69 @@ export async function runClientSyncWorkflow(
           throw error;
         }
       }
+    }
+    if (staffAssociations) {
+      try {
+        staffNames = await readStaffNames({
+          idsByRole: staffRecordIdsByRole({
+            ...staffAssociations,
+            roleTypeIds: portal.staffingRoleAssociationTypeIds
+          }),
+          bcbaObjectTypeId: bcbaType,
+          btRbtObjectTypeId: btType,
+          readBatch
+        });
+      } catch (error) {
+        throw asReadFailure(error, "staffNames") || error;
+      }
+    }
+    const owner = await readOwnerName({ properties: deal?.properties, readOwner });
+    if (owner.warning) {
+      logger("warn", "Client owner was not read; the Care Coordinator field is left out.", {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source: source || null,
+        ...owner.warning,
+        invocationId: context?.invocationId || null
+      });
+    }
+
+    // Contract P.5 (c) in src/mappings/client/buildClientMetadata.mjs: the CentralReach metadata
+    // fields whose input was not read in this run. `dependencies.omitFieldIds` is a seam for
+    // tests; the worker adds the Care Coordinator when the owner was not read, and the staff
+    // fields when the staff were not read. Both mappings of the run (SP-R7) get exactly the same
+    // inputs: if they differed, the two hashes would differ and the run would end as "changed
+    // during the run" after the CentralReach writes.
+    const omitFieldIds = omitFieldIdsFor({
+      base: dependencies.omitFieldIds,
+      ownerNotRead: owner.notRead,
+      staffNames
+    });
+    const metadataInputs = {
+      portalId: portal.portalId,
+      staffNames,
+      ownerName: owner.ownerName,
+      omitFieldIds
+    };
+    const metadata = mapMetadata({ deal, ...metadataInputs });
+    // Row 4.14 (C-R6): a staff record with no name. Role and code only, never a name.
+    for (const warning of metadata.warnings || []) {
+      logger("warn", "Client metadata mapper warning.", {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source: source || null,
+        code: warning.code,
+        role: warning.role,
+        invocationId: context?.invocationId || null
+      });
+    }
+    // Rule 5.7 (C-R1): a filled date that is not a real date. The field is left out by the
+    // mapper; the run ends as `error` and nothing is sent to CentralReach.
+    if ((metadata.unreadableDateProperties || []).length > 0) {
+      return await decidedError(
+        unreadableDate(metadata.unreadableDateProperties.join(", ")),
+        DECIDED_CODES.UNREADABLE_DATE
+      );
     }
 
     const comparable = buildComparableState({
@@ -429,6 +584,7 @@ export async function runClientSyncWorkflow(
       omitFieldIds
     );
     const changedFields = changedNamesFromHashes(savedFieldHashes, nextFieldHashes);
+    summary.setChangedFieldNames(changedFields);
 
     // Rows 2.4 and 3.7: "nothing changed" needs a clean last run and matching hashes in Cosmos,
     // made with the current mapping version. HubSpot's last_sync_hash is not asked.
@@ -454,6 +610,8 @@ export async function runClientSyncWorkflow(
         changedFieldNames: changedFields,
         invocationId: context?.invocationId || null
       });
+      // `noop` is a log value only; HubSpot was written `success` above when it needed it.
+      summary.setOutcome("noop");
       return {
         ok: true,
         dealId: normalizedDealId,
@@ -477,6 +635,10 @@ export async function runClientSyncWorkflow(
       });
     }
 
+    // Row 3.20: the CentralReach client reports each HTTP request it sends to this observer.
+    const onCall = summary.onCall;
+    const lookUpClient = (externalSystemId) => findClient(externalSystemId, { onCall });
+
     // The CR id the write goes to. null: a create.
     let targetContactId = existingContactId;
     // Contract P.5 (f), row 3.14: true only when a lookup of this run found the client under the
@@ -484,13 +646,13 @@ export async function runClientSyncWorkflow(
     // The update then sends that ID back; an update that left it out could wipe it.
     let externalSystemIdHeld = false;
     if (existingContactId) {
-      const lookup = await findClient(normalizedDealId);
+      const lookup = await lookUpClient(normalizedDealId);
       const lookedUpId = lookup?.found ? String(lookup.crContactId || "").trim() : "";
       if (lookup?.found && !lookedUpId) {
         throw lookupWithoutContactId("client", { status: null, data: null });
       }
       if (lookup?.found && lookedUpId !== String(existingContactId)) {
-        return decidedError(CASE_CLIENT_ID_MISMATCH);
+        return await decidedError(CASE_CLIENT_ID_MISMATCH, DECIDED_CODES.CASE_CLIENT_ID_MISMATCH);
       }
       externalSystemIdHeld = Boolean(lookup?.found);
     } else if (String(prior.pendingCreateExternalId || "").trim()) {
@@ -499,7 +661,7 @@ export async function runClientSyncWorkflow(
       // sent: CentralReach may not show it yet, so no create; the run is retried. Not found
       // later: nothing was created, and the create below saves a new marker.
       const pendingId = String(prior.pendingCreateExternalId).trim();
-      const pending = await findClient(pendingId);
+      const pending = await lookUpClient(pendingId);
       const pendingContactId = pending?.found ? String(pending.crContactId || "").trim() : "";
       if (pending?.found && !pendingContactId) {
         throw lookupWithoutContactId("client", { status: null, data: null });
@@ -536,7 +698,8 @@ export async function runClientSyncWorkflow(
       syncResult = await upsertClient({
         payload,
         existingContactId: targetContactId,
-        ...(externalSystemIdHeld ? { externalSystemIdHeld: true } : {})
+        ...(externalSystemIdHeld ? { externalSystemIdHeld: true } : {}),
+        onCall
       });
     } catch (error) {
       // Nothing is pending when no create can have reached CentralReach: it said no (a permanent
@@ -552,6 +715,8 @@ export async function runClientSyncWorkflow(
       }
       throw error;
     }
+
+    summary.setOperation(syncResult?.operation === "create" ? "create" : "update");
 
     // Row L.3: a label POST that failed with a timeout or a 5xx may still have been applied. The
     // sender attaches it to the error; it is saved, and the caller rethrows the same error. If
@@ -633,13 +798,16 @@ export async function runClientSyncWorkflow(
             lastLabelPost: lastLabelPostFor(prior, syncResult.crContactId),
             contactCreatedThisRun: labelsPending,
             clearFieldIds,
+            onCall,
             ...labelReadBackOptions
           }
         );
       } catch (error) {
+        summary.setLabelsFromError(error);
         await saveLabelPostOf(error);
         throw error;
       }
+      summary.setLabels(metadataSyncSummary?.labelResult);
       // Row L.3: a label POST is saved before anything else can end the run, also before the
       // throw for a failed metadata field.
       const labelChanges = labelFieldsAfterSend({
@@ -669,11 +837,7 @@ export async function runClientSyncWorkflow(
       throw error;
     }
     const confirmedPayload = centralReachPayload(mapPayload({ deal: confirmedDeal, config }));
-    const confirmedMetadata = mapMetadata({
-      deal: confirmedDeal,
-      portalId: portal.portalId,
-      omitFieldIds
-    });
+    const confirmedMetadata = mapMetadata({ deal: confirmedDeal, ...metadataInputs });
     const confirmedHash = digestPayload(
       buildComparableState({
         core: confirmedPayload,
@@ -728,6 +892,7 @@ export async function runClientSyncWorkflow(
       metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
       metadataFailedCount: metadataSyncSummary?.failedCount ?? null
     });
+    summary.setOutcome("success");
 
     return {
       ok: true,
@@ -745,6 +910,7 @@ export async function runClientSyncWorkflow(
     // retry. HubSpot keeps its last status until the last attempt (decision 1).
     const failureKind = classifyFailure(error);
     const permanent = failureKind === FAILURE_KINDS.PERMANENT;
+    summary.setOutcome(WAITING_CODES.has(error?.code) ? "waiting" : "error", reasonCodeOfError(error));
     logger(
       permanent || lastAttempt ? "error" : "warn",
       "Client sync workflow failed.",
@@ -784,6 +950,7 @@ export async function runClientSyncWorkflow(
           normalizedDealId,
           filterWritebackProperties(errorPatch, { kind: "client", idProperty: crContactIdProperty })
         );
+        summary.noteWriteback(errorPatch.last_sync_status);
       } catch (failed) {
         writebackError = failed;
         logger(
@@ -852,6 +1019,8 @@ export async function runClientSyncWorkflow(
       crContactId: knownContactId
     };
   } finally {
+    // Row 3.20: one summary line per run, on every outcome, once the run has ended.
+    summary.log(logger);
     if (lease) {
       try {
         await unlock({ pk: "sync-lock:client", id: stateId, etag: lease.etag });
