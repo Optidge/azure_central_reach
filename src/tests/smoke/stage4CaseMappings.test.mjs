@@ -154,18 +154,26 @@ test("[C19][4.5] Client Availability is blank when both sources are blank, and c
 
 // --- 4.6, C20: Total Assigned Hours ---
 
-test("[C20][4.6] Total Assigned Hours reads total_hours_bt1bt2_work_schedule, never the older totals or assigned_hours", () => {
+test("[C20][4.6] Total Assigned Hours reads total_hours_btrbt_12 (decision 40), never total_hours_bt1bt2_work_schedule, the older total or assigned_hours", () => {
   const values = meta({
-    total_hours_bt1bt2_work_schedule: "22.5",
-    total_hours_bt_12_work_schedule: "1",
-    total_hours_btrbt_12: "2",
+    total_hours_btrbt_12: "22.5",
+    total_hours_bt1bt2_work_schedule: "1",
+    total_hours_bt_12_work_schedule: "2",
     assigned_hours: "3"
   });
   assert.equal(values[134331], "22.5");
   assert.equal(
-    meta({ total_hours_bt_12_work_schedule: "1", total_hours_btrbt_12: "2", assigned_hours: "3" })[134331],
+    meta({ total_hours_bt1bt2_work_schedule: "1", total_hours_bt_12_work_schedule: "2", assigned_hours: "3" })[134331],
     null
   );
+});
+
+test("[C20][4.6] a blank total_hours_btrbt_12 (HubSpot leaves it blank when only one BT has hours) is a real blank: field 134331 is there with null", () => {
+  for (const blank of [null, ""]) {
+    const values = meta({ total_hours_btrbt_12: blank, hours_bt_work_schedule_1: "16" });
+    assert.equal(has(values, 134331), true);
+    assert.equal(values[134331], null);
+  }
 });
 
 // --- 4.7, C22: Approved Auth Hours ---
@@ -448,26 +456,23 @@ test("[C12][4.15] Supervising BCBA is the typed text of ongoing_central_reach_pr
   assert.equal(meta({ supervising_bcba: "Text Supervising" })[131308], null);
 });
 
-// --- 4.16, mapper side (contract P.5 b and c): the owner is an input ---
+// --- 4.16, C10: Care Coordinator (decision 39: the Case property care_coordinator_name) ---
 
-test("[C10][4.16] Care Coordinator is the ownerName input, in field 138851", () => {
-  assert.equal(meta({ hubspot_owner_id: "77" }, { ownerName: "Casey Owner" })[138851], "Casey Owner");
+test("[C10][4.16] Care Coordinator is the trimmed text of care_coordinator_name, in field 138851; hubspot_owner_id is not read", () => {
+  assert.equal(meta({ care_coordinator_name: "  Casey Jordan " })[138851], "Casey Jordan");
+  assert.equal(meta({ hubspot_owner_id: "77" })[138851], null);
 });
 
-test("[C10][4.16] a Case with no owner (ownerName null or \"\") sends a blank Care Coordinator, with its key present", () => {
-  for (const ownerName of [null, ""]) {
-    const values = meta({}, { ownerName });
+test("[C10][4.16] a blank care_coordinator_name (null or \"\") sends a blank Care Coordinator, with its key present", () => {
+  for (const blank of [null, ""]) {
+    const values = meta({ care_coordinator_name: blank });
     assert.equal(has(values, 138851), true);
     assert.equal(values[138851], null);
   }
 });
 
-test("[BR16][4.16] ownerName not passed at all leaves field 138851 out, so nothing is cleared", () => {
-  assert.equal(has(meta({ hubspot_owner_id: "77" }), 138851), false);
-});
-
-test("[BR16][4.16] field 138851 named in omitFieldIds is left out even when an owner name is passed", () => {
-  const values = meta({}, { ownerName: "Casey Owner", omitFieldIds: [138851] });
+test("[BR16][4.16] field 138851 named in omitFieldIds is left out even when care_coordinator_name is filled", () => {
+  const values = meta({ care_coordinator_name: "Casey Jordan" }, { omitFieldIds: [138851] });
   assert.equal(has(values, 138851), false);
 });
 
@@ -618,15 +623,12 @@ test("[C23][4.8] rule 5.7: a blank date stays a blank with its key present, and 
 
 test("[BR16][4.16] omitFieldIds null or undefined is an empty list, not a crash", () => {
   for (const omitFieldIds of [null, undefined]) {
-    const values = meta({ referral_source: "Pediatrician" }, { ownerName: "Casey Owner", omitFieldIds });
+    const values = meta(
+      { referral_source: "Pediatrician", care_coordinator_name: "Casey Jordan" },
+      { omitFieldIds }
+    );
     assert.equal(values[126222], "Pediatrician");
-    assert.equal(values[138851], "Casey Owner");
-  }
-});
-
-test("[BR16][4.16] an ownerName that is not a string is treated as not passed: field 138851 is left out", () => {
-  for (const ownerName of [{ firstName: "Casey" }, 42, ["Casey Owner"], true]) {
-    assert.equal(has(meta({}, { ownerName }), 138851), false, `ownerName ${typeof ownerName}`);
+    assert.equal(values[138851], "Casey Jordan");
   }
 });
 

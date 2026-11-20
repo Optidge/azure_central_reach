@@ -14,7 +14,7 @@ export const FIELD = Object.freeze({
   re: CENTRAL_REACH_CLIENT_METADATA_FIELDS.REASSESSMENT_BCBA,
   bt1: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_1_NAME,
   bt2: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_2_NAME,
-  owner: CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR
+  careCoordinator: CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR
 });
 
 // One association row, as listAssociations returns it, in the USER_DEFINED category.
@@ -25,14 +25,13 @@ export function roleRow(toObjectId, ...typeIds) {
   };
 }
 
-// The Case's staff and owner as the HubSpot fakes answer them.
+// The Case's staff as the HubSpot fakes answer them.
 //   bcbaRows, btRows  the association rows by object type
 //   names             { recordId: { first_name, last_name } }; a record that is not here is not
 //                     answered by the batch read
-//   owners            { ownerId: { firstName, lastName, email } | Error }
 // `calls` shows what the worker asked for.
-export function staffAndOwner({ bcbaRows = [], btRows = [], names = {}, owners = {} } = {}) {
-  const calls = { associations: [], batch: [], owner: [] };
+export function caseStaff({ bcbaRows = [], btRows = [], names = {} } = {}) {
+  const calls = { associations: [], batch: [] };
   return {
     calls,
     deps: {
@@ -45,17 +44,6 @@ export function staffAndOwner({ bcbaRows = [], btRows = [], names = {}, owners =
         return ids
           .filter((id) => Object.hasOwn(names, id))
           .map((id) => ({ id, properties: names[id] }));
-      },
-      getOwnerById: async (ownerId) => {
-        calls.owner.push(ownerId);
-        const owner = owners[ownerId];
-        if (owner instanceof Error) {
-          throw owner;
-        }
-        if (!owner) {
-          throw httpError(404);
-        }
-        return owner;
       }
     }
   };
@@ -66,8 +54,8 @@ export function refused(status = 403) {
 }
 
 // The worker's dependencies: the shared client fakes (which answer a blank property as a null key,
-// like HubSpot), then this lane's staff and owner fakes, then any override.
-export function caseDeps({ record, logs = [], staff = staffAndOwner(), ...overrides }) {
+// like HubSpot), then this lane's staff fakes, then any override.
+export function caseDeps({ record, logs = [], staff = caseStaff(), ...overrides }) {
   return { ...clientWorkflowDeps({ record, logs }), ...staff.deps, ...overrides };
 }
 

@@ -258,9 +258,8 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 // (contract (e) in src/lib/centralReachClient.mjs). Every ID in requiredLabelIds must be in
 // CENTRAL_REACH_SENDABLE_LABEL_IDS (src/constants/centralReach.mjs).
 //
-// CONTRACT P.5 (b): staff names and the owner are inputs. The mapper reads no association and
-// calls no API. The worker (src/workflows/clientSyncWorkflow.mjs, rows 4.14 and 4.16) reads them
-// and passes them in.
+// CONTRACT P.5 (b): staff names are an input. The mapper reads no association and calls no API.
+// The worker (src/workflows/clientSyncWorkflow.mjs, row 4.14) reads them and passes them in.
 //   staffNames  the staff on the Case by role:
 //                 { initialAssessmentBcba, reEvaluationBcba, primaryBt1, primaryBt2 }
 //               The role names are those of staffingRoleAssociationTypeIds in src/lib/config.mjs.
@@ -269,13 +268,11 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 //               text for fields 131314, 144602, 131313 and 138092 (row 4.14). A staff record
 //               with neither a first nor a last name: that role's key is left out and the
 //               answer's `warnings` list names the role ({ code, role, message }), never a value.
-//   ownerName   the Case owner's name as text, for field 138851 (row 4.16). null or "" when the
-//               Case has no owner. Anything that is not a string or null counts as not passed.
 //
 // CONTRACT P.5 (c): an input that could not be read (rule 5.8) never becomes a blank.
 //   omitFieldIds  CentralReach metadata field IDs whose input could not be read in this run, for
-//                 example 138851 when the owner call is refused. The mapper leaves those keys out
-//                 of metadataValues, so the field is not sent. null or undefined: no field.
+//                 example a staff field when the staff were not read. The mapper leaves those
+//                 keys out of metadataValues, so the field is not sent. null or undefined: no field.
 //   unreadableDateProperties (in the answer, rule 5.7)  the HubSpot date properties that are
 //                 filled and are not a real date: the auth period start and end, the two ASD
 //                 dates and the policy holder date of birth. An empty list when there is none.
@@ -287,13 +284,13 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 // link record as it was, and leave the field out of the changed fields. If the saved hash were
 // dropped, a later blank in HubSpot would send no clear and CentralReach would keep the old value.
 // The Case worker maps twice in one run: before the writes, and again after the confirm read.
-// Both mappings get the same staffNames, ownerName and omitFieldIds. If they differ, the two
-// hashes differ and the run ends as "changed during the run" after the CentralReach writes.
+// Both mappings get the same staffNames and omitFieldIds. If they differ, the two hashes differ
+// and the run ends as "changed during the run" after the CentralReach writes.
 // An input that is not passed at all (undefined) was not read either: the mapper leaves that
 // input's fields out in the same way (a role missing from staffNames: that role's field). A failed
 // association or staff name read is different: it stops the run in the worker and never reaches
 // the mapper.
-export function buildClientMetadata({ deal, portalId, staffNames, ownerName, omitFieldIds }) {
+export function buildClientMetadata({ deal, portalId, staffNames, omitFieldIds }) {
   const dealProps = deal?.properties || {};
   const staff = staffNameFields(staffNames);
   // Rule 5.7: reads one date property and notes it when it is filled and unreadable.
@@ -327,7 +324,7 @@ export function buildClientMetadata({ deal, portalId, staffNames, ownerName, omi
       dealProps.client_service_hours_total
     ]),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.TOTAL_ASSIGNED_HOURS]: toTrimmedOrNull(
-      dealProps.total_hours_bt1bt2_work_schedule
+      dealProps.total_hours_btrbt_12
     ),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.APPROVED_AUTH_HOURS]: getApprovedAuthHours(dealProps),
     // The end-date property name is misspelled in HubSpot; the spelling is real.
@@ -383,14 +380,12 @@ export function buildClientMetadata({ deal, portalId, staffNames, ownerName, omi
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.HUBSPOT_LINK_TO_CASE_RECORD]: buildHubspotDealUrl(
       dealProps.hs_object_id,
       portalId
+    ),
+    // C10, row 4.16 (decision 39): the Care Coordinator's name, typed on the Case.
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR]: toTrimmedOrNull(
+      dealProps.care_coordinator_name
     )
   };
-
-  // C10, row 4.16: the owner's name. An owner that was not passed (or is not text) was not read:
-  // no key.
-  if (typeof ownerName === "string" || ownerName === null) {
-    metadataValues[CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR] = toTrimmedOrNull(ownerName);
-  }
 
   for (const fieldId of omitFieldIds ?? []) {
     delete metadataValues[fieldId];

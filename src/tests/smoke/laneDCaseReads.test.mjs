@@ -1,4 +1,4 @@
-// Lane D (wave 2), Case worker: rows 4.14 (staff names), 4.16 (owner name) and 4.18 (a missing
+// Lane D (wave 2), Case worker: rows 4.14 (staff names), 4.16 (Care Coordinator) and 4.18 (a missing
 // property is a failed read), with the wave 1 duties of WAVE-1-LOG section 7 (C-R1, C-R6, C-R7,
 // SP-R7, the omit list). Guide rows: [GER-CASE] and [G04] (staffing from associations, the role
 // association IDs), the Architecture tab (staffing compared by record ID and role; a failed or
@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { CENTRAL_REACH_CLIENT_METADATA_FIELDS } from "../../constants/centralReach.mjs";
 import { buildClientMetadata } from "../../mappings/client/buildClientMetadata.mjs";
 import { CASE_PROPERTIES, caseRequestProperties } from "../../mappings/client/clientProperties.mjs";
-import { clearOwnerCache, createHubSpotClient, getOwnerById, readObjectsBatch } from "../../lib/hubspotClient.mjs";
+import * as hubspotClient from "../../lib/hubspotClient.mjs";
+import { createHubSpotClient, readObjectsBatch } from "../../lib/hubspotClient.mjs";
 import { FAILURE_KINDS, classifyFailure } from "../../lib/retry.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import {
@@ -31,9 +32,9 @@ import {
   refused,
   roleRow,
   sentValue,
-  staffAndOwner
+  caseStaff
 } from "./laneDFakes.mjs";
-import { httpError, withBlankKeys, workflowConfig } from "./stage2Fakes.mjs";
+import { httpError, hubspotAnswer, workflowConfig } from "./stage2Fakes.mjs";
 import {
   CASE_LINK,
   METADATA_DELETE,
@@ -51,7 +52,7 @@ const run = (record, deps) => runClientSyncWorkflow({ dealId: "deal-1" }, deps);
 test("[C11][4.14] the IA and RE BCBA names are read from the Case's BCBA associations by role and sent to fields 131314 and 144602", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia), roleRow("302", ROLE_TYPE.re)],
     names: {
       301: { first_name: "Pat", last_name: "Morgan" },
@@ -68,7 +69,7 @@ test("[C11][4.14] the IA and RE BCBA names are read from the Case's BCBA associa
 test("[C14][4.14] Primary BT 1 and 2 names are read from the BT/RBT associations and sent to fields 131313 and 138092", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     btRows: [roleRow("501", ROLE_TYPE.bt1), roleRow("502", ROLE_TYPE.bt2)],
     names: {
       501: { first_name: "Sam", last_name: "Rivera" },
@@ -85,7 +86,7 @@ test("[C14][4.14] several staff in one role are joined by \", \" in record-ID or
   const { cr } = setup();
   const record = linkedCase(cr);
   // Record 10 comes after record 9 in number order, not in text order.
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     btRows: [roleRow("10", ROLE_TYPE.bt1), roleRow("9", ROLE_TYPE.bt1)],
     names: {
       9: { first_name: "Nine", last_name: "Staff" },
@@ -100,7 +101,7 @@ test("[C14][4.14] several staff in one role are joined by \", \" in record-ID or
 test("[C11][4.14] only a USER_DEFINED association type is a role: a HUBSPOT_DEFINED type with the same ID is not", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     bcbaRows: [
       { toObjectId: "301", types: [{ typeId: ROLE_TYPE.ia, category: "HUBSPOT_DEFINED" }] },
       roleRow("302", ROLE_TYPE.ia)
@@ -120,7 +121,7 @@ test("[C11][4.14] only a USER_DEFINED association type is a role: a HUBSPOT_DEFI
 test("[C11][4.14] one batch call per object type, asking only first_name and last_name, and none for a type with no staff on the Case", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia), roleRow("302", ROLE_TYPE.re)],
     names: {
       301: { first_name: "Pat", last_name: "Morgan" },
@@ -142,7 +143,7 @@ test("[C11][4.14] one batch call per object type, asking only first_name and las
 test("[C11][4.14] no staff in a role sends a blank field, and a name the integration wrote before is cleared", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
-  const named = staffAndOwner({
+  const named = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia)],
     names: { 301: { first_name: "Pat", last_name: "Morgan" } }
   });
@@ -150,14 +151,14 @@ test("[C11][4.14] no staff in a role sends a blank field, and a name the integra
   assert.equal(sentValue(cr, FIELD.ia), "Pat Morgan");
 
   // The association is removed: nobody holds the role. The read worked, so this is a real blank.
-  await run(record, caseDeps({ record, staff: staffAndOwner() }));
+  await run(record, caseDeps({ record, staff: caseStaff() }));
   assert.equal(metadataWriteCount(cr, FIELD.ia, "DELETE"), 1);
 });
 
 test("[BR16][4.14] a refused association read (403) stops the run: no CentralReach write, no clear, nothing saved as synced", async () => {
   const { container, cr } = setup();
   const record = linkedCase(cr);
-  const staff = staffAndOwner();
+  const staff = caseStaff();
   const deps = caseDeps({
     record,
     staff,
@@ -177,7 +178,7 @@ test("[BR16][4.14] a refused association read (403) stops the run: no CentralRea
 test("[BR16][4.14] a refused name read (403) stops the run with no CentralReach write", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
-  const staff = staffAndOwner({ bcbaRows: [roleRow("301", ROLE_TYPE.ia)] });
+  const staff = caseStaff({ bcbaRows: [roleRow("301", ROLE_TYPE.ia)] });
   const deps = caseDeps({
     record,
     staff,
@@ -193,7 +194,7 @@ test("[BR16][4.14] a staff record the batch answer lacks is a failed read, not a
   const { cr } = setup();
   const record = linkedCase(cr);
   // Record 302 holds the role but the batch answer has no row for it.
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia), roleRow("302", ROLE_TYPE.re)],
     names: { 301: { first_name: "Pat", last_name: "Morgan" } }
   });
@@ -208,7 +209,7 @@ test("[BR16][4.14] a staff record whose name keys are missing from the batch ans
   for (const properties of [{}, { first_name: "Pat" }, { last_name: "Morgan" }]) {
     const { cr } = setup();
     const record = linkedCase(cr);
-    const staff = staffAndOwner({
+    const staff = caseStaff({
       btRows: [roleRow("501", ROLE_TYPE.bt1)],
       names: { 501: properties }
     });
@@ -223,7 +224,7 @@ test("[BR16][4.14] a staff record whose name keys are missing from the batch ans
 test("[BR16][4.14] a staff name that is null in HubSpot (a blank, not a missing key) is a nameless record: the field is left out, not cleared", async () => {
   const { container, cr } = setup();
   const record = linkedCase(cr);
-  const named = staffAndOwner({
+  const named = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia)],
     names: { 301: { first_name: "Pat", last_name: "Morgan" } }
   });
@@ -232,7 +233,7 @@ test("[BR16][4.14] a staff name that is null in HubSpot (a blank, not a missing 
   assert.equal(typeof savedHash, "string");
 
   const logs = [];
-  const nameless = staffAndOwner({
+  const nameless = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia)],
     names: { 301: { first_name: null, last_name: null } }
   });
@@ -259,7 +260,7 @@ test("[BR17][4.14] staffing is compared by record ID and role: a new record with
   const { cr } = setup();
   const record = linkedCase(cr);
   const staffOf = (recordId, last) =>
-    staffAndOwner({
+    caseStaff({
       bcbaRows: [roleRow(recordId, ROLE_TYPE.ia)],
       names: { [recordId]: { first_name: "Pat", last_name: last } }
     });
@@ -280,18 +281,17 @@ test("[BR17][4.14] staffing is compared by record ID and role: a new record with
   assert.equal(same.operation, "noop");
 });
 
-test("[BR17][4.14] both mappings of one run get the same staffNames, ownerName and omitFieldIds, so the run does not end as changed during the run", async () => {
+test("[BR17][4.14] both mappings of one run get the same staffNames and omitFieldIds, so the run does not end as changed during the run", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
+  const record = linkedCase(cr);
   const inputs = [];
-  const staff = staffAndOwner({
+  const staff = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia), roleRow("302", ROLE_TYPE.re)],
     names: {
       301: { first_name: "Pat", last_name: "Morgan" },
       // A nameless record: its field is omitted, so the omit list is not empty.
       302: { first_name: null, last_name: null }
-    },
-    owners: { 9001: { firstName: "Casey", lastName: "Jordan", email: "casey@example.com" } }
+    }
   });
   const result = await run(
     record,
@@ -309,8 +309,6 @@ test("[BR17][4.14] both mappings of one run get the same staffNames, ownerName a
   assert.equal(result.status, "success");
   assert.equal(inputs.length, 2);
   assert.deepEqual(inputs[1].staffNames, inputs[0].staffNames);
-  assert.equal(inputs[0].ownerName, "Casey Jordan");
-  assert.equal(inputs[1].ownerName, inputs[0].ownerName);
   assert.deepEqual(inputs[1].omitFieldIds, inputs[0].omitFieldIds);
   assert.equal(inputs[0].portalId, inputs[1].portalId);
   // The seam's field and the nameless role's field are both in the list.
@@ -321,13 +319,13 @@ test("[BR17][4.14] both mappings of one run get the same staffNames, ownerName a
 });
 
 test("[BR16][4.14] when the staff cannot be read at all (no object types), the four staff fields are omitted, not sent blank", () => {
-  const omit = omitFieldIdsFor({ base: [], ownerNotRead: false, staffNames: undefined });
+  const omit = omitFieldIdsFor({ base: [], staffNames: undefined });
   assert.deepEqual(
     omit.map(Number).sort((a, b) => a - b),
     [FIELD.ia, FIELD.re, FIELD.bt1, FIELD.bt2].sort((a, b) => a - b)
   );
   // Staff that were read add nothing; the seam's list is kept as it is.
-  assert.deepEqual(omitFieldIdsFor({ base: [111], ownerNotRead: false, staffNames: { primaryBt1: [] } }), ["111"]);
+  assert.deepEqual(omitFieldIdsFor({ base: [111], staffNames: { primaryBt1: [] } }), ["111"]);
 });
 
 test("[C11][4.14] staffRecordIdsByRole reads the portal's role IDs for a BCBA role and a BT/RBT role, in record-ID order", () => {
@@ -413,198 +411,109 @@ test("[C11][4.14] readStaffNames makes no call for a type with no staff and keep
   assert.deepEqual(staffNames.initialAssessmentBcba, []);
 });
 
-// --- 4.16: the owner ---
+// --- 4.16: the Care Coordinator (decision 39: the Case property care_coordinator_name) ---
 
-test("[C10][4.16] the Care Coordinator is the owner's name from the owners API, sent to field 138851 as a name only", async () => {
+// HubSpot's answer to the Case read, every requested key there except `name`.
+function answerWithout(record, name) {
+  return async (_id, requested) => {
+    const answer = hubspotAnswer(record.read(), requested);
+    delete answer.properties[name];
+    return answer;
+  };
+}
+
+test("[C10][4.16] the Care Coordinator is the text of the Case property care_coordinator_name, trimmed and sent to field 138851", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  const staff = staffAndOwner({
-    owners: { 9001: { firstName: "Casey", lastName: "Jordan", email: "casey.jordan@example.com" } }
-  });
-  await run(record, caseDeps({ record, staff }));
-
-  assert.deepEqual(staff.calls.owner, ["9001"]);
-  assert.equal(sentValue(cr, FIELD.owner), "Casey Jordan");
-  // O-17: the email has no target yet. It is not sent anywhere.
-  assert.equal(JSON.stringify(cr.calls).includes("casey.jordan@example.com"), false);
-});
-
-test("[C10][4.16] a Case with no owner sends a blank Care Coordinator, and a name written before is cleared", async () => {
-  const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  const staff = staffAndOwner({ owners: { 9001: { firstName: "Casey", lastName: "Jordan" } } });
-  await run(record, caseDeps({ record, staff }));
-  assert.equal(sentValue(cr, FIELD.owner), "Casey Jordan");
-
-  record.properties.hubspot_owner_id = null;
-  const noOwner = staffAndOwner();
-  const result = await run(record, caseDeps({ record, staff: noOwner }));
-  assert.equal(result.status, "success");
-  assert.equal(noOwner.calls.owner.length, 0);
-  assert.equal(metadataWriteCount(cr, FIELD.owner, "DELETE"), 1);
-});
-
-test("[C10][4.16] a refused owner call (403) leaves the key out, logs a warning and does not fail the run; the saved name stays and is not cleared", async () => {
-  for (const status of [403, 404]) {
-    const { container, cr } = setup();
-    const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-    await run(
-      record,
-      caseDeps({
-        record,
-        staff: staffAndOwner({ owners: { 9001: { firstName: "Casey", lastName: "Jordan" } } })
-      })
-    );
-    const savedHash = container.get(CASE_LINK.pk, CASE_LINK.id).data.fieldHashes[`metadata.${FIELD.owner}`];
-    const writesBefore = cr.writes().length;
-
-    const logs = [];
-    const result = await run(
-      record,
-      caseDeps({ record, logs, staff: staffAndOwner({ owners: { 9001: refused(status) } }) })
-    );
-
-    assert.equal(result.ok, true);
-    assert.equal(result.operation, "noop");
-    assert.equal(cr.writes().length, writesBefore);
-    assert.equal(
-      container.get(CASE_LINK.pk, CASE_LINK.id).data.fieldHashes[`metadata.${FIELD.owner}`],
-      savedHash
-    );
-    const warnings = logged(logs, "Client owner was not read; the Care Coordinator field is left out.");
-    assert.equal(warnings.length, 1);
-    assert.equal(warnings[0].meta.code, "owner_read_refused");
-    assert.equal(warnings[0].meta.status, status);
-  }
-});
-
-test("[BR16][4.16] an owner call refused with 401 is a refused read like any other: the run stops with no CentralReach write", async () => {
-  const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  const staff = staffAndOwner({ owners: { 9001: refused(401) } });
-  await assert.rejects(run(record, caseDeps({ record, staff })), (error) => {
-    assert.equal(error.response.status, 401);
-    assert.equal(classifyFailure(error), FAILURE_KINDS.TEMPORARY);
-    return true;
-  });
-  assert.deepEqual(cr.writes(), []);
-});
-
-test("[BR16][4.16] a refused owner call never sends a blank for a Case whose owner is set", async () => {
-  const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  const staff = staffAndOwner({ owners: { 9001: refused(403) } });
-  const result = await run(record, caseDeps({ record, staff }));
+  const record = linkedCase(cr, { care_coordinator_name: "  Casey Jordan  " });
+  const result = await run(record, caseDeps({ record }));
 
   assert.equal(result.status, "success");
-  assert.equal(metadataWriteCount(cr, FIELD.owner, "PUT"), 0);
-  assert.equal(metadataWriteCount(cr, FIELD.owner, "DELETE"), 0);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Casey Jordan");
 });
 
-test("[BR16][4.16] an owner call that fails for another reason (a 500) stops the run with no CentralReach write", async () => {
+test("[C10][4.16] a changed care_coordinator_name sends the new value to field 138851", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  const staff = staffAndOwner({ owners: { 9001: httpError(500) } });
-  await assert.rejects(run(record, caseDeps({ record, staff })), (error) => {
-    assert.equal(error.response.status, 500);
-    return true;
-  });
-  assert.deepEqual(cr.writes(), []);
-});
+  const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan" });
+  await run(record, caseDeps({ record }));
+  const putsBefore = metadataWriteCount(cr, FIELD.careCoordinator, "PUT");
 
-test("[BR16][4.16] an owner with no readable name is not read: the field is left out, not cleared", async () => {
-  const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  const staff = staffAndOwner({ owners: { 9001: { firstName: "", lastName: null, email: "x@example.com" } } });
-  const logs = [];
-  const result = await run(record, caseDeps({ record, logs, staff }));
+  record.properties.care_coordinator_name = "Riley Chen";
+  const result = await run(record, caseDeps({ record }));
 
   assert.equal(result.status, "success");
-  assert.equal(metadataWriteCount(cr, FIELD.owner, "PUT") + metadataWriteCount(cr, FIELD.owner, "DELETE"), 0);
-  assert.equal(
-    logged(logs, "Client owner was not read; the Care Coordinator field is left out.")[0].meta.code,
-    "owner_name_unreadable"
-  );
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), putsBefore + 1);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Riley Chen");
 });
 
-test("[BR16][4.16] a missing hubspot_owner_id key means not read: ownerName stays undefined and the field is left out, not sent blank", async () => {
+for (const blank of [null, ""]) {
+  test(`[C10][4.16] a blank care_coordinator_name (${JSON.stringify(blank)}) is a real blank: a name written before is cleared, like any mapped text field`, async () => {
+    const { cr } = setup();
+    const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan" });
+    await run(record, caseDeps({ record }));
+    assert.equal(sentValue(cr, FIELD.careCoordinator), "Casey Jordan");
+
+    record.properties.care_coordinator_name = blank;
+    const result = await run(record, caseDeps({ record }));
+
+    assert.equal(result.status, "success");
+    assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
+  });
+}
+
+test("[C10][4.16] a blank care_coordinator_name with no saved copy sends no clear", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, { care_coordinator_name: null });
+  const result = await run(record, caseDeps({ record }));
+
+  assert.equal(result.status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), 0);
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 0);
+});
+
+test("[BR16][4.18] an answer without the care_coordinator_name key ends as error with no CentralReach call", async () => {
   const { container, cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001" });
-  await run(
-    record,
-    caseDeps({
-      record,
-      staff: staffAndOwner({ owners: { 9001: { firstName: "Casey", lastName: "Jordan" } } })
-    })
-  );
-  const savedHash = container.get(CASE_LINK.pk, CASE_LINK.id).data.fieldHashes[`metadata.${FIELD.owner}`];
-  const writesBefore = cr.writes().length;
-
-  const inputs = [];
-  const logs = [];
-  const staff = staffAndOwner();
+  const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan" });
   const result = await run(
     record,
-    caseDeps({
-      record,
-      logs,
-      staff,
-      // HubSpot's answer holds every other requested key, but not hubspot_owner_id.
-      getDealById: async (_id, requested) => {
-        const answer = withBlankKeys(record.read(), requested);
-        delete answer.properties.hubspot_owner_id;
-        return answer;
-      },
-      buildClientMetadata: (input) => {
-        inputs.push(input);
-        return buildClientMetadata(input);
-      }
-    })
+    caseDeps({ record, getDealById: answerWithout(record, "care_coordinator_name") })
   );
 
-  assert.equal(result.operation, "noop");
-  assert.equal(inputs[0].ownerName, undefined);
-  assert.equal(inputs[1] === undefined || inputs[1].ownerName === undefined, true);
-  assert.equal(staff.calls.owner.length, 0);
-  assert.equal(cr.writes().length, writesBefore);
-  assert.equal(
-    container.get(CASE_LINK.pk, CASE_LINK.id).data.fieldHashes[`metadata.${FIELD.owner}`],
-    savedHash
-  );
-  assert.equal(
-    logged(logs, "Client owner was not read; the Care Coordinator field is left out.")[0].meta.code,
-    "owner_key_missing"
-  );
+  assert.equal(result.status, "error");
+  assert.deepEqual(cr.calls, []);
+  assert.equal(record.properties.last_sync_error, "Missing from the HubSpot answer: care_coordinator_name");
+  assert.equal(container.get(CASE_LINK.pk, CASE_LINK.id)?.data?.fieldHashes, undefined);
 });
 
-test("[C10][4.16] getOwnerById keeps an owner's answer in memory (one GET for two Cases) and never keeps a failure", async () => {
-  clearOwnerCache();
-  const gets = [];
-  let failNext = true;
+test("[C10][4.16] the Case run never calls the owners API (/crm/v3/owners) and requests neither hubspot_owner_id nor care_coordinator_email", async () => {
+  const { cr } = setup();
+  // Every HubSpot request the worker makes outside the fakes reaches this adapter.
+  const hubspotRequests = [];
   const client = createHubSpotClient({
     hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
   });
   client.defaults.adapter = async (requestConfig) => {
-    gets.push(`${requestConfig.method} ${requestConfig.url}`);
-    if (failNext) {
-      failNext = false;
-      throw httpError(403);
-    }
-    return {
-      data: { id: "9001", firstName: "Casey", lastName: "Jordan" },
-      status: 200,
-      headers: {},
-      config: requestConfig
-    };
+    hubspotRequests.push(`${requestConfig.method} ${requestConfig.url}`);
+    throw httpError(599);
   };
-  await assert.rejects(getOwnerById("9001"), (error) => error.response.status === 403);
-  const first = await getOwnerById("9001");
-  const second = await getOwnerById("9001");
-  assert.equal(first.firstName, "Casey");
-  assert.equal(second.firstName, "Casey");
-  // The 403 was asked again (not kept); the answer was kept.
-  assert.deepEqual(gets, ["get /crm/v3/owners/9001", "get /crm/v3/owners/9001"]);
-  clearOwnerCache();
+  const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan", hubspot_owner_id: "9001" });
+  const requested = [];
+  const result = await run(
+    record,
+    caseDeps({
+      record,
+      getDealById: async (_id, properties) => {
+        requested.push(...properties);
+        return hubspotAnswer(record.read(), properties);
+      }
+    })
+  );
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(hubspotRequests, []);
+  assert.equal(Object.hasOwn(hubspotClient, "getOwnerById"), false);
+  assert.equal(requested.includes("care_coordinator_name"), true);
+  assert.equal(requested.includes("hubspot_owner_id"), false);
+  assert.equal(requested.includes("care_coordinator_email"), false);
 });
 
 // --- 4.18: a requested key that is missing from the answer ---
@@ -621,7 +530,7 @@ test("[BR16][4.18] a mapped property that is not a key of the HubSpot answer end
         record,
         logs,
         getDealById: async (_id, requested) => {
-          const answer = withBlankKeys(record.read(), requested);
+          const answer = hubspotAnswer(record.read(), requested);
           delete answer.properties[name];
           return answer;
         }
@@ -641,7 +550,7 @@ test("[BR16][4.18] a blank property (a null key, or an empty text) is a real bla
   const result = await run(record, caseDeps({ record }));
 
   assert.equal(result.status, "success");
-  assert.deepEqual(missingMappedProperties(withBlankKeys(record.read(), caseRequestProperties()).properties), []);
+  assert.deepEqual(missingMappedProperties(hubspotAnswer(record.read(), caseRequestProperties()).properties), []);
 });
 
 test("[BR16][4.18] a missing key never clears a value written before: no DELETE is sent", async () => {
@@ -657,7 +566,7 @@ test("[BR16][4.18] a missing key never clears a value written before: no DELETE 
     caseDeps({
       record,
       getDealById: async (_id, requested) => {
-        const answer = withBlankKeys(record.read(), requested);
+        const answer = hubspotAnswer(record.read(), requested);
         delete answer.properties.severity_level_clinical;
         return answer;
       }
@@ -679,7 +588,7 @@ test("[BR16][4.18] the error reason names properties, never values", async () =>
       record,
       logs,
       getDealById: async (_id, requested) => {
-        const answer = withBlankKeys(record.read(), requested);
+        const answer = hubspotAnswer(record.read(), requested);
         delete answer.properties.referral_source;
         return answer;
       }
@@ -699,7 +608,7 @@ test("[BR16][4.18] phone_number__second_ is no longer requested from HubSpot (de
       record,
       getDealById: async (_id, properties) => {
         requested.push(...properties);
-        return withBlankKeys(record.read(), properties);
+        return hubspotAnswer(record.read(), properties);
       }
     })
   );
@@ -716,7 +625,7 @@ test("[BR16][4.18] a Case the gate skips is skipped, not an error, even when the
       record,
       getDealById: async (_id, requested) => {
         // Every key the gate and the status check read is there; no mapped property is.
-        const answer = withBlankKeys({ id: "deal-1", properties: {} }, DECISION_KEYS);
+        const answer = hubspotAnswer({ id: "deal-1", properties: {} }, DECISION_KEYS);
         answer.properties.dealstage = "1383894301";
         answer.properties.client_id_number = "2001";
         return answer;
@@ -743,7 +652,7 @@ test("[BR16][4.18] an answer without the CR ID key (client_id_number) ends as er
       record,
       logs,
       getDealById: async (_id, requested) => {
-        const answer = withBlankKeys(record.read(), requested);
+        const answer = hubspotAnswer(record.read(), requested);
         delete answer.properties.client_id_number;
         return answer;
       }
@@ -777,7 +686,7 @@ test("[BR16][4.18] a key the gate reads that is missing (dealstage, test_record,
           record,
           getConfig: () => config,
           getDealById: async (_id, requested) => {
-            const answer = withBlankKeys(record.read(), requested);
+            const answer = hubspotAnswer(record.read(), requested);
             delete answer.properties[key];
             return answer;
           }
@@ -838,19 +747,18 @@ test("[BR16][4.18] two unreadable dates are both named, and a readable date stil
 
 // --- the omit seam still works with the new reads ---
 
-test("[BR16][3.18] dependencies.omitFieldIds still works with the new reads: the seam's field and an unread owner are both left out", async () => {
+test("[BR16][3.18] dependencies.omitFieldIds still works with the new reads: the seam's field is left out", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { hubspot_owner_id: "9001", severity_level_clinical: "Level 2" });
-  const staff = staffAndOwner({ owners: { 9001: refused(403) } });
-  await run(record, caseDeps({ record, staff, omitFieldIds: [SEVERITY] }));
+  const record = linkedCase(cr, { severity_level_clinical: "Level 2" });
+  await run(record, caseDeps({ record, omitFieldIds: [SEVERITY] }));
 
   assert.equal(metadataWriteCount(cr, SEVERITY, "PUT"), 0);
-  assert.equal(metadataWriteCount(cr, FIELD.owner, "PUT"), 0);
 });
 
-test("[BR16][4.18] the mapped list and the request list are what row 4.18 checks: hubspot_owner_id is requested but not a mapped property", () => {
-  assert.equal(CASE_PROPERTIES.mapped.includes("hubspot_owner_id"), false);
-  assert.equal(caseRequestProperties().includes("hubspot_owner_id"), true);
+test("[BR16][4.18] the mapped list and the request list are what row 4.18 checks: care_coordinator_name is a mapped property; hubspot_owner_id and care_coordinator_email are not requested", () => {
+  assert.equal(CASE_PROPERTIES.mapped.includes("care_coordinator_name"), true);
+  assert.equal(caseRequestProperties().includes("hubspot_owner_id"), false);
+  assert.equal(caseRequestProperties().includes("care_coordinator_email"), false);
   assert.deepEqual(missingMappedProperties({}), [...CASE_PROPERTIES.mapped]);
   assert.deepEqual(missingMappedProperties(null), [...CASE_PROPERTIES.mapped]);
 });

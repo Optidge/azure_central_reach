@@ -30,7 +30,6 @@ import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runContactFanOutWorkflow } from "../../workflows/contactFanOutWorkflow.mjs";
 import {
   SANDBOX_PORTAL,
-  answersLikeHubSpot,
   clientWorkflowDeps,
   httpError,
   hubspotAnswer,
@@ -413,15 +412,10 @@ test("[K4][6.2] a Contact with no linked Case or BCBA queues nothing and still f
 
 // --- Row 6.3 ---
 
-// The Case worker, with HubSpot answering every requested property (a blank one as null).
+// The Case worker, with HubSpot answering every requested property (a blank one as null): the
+// shared clientWorkflowDeps reader does that for a Case read, (dealId, names).
 function runCase(record) {
-  return runClientSyncWorkflow(
-    { dealId: "deal-1", source: "contactFanOut" },
-    {
-      ...clientWorkflowDeps({ record }),
-      getDealById: answersLikeHubSpot(async () => record.read())
-    }
-  );
+  return runClientSyncWorkflow({ dealId: "deal-1", source: "contactFanOut" }, clientWorkflowDeps({ record }));
 }
 
 for (const [property, before, after, crField, sentValue] of [

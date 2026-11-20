@@ -47,7 +47,8 @@ export const CASE_PROPERTIES = Object.freeze({
     "btrbt_work_schedule_2_details",
     "finalized_client_service_hours_post_assessment",
     "client_service_hours_total",
-    "total_hours_bt1bt2_work_schedule",
+    // C20, row 4.6 (decision 40): Total Assigned Hours.
+    "total_hours_btrbt_12",
     "initial_auth_tracks",
     "n97153_approved_assessment_hours_auth_req",
     "ia_hours_from_the_ia",
@@ -77,21 +78,21 @@ export const CASE_PROPERTIES = Object.freeze({
     "insurance_2",
     "insurance_2__other__summary",
     "insurance_id_2",
-    "referral_source"
+    "referral_source",
+    // C10, row 4.16 (decision 39): the Care Coordinator's name, as text on the Case.
+    "care_coordinator_name"
   ]),
   // dealstage, and the guide's five staffing-name signals: a HubSpot workflow cannot trigger on an
   // association, so it triggers on the name property that changes with it. No mapper reads them
   // and they are not hashed: the staff names sent to CentralReach come from the associations
-  // (row 4.14). hubspot_owner_id is the Case owner: the worker resolves it to a name (row 4.16)
-  // and passes the name to the mapper.
+  // (row 4.14).
   signalOnly: Object.freeze([
     "dealstage",
     "supervising_bcba_name",
     "ia_bcba_name",
     "reassessment_bcba_name",
     "current_primary_bt",
-    "current_primary_bt_2",
-    "hubspot_owner_id"
+    "current_primary_bt_2"
   ]),
   mustTrigger: Object.freeze([CASE_ENTRY_PROPERTY]),
   system: Object.freeze([

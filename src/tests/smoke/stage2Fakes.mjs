@@ -93,21 +93,29 @@ export function memoryContainer() {
   return container;
 }
 
-// Row 4.18 (lane E): HubSpot answers every requested property, a blank one as a null key (P.7 (b),
-// 2026-11-20). An answer that leaves a requested key out is a failed read. So the employee
-// readers below fill each requested property the fake record does not hold with null, as
-// HubSpot does.
-export function hubspotAnswer(answer, propertyNames) {
-  const nulls = Object.fromEntries((propertyNames || []).map((name) => [name, null]));
-  return { ...answer, properties: { ...nulls, ...(answer?.properties || {}) } };
+// Row 4.18: what HubSpot answers for a record read that asks for `propertyNames`: every requested
+// property is a key, a blank one with a null value (checked on 2026-11-20, P.7 (b)). An answer
+// that leaves a requested key out is a failed read, so a fake that stands for HubSpot fills each
+// requested property the fake record does not hold with null. `answer` is { id, properties };
+// anything that is not an object is returned as it is.
+export function hubspotAnswer(answer, propertyNames = []) {
+  if (!answer || typeof answer !== "object") {
+    return answer;
+  }
+  const properties = { ...(answer.properties || {}) };
+  for (const name of propertyNames || []) {
+    if (!Object.hasOwn(properties, name)) {
+      properties[name] = null;
+    }
+  }
+  return { ...answer, properties };
 }
 
-// The same for a test's own reader: wraps it so its answer holds every requested property.
+// The same for a test's own employee reader, (recordId, objectTypeId, names): wraps it so its
+// answer holds every requested property. A Case reader is (dealId, names); clientWorkflowDeps
+// answers like HubSpot already.
 export function answersLikeHubSpot(read) {
-  return async (id, type, names) => {
-    const answer = await read(id, type, names);
-    return answer ? hubspotAnswer(answer, names) : answer;
-  };
+  return async (id, type, names) => hubspotAnswer(await read(id, type, names), names);
 }
 
 export function hubspotRecord(properties) {
@@ -122,23 +130,6 @@ export function hubspotRecord(properties) {
       Object.assign(state, patch);
     }
   };
-}
-
-// What HubSpot answers for a record read that asks for `requested` properties: a property that is
-// blank comes back as a key with a null value (checked on 2026-11-20, P.7 (b)). Row 4.18 treats a
-// requested key that is not in the answer as a failed read, so a fake that stands for HubSpot
-// fills the blanks in this way. `deal` is { id, properties }. Added for lane D.
-export function withBlankKeys(deal, requested = []) {
-  if (!deal || typeof deal !== "object") {
-    return deal;
-  }
-  const properties = { ...(deal.properties || {}) };
-  for (const name of requested || []) {
-    if (!Object.hasOwn(properties, name)) {
-      properties[name] = null;
-    }
-  }
-  return { ...deal, properties };
 }
 
 const CR_ROUTES = [
@@ -406,7 +397,7 @@ export function clientWorkflowDeps({
     createHubSpotClient: () => {},
     createCentralReachClient: () => {},
     createStateClient: () => {},
-    getDealById: async (dealId, requested) => withBlankKeys(record.read(), requested),
+    getDealById: async (dealId, requested) => hubspotAnswer(record.read(), requested),
     listAssociations: associations,
     updateDealProperties: async (dealId, properties) => {
       record.write(properties);

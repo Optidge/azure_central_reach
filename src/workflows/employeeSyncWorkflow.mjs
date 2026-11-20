@@ -88,7 +88,7 @@ import {
   CHECKLIST_STILL_TEMPORARY,
   CONFLICTING_EXTERNAL_IDS,
   crIdNotDigits,
-  missingDateProperty,
+  missingPropertiesReason,
   REPLACE_TEMPORARY_ID,
   RETRIES_USED_UP,
   unreadableDate,
@@ -265,16 +265,6 @@ const EMPLOYEE_GATE_AND_STATUS_PROPERTIES = Object.freeze([
   "last_sync_status",
   "last_sync_error"
 ]);
-
-// The 4.18 status sentence, the same as the Case worker's. Property names only, never a value.
-// Rule 5.2 keeps every sentence in src/constants/syncReasons.mjs: this one moves there at the
-// merge, shared with the Case worker.
-const NAMES_LISTED = 10;
-function missingPropertiesReason(names) {
-  const listed = names.slice(0, NAMES_LISTED).join(", ");
-  const more = names.length > NAMES_LISTED ? ` and ${names.length - NAMES_LISTED} more` : "";
-  return `Missing from the HubSpot answer: ${listed}${more}`;
-}
 
 const CONTACT_OBJECT_TYPE_ID = "0-1";
 
@@ -754,14 +744,6 @@ export async function runEmployeeSyncWorkflow(
       });
     }
 
-    if (mapped.dateOfBirthStatus === "missing") {
-      return await decided({
-        status: "error",
-        reason: missingDateProperty("date_of_birth"),
-        code: DECIDED_CODES.HUBSPOT_PROPERTY_MISSING,
-        fail: true
-      });
-    }
     if (mapped.dateOfBirthStatus === "unreadable") {
       return await decided({
         status: "error",

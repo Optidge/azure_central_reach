@@ -4,7 +4,6 @@ import { buildErrorLog } from "../lib/errors.mjs";
 import {
   createHubSpotClient,
   getDealById,
-  getOwnerById,
   listAssociations,
   readObjectsBatch,
   updateDealProperties
@@ -70,6 +69,7 @@ import {
   CASE_CLIENT_ID_MISMATCH,
   RETRIES_USED_UP,
   crIdNotDigits,
+  missingPropertiesReason,
   unreadableDate
 } from "../constants/syncReasons.mjs";
 import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
@@ -82,9 +82,7 @@ import {
   DECISION_PROPERTIES,
   missingMappedProperties,
   missingProperties,
-  missingPropertiesReason,
   omitFieldIdsFor,
-  readOwnerName,
   readStaffNames,
   staffRecordIdsByRole
 } from "./clientSyncInputs.mjs";
@@ -226,7 +224,6 @@ export async function runClientSyncWorkflow(
   const unlock = dependencies.releaseLease || releaseLease;
   const loadAssociations = dependencies.listAssociations || listAssociations;
   const readBatch = dependencies.readObjectsBatch || readObjectsBatch;
-  const readOwner = dependencies.getOwnerById || getOwnerById;
   const mapPayload = dependencies.buildClientPayload || buildClientPayload;
   const mapMetadata = dependencies.buildClientMetadata || buildClientMetadata;
   const validatePayload = dependencies.validateClientPayload || validateClientPayload;
@@ -466,9 +463,9 @@ export async function runClientSyncWorkflow(
     }
     const payload = centralReachPayload(mappedPayload);
 
-    // Rows 4.14 and 4.16: the staff on the Case and the owner are read here and passed to the
-    // mapper. A failed association or name read stops the run; it never becomes a blank (rule
-    // 5.8). The association rows also give the relationships of the compared state (BR17).
+    // Row 4.14: the staff on the Case are read here and passed to the mapper. A failed association
+    // or name read stops the run; it never becomes a blank (rule 5.8). The association rows also
+    // give the relationships of the compared state (BR17).
     let includeRelationships = false;
     let relationships = [];
     let staffNames;
@@ -520,34 +517,14 @@ export async function runClientSyncWorkflow(
         throw asReadFailure(error, "staffNames") || error;
       }
     }
-    const owner = await readOwnerName({ properties: deal?.properties, readOwner });
-    if (owner.warning) {
-      logger("warn", "Client owner was not read; the Care Coordinator field is left out.", {
-        workflow: "clientSync",
-        recordId: normalizedDealId,
-        source: source || null,
-        ...owner.warning,
-        invocationId: context?.invocationId || null
-      });
-    }
 
     // Contract P.5 (c) in src/mappings/client/buildClientMetadata.mjs: the CentralReach metadata
     // fields whose input was not read in this run. `dependencies.omitFieldIds` is a seam for
-    // tests; the worker adds the Care Coordinator when the owner was not read, and the staff
-    // fields when the staff were not read. Both mappings of the run (SP-R7) get exactly the same
-    // inputs: if they differed, the two hashes would differ and the run would end as "changed
-    // during the run" after the CentralReach writes.
-    const omitFieldIds = omitFieldIdsFor({
-      base: dependencies.omitFieldIds,
-      ownerNotRead: owner.notRead,
-      staffNames
-    });
-    const metadataInputs = {
-      portalId: portal.portalId,
-      staffNames,
-      ownerName: owner.ownerName,
-      omitFieldIds
-    };
+    // tests; the worker adds the staff fields when the staff were not read. Both mappings of the
+    // run (SP-R7) get exactly the same inputs: if they differed, the two hashes would differ and
+    // the run would end as "changed during the run" after the CentralReach writes.
+    const omitFieldIds = omitFieldIdsFor({ base: dependencies.omitFieldIds, staffNames });
+    const metadataInputs = { portalId: portal.portalId, staffNames, omitFieldIds };
     const metadata = mapMetadata({ deal, ...metadataInputs });
     // Row 4.14 (C-R6): a staff record with no name. Role and code only, never a name.
     for (const warning of metadata.warnings || []) {

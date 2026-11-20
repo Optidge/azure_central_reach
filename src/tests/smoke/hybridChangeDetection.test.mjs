@@ -18,7 +18,7 @@ import { hubspotPortalSettings } from "../../lib/config.mjs";
 import { retryDelayMs } from "../../lib/retry.mjs";
 import { filterWritebackProperties } from "../../lib/writebackAllowlist.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
-import { withBlankKeys } from "./stage2Fakes.mjs";
+import { hubspotAnswer } from "./stage2Fakes.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import { answersLikeHubSpot } from "./stage2Fakes.mjs";
 
@@ -135,7 +135,7 @@ function clientDeps(overrides = {}) {
     acquireLease: async () => true,
     releaseLease: async () => {},
     getState: async () => overrides.prior || null,
-    getDealById: async (_id, requested) => withBlankKeys(overrides.deal, requested),
+    getDealById: async (_id, requested) => hubspotAnswer(overrides.deal, requested),
     buildClientPayload: () => overrides.payload || { FirstName: "Ada" },
     validateClientPayload: () => ({ isValid: true, errors: [] }),
     buildClientMetadata: () => overrides.metadata || { labelIds: [1], metadataValues: { 126214: null } },

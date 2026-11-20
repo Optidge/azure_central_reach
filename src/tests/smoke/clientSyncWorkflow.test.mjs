@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
-import { withBlankKeys } from "./stage2Fakes.mjs";
+import { hubspotAnswer } from "./stage2Fakes.mjs";
 
 function buildDeps(overrides = {}) {
   const calls = {
@@ -19,7 +19,7 @@ function buildDeps(overrides = {}) {
     createCentralReachClient: () => {},
     createStateClient: () => {},
     getDealById: async (_id, requested) =>
-      withBlankKeys(
+      hubspotAnswer(
         {
           id: "deal-1",
           properties: {
@@ -84,7 +84,7 @@ test("runClientSyncWorkflow performs noop when hash unchanged, and writes nothin
   const first = buildDeps({
     ...stateful,
     getDealById: async (_id, requested) =>
-      withBlankKeys(
+      hubspotAnswer(
         {
           id: "deal-1",
           properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", client_id_number: "333" }
@@ -101,7 +101,7 @@ test("runClientSyncWorkflow performs noop when hash unchanged, and writes nothin
   const { deps, calls } = buildDeps({
     ...stateful,
     getDealById: async (_id, requested) =>
-      withBlankKeys(
+      hubspotAnswer(
         {
           id: "deal-1",
           properties: {
@@ -140,7 +140,7 @@ test("runClientSyncWorkflow writes fail state when validation decides an error",
 
 function dealWith(properties) {
   return async (_id, requested) =>
-    withBlankKeys(
+    hubspotAnswer(
       {
         id: "deal-1",
         properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", ...properties }

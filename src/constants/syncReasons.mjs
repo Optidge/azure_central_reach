@@ -8,8 +8,17 @@ export function unreadableDate(fieldName) {
   return `Unreadable date: ${fieldName}`;
 }
 
-export function missingDateProperty(fieldName) {
-  return `${fieldName} is missing from the HubSpot answer`;
+// Row 4.18 (rule 5.8): requested properties that are not keys of the HubSpot answer, for the Case
+// and the employee workers. Property names only, never a value: the first ten, then "and N more".
+const MISSING_PROPERTIES_LISTED = 10;
+
+export function missingPropertiesReason(names) {
+  const listed = names.slice(0, MISSING_PROPERTIES_LISTED).join(", ");
+  const more =
+    names.length > MISSING_PROPERTIES_LISTED
+      ? ` and ${names.length - MISSING_PROPERTIES_LISTED} more`
+      : "";
+  return `Missing from the HubSpot answer: ${listed}${more}`;
 }
 
 export const EMPLOYEE_CREATE_TURNED_OFF = "Employee create is turned off";

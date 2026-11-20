@@ -426,37 +426,6 @@ export async function readObjectsBatch({ objectTypeId, ids, properties }) {
   return found;
 }
 
-// Row 4.16: one owner, from GET /crm/v3/owners/{id}. The answer is kept in memory for 5 minutes,
-// per owner ID, so a busy queue does not ask again for every Case. Only an answer is kept, never
-// a failure. A 401, 403 or 404 is thrown as it is: the caller decides what a refused read means.
-const OWNER_CACHE_MS = 5 * 60 * 1000;
-const ownerCache = new Map();
-
-export function clearOwnerCache() {
-  ownerCache.clear();
-}
-
-export async function getOwnerById(ownerId) {
-  assertHubSpotReady();
-  const id = String(ownerId ?? "").trim();
-  if (!id) {
-    throw new Error("HubSpot ownerId is required");
-  }
-  const cached = ownerCache.get(id);
-  if (cached && Date.now() - cached.at < OWNER_CACHE_MS) {
-    return cached.owner;
-  }
-  const response = await withRetry(
-    () => hubSpotHttpClient.get(`/crm/v3/owners/${encodeURIComponent(id)}`),
-    { maxAttempts: 3, baseDelayMs: 400, maxDelayMs: 5000 }
-  );
-  const owner = response?.data || null;
-  if (owner) {
-    ownerCache.set(id, { owner, at: Date.now() });
-  }
-  return owner;
-}
-
 export async function writeEmployeeIdToObject({
   objectTypeId,
   recordId,

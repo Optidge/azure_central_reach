@@ -45,7 +45,7 @@ const CASE_MAPPED = [
   "btrbt_work_schedule_2_details",
   "finalized_client_service_hours_post_assessment",
   "client_service_hours_total",
-  "total_hours_bt1bt2_work_schedule",
+  "total_hours_btrbt_12",
   "initial_auth_tracks",
   "n97153_approved_assessment_hours_auth_req",
   "ia_hours_from_the_ia",
@@ -85,7 +85,9 @@ const CASE_MAPPED = [
   "most_recent_asd_diagnosis_date_medicaid",
   "policy_holder_name",
   "phi__policy_holder_dob",
-  "referral_source"
+  "referral_source",
+  // C10 (4.16)
+  "care_coordinator_name"
 ];
 
 test("[BR5][4.17] the Case mapped list holds exactly the HubSpot sources of the built Case requirements", () => {
@@ -139,6 +141,12 @@ test("[C18][4.4] the Location #2 schedule variants are not requested while C18 i
   assert.equal(requested.includes("work_schedule_2_details__for_location_2_other"), false);
 });
 
+test("[C20][4.6] Total Assigned Hours is requested from total_hours_btrbt_12; total_hours_bt1bt2_work_schedule is not requested (decision 40)", () => {
+  const requested = caseRequestProperties();
+  assert.equal(CASE_PROPERTIES.mapped.includes("total_hours_btrbt_12"), true);
+  assert.equal(requested.includes("total_hours_bt1bt2_work_schedule"), false);
+});
+
 test("[C21][4.6] the per-BT hours are not requested while C21 is open", () => {
   const requested = caseRequestProperties();
   assert.equal(requested.includes("hours_bt_work_schedule_1"), false);
@@ -159,9 +167,11 @@ test("[BR18][4.14] the five staffing-name signals are change signals only: curre
   }
 });
 
-test("[C10][4.16] hubspot_owner_id is requested as a change signal: the worker reads it, no mapper does", () => {
-  assert.equal(CASE_PROPERTIES.signalOnly.includes("hubspot_owner_id"), true);
-  assert.equal(CASE_PROPERTIES.mapped.includes("hubspot_owner_id"), false);
+test("[C10][4.16] care_coordinator_name is a mapped property; hubspot_owner_id and care_coordinator_email are not requested (decision 39)", () => {
+  const requested = caseRequestProperties();
+  assert.equal(CASE_PROPERTIES.mapped.includes("care_coordinator_name"), true);
+  assert.equal(requested.includes("hubspot_owner_id"), false);
+  assert.equal(requested.includes("care_coordinator_email"), false);
 });
 
 test("[BR13][4.17] the Case mustTrigger and system lists are unchanged, and no property sits in two lists", () => {

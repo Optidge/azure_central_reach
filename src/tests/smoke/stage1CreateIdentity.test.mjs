@@ -16,7 +16,7 @@ import { validateEmployeePayload } from "../../mappings/employees/validateEmploy
 import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
-import { hubspotAnswer, withBlankKeys } from "./stage2Fakes.mjs";
+import { hubspotAnswer } from "./stage2Fakes.mjs";
 import {
   buildEmployeePayloadForContactId,
   createCentralReachClient,
@@ -229,7 +229,7 @@ function clientHarness({
     getState: async () => prior,
     getDealById: async (id, propertyNames) => {
       calls.reads.push(propertyNames);
-      return withBlankKeys(deal, propertyNames);
+      return hubspotAnswer(deal, propertyNames);
     },
     listAssociations: async () => [],
     createOrUpdateClient: async (input) => {

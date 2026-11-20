@@ -115,20 +115,19 @@ test("[P.5a] the Case metadata mapper returns requiredLabelIds and the filled ma
 
 // --- (b) and (c) inputs of the Case metadata mapper ---
 
-test("[P.5b] the Case metadata mapper builds the staff and owner fields from staffNames and ownerName, and maps the rest as without them", () => {
-  const { INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME, CARE_COORDINATOR } =
+test("[P.5b] the Case metadata mapper builds the staff fields from staffNames, and maps the rest as without them", () => {
+  const { INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME } =
     CENTRAL_REACH_CLIENT_METADATA_FIELDS;
-  const inputFieldIds = [INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME, CARE_COORDINATOR];
+  const inputFieldIds = [INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME];
   const before = buildClientMetadata({ deal: CASE_DEAL, portalId: SANDBOX_PORTAL });
   const withInputs = buildClientMetadata({
     deal: CASE_DEAL,
     portalId: SANDBOX_PORTAL,
     staffNames: STAFF_NAMES,
-    ownerName: "Care Coordinator",
     omitFieldIds: []
   });
 
-  // Not passed means not read (contract P.5 (c)): the five fields are left out, not blanked.
+  // Not passed means not read (contract P.5 (c)): the four fields are left out, not blanked.
   for (const fieldId of inputFieldIds) {
     assert.equal(Object.prototype.hasOwnProperty.call(before.metadataValues, fieldId), false);
   }
@@ -138,7 +137,6 @@ test("[P.5b] the Case metadata mapper builds the staff and owner fields from sta
   assert.equal(withInputs.metadataValues[BT_1_NAME], "Sam Poe");
   assert.equal(withInputs.metadataValues[REASSESSMENT_BCBA], null);
   assert.equal(withInputs.metadataValues[BT_2_NAME], null);
-  assert.equal(withInputs.metadataValues[CARE_COORDINATOR], "Care Coordinator");
   // Everything else maps as before.
   const rest = { ...withInputs.metadataValues };
   for (const fieldId of inputFieldIds) {

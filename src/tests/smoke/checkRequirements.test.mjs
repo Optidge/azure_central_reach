@@ -238,7 +238,7 @@ test("[BR1][3.19] the real BUILD-PLAN section 9 is read: every family of IDs, wi
   assert.deepEqual(classifyStatus(status("C13")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("CL5")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("BL6")), { built: false, toBuildStages: [] });
-  assert.deepEqual(classifyStatus(status("K1")), { built: false, toBuildStages: ["6"] });
+  assert.deepEqual(classifyStatus(status("K1")), { built: true, toBuildStages: [] });
 });
 
 test("[BR1][3.19] requirement-tests.json is a JSON map the orchestrator fills at the wave 1 merge", () => {

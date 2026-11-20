@@ -16,7 +16,7 @@ import {
   toReasonCode
 } from "../../lib/syncRunSummary.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
-import { caseDeps, logged, refused, roleRow, ROLE_TYPE, staffAndOwner } from "./laneDFakes.mjs";
+import { caseDeps, caseStaff, logged, refused, roleRow, ROLE_TYPE } from "./laneDFakes.mjs";
 import { safeLog } from "../../lib/safeLog.mjs";
 import { httpError, timeoutError, workflowConfig } from "./stage2Fakes.mjs";
 import {
@@ -52,7 +52,7 @@ const DISTINCT = Object.freeze({
   street: "742 Evergreen Terrace",
   guardian: "Mortimer",
   policyHolder: "Wilhelmina Fitzgibbon",
-  owner: "Ottoline Brightwater",
+  careCoordinator: "Ottoline Brightwater",
   staff: "Peregrine Thistlewood"
 });
 
@@ -65,17 +65,16 @@ function distinctiveCase(properties = {}) {
     street_address: DISTINCT.street,
     guardian_first_name: DISTINCT.guardian,
     policy_holder_name: DISTINCT.policyHolder,
-    hubspot_owner_id: "9001",
+    care_coordinator_name: DISTINCT.careCoordinator,
     severity_level_clinical: "Level 2",
     ...properties
   };
 }
 
 function staffWithDistinctNames() {
-  return staffAndOwner({
+  return caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia)],
-    names: { 301: { first_name: DISTINCT.staff, last_name: "Haverford" } },
-    owners: { 9001: { firstName: "Ottoline", lastName: "Brightwater", email: "ottoline@example.com" } }
+    names: { 301: { first_name: DISTINCT.staff, last_name: "Haverford" } }
   });
 }
 
@@ -171,16 +170,16 @@ test("[BR15][3.20] success on a create: one line with the exact keys, the lookup
   assert.deepEqual(line.meta.labels.postedLabelIds.every(Number.isInteger), true);
 });
 
-test("[BR15][3.20] the line carries only names, IDs, codes and counts: no field value, person name, email or phone from the record, the staff or the owner", async () => {
+test("[BR15][3.20] the line carries only names, IDs, codes and counts: no field value, person name, email or phone from the record, the staff or the Care Coordinator", async () => {
   const { cr } = setup();
   const record = stage3Case(distinctiveCase());
   const logs = [];
   await runClientSyncWorkflow(input(), caseDeps({ record, logs, staff: staffWithDistinctNames() }));
 
-  // The values did go to CentralReach and the staff and owner names were read, so the test means
-  // something: they are in the requests, and not in the line.
+  // The values did go to CentralReach and the staff and Care Coordinator names were read, so the
+  // test means something: they are in the requests, and not in the line.
   const requests = JSON.stringify(cr.calls);
-  for (const value of [DISTINCT.firstName, DISTINCT.email, DISTINCT.street, DISTINCT.staff, DISTINCT.owner]) {
+  for (const value of [DISTINCT.firstName, DISTINCT.email, DISTINCT.street, DISTINCT.staff, DISTINCT.careCoordinator]) {
     assert.equal(requests.includes(value), true, value);
   }
   const line = JSON.stringify(onlySummary(logs).meta);
@@ -188,7 +187,6 @@ test("[BR15][3.20] the line carries only names, IDs, codes and counts: no field 
     assert.equal(line.includes(value), false, value);
   }
   assert.equal(line.includes("Haverford"), false);
-  assert.equal(line.includes("ottoline"), false);
 });
 
 test("[BR15][3.20] success on an update of a linked Case: crCalls equals the request log, lookup 200 then update", async () => {

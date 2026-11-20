@@ -30,7 +30,6 @@ import {
   hubspotAnswer,
   hubspotRecord,
   memoryContainer,
-  withBlankKeys,
   workflowConfig
 } from "./stage2Fakes.mjs";
 
@@ -81,7 +80,7 @@ for (const { name, lists, request } of OBJECTS) {
   });
 }
 
-test("[BR18][P.1] Case: dealstage, the five staffing-name signals and the owner are change signals only, and the entry property is in mustTrigger", () => {
+test("[BR18][P.1] Case: dealstage and the five staffing-name signals are change signals only, and the entry property is in mustTrigger", () => {
   assert.deepEqual(
     [...CASE_PROPERTIES.signalOnly],
     [
@@ -90,8 +89,7 @@ test("[BR18][P.1] Case: dealstage, the five staffing-name signals and the owner 
       "ia_bcba_name",
       "reassessment_bcba_name",
       "current_primary_bt",
-      "current_primary_bt_2",
-      "hubspot_owner_id"
+      "current_primary_bt_2"
     ]
   );
   assert.deepEqual([...CASE_PROPERTIES.mustTrigger], ["enter_in_central_reach"]);
@@ -165,7 +163,7 @@ test("[BR5][P.1] the Case worker asks HubSpot for the listed properties plus the
       }),
       getDealById: async (dealId, properties) => {
         requested.push(properties);
-        return withBlankKeys(record.read(), properties);
+        return hubspotAnswer(record.read(), properties);
       }
     }
   );
