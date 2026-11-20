@@ -1,6 +1,19 @@
 import { sha256 } from "./hash.mjs";
 
-export const MAPPING_VERSION = "hybrid-2026-10-27";
+// Saved hashes count only for the mapping version they were made with (row 3.7). Change this
+// value whenever the compared state changes shape or a mapper changes what it sends: every field
+// is then sent once. Stage 3 changed the employee state (built from HubSpot data only).
+export const MAPPING_VERSION = "stage3-2026-11-20";
+
+// Row 3.9: the queue message sources that are the backup path, not a webhook. intakePoller and
+// employeePoller are the hourly poller; dailySweep is the daily sweep (row 3.5).
+const BACKUP_PATH_SOURCES = new Set(["intakePoller", "employeePoller", "dailySweep"]);
+export const CHANGE_NOT_FROM_WEBHOOK =
+  "Change found by the poller or the daily sweep, not delivered by a webhook.";
+
+export function isBackupPathSource(source) {
+  return BACKUP_PATH_SOURCES.has(String(source || ""));
+}
 
 const NULL_TOKEN = "null";
 
@@ -193,6 +206,99 @@ export function metadataClearFieldIds(previousFieldHashes, metadata) {
     }
   }
   return clears;
+}
+
+// What the integration is known to have written, as the basis for a clear (rule 5.8): a field
+// counts as written when any of the given hash sets holds a hash for it that is not the blank
+// hash. The sets are the saved copy of the last clean run (of any mapping version) and the
+// hashes of runs that did not finish clean. Returns null when no set holds anything.
+export function writtenFieldHashes(...hashSets) {
+  const blankHashes = new Set([sha256(NULL_TOKEN), sha256("")]);
+  const written = {};
+  for (const hashes of hashSets) {
+    for (const [name, hash] of Object.entries(hashes || {})) {
+      if (written[name] === undefined || blankHashes.has(written[name])) {
+        written[name] = hash;
+      }
+    }
+  }
+  return Object.keys(written).length > 0 ? written : null;
+}
+
+// Row 3.18 (contract P.5 (c)): a field in the run's omit list could not be read, so it is not in
+// the compared state. Its saved hash is carried over as it was. The field is then not a changed
+// field, and a later blank in HubSpot still finds the saved value and sends the clear.
+export function keepOmittedFieldHashes(nextFieldHashes, savedFieldHashes, omitFieldIds) {
+  const kept = { ...nextFieldHashes };
+  for (const fieldId of omitFieldIds || []) {
+    const name = `metadata.${fieldId}`;
+    if (savedFieldHashes && savedFieldHashes[name] !== undefined) {
+      kept[name] = savedFieldHashes[name];
+    }
+  }
+  return kept;
+}
+
+// Row 3.8: the metadata fields to send. With a saved copy, only the fields whose hash differs
+// from it; with none, every field. The caller passes a saved copy only when the last run was
+// clean: after a run that failed halfway CentralReach may hold anything.
+export function changedMetadata(metadata, savedFieldHashes, nextFieldHashes) {
+  if (!savedFieldHashes) {
+    return { ...(metadata || {}) };
+  }
+  const changed = {};
+  for (const [fieldId, value] of Object.entries(metadata || {})) {
+    const name = `metadata.${fieldId}`;
+    if (savedFieldHashes[name] !== nextFieldHashes?.[name]) {
+      changed[fieldId] = value;
+    }
+  }
+  return changed;
+}
+
+// Row 3.13 (rule 5.8, tested 2026-11-20): an employee update replaces the core record. A core
+// field that is sent blank, or left out, is cleared in CentralReach. So a field that is blank in
+// HubSpot is sent blank only when the saved copy shows the integration wrote a value there
+// before. Otherwise the request carries the value CentralReach holds, taken from the read of the
+// same run (`contact` in the answer of GET /contacts/employee/{id}), key for key; a key that read
+// does not hold is left out. A blank date of birth always sends back CentralReach's date (rule
+// 5.7), never a blank and never the placeholder.
+// The compared state and the saved hashes are built from HubSpot data only, so a value sent back
+// here is never counted as written by the integration.
+export const EMPLOYEE_CORE_FIELDS = Object.freeze([
+  "externalSystemId",
+  "firstName",
+  "lastName",
+  "gender",
+  "dateOfBirth",
+  "primaryEmail",
+  "addressLine1",
+  "addressLine2",
+  "city",
+  "stateProvince",
+  "zipPostalCode",
+  "phoneCell"
+]);
+
+export function keepUnwrittenCoreFields(payload, savedFieldHashes, crContact) {
+  const blankHashes = new Set([sha256(NULL_TOKEN), sha256("")]);
+  const held = crContact && typeof crContact === "object" ? crContact : {};
+  const next = { ...(payload || {}) };
+  for (const field of EMPLOYEE_CORE_FIELDS) {
+    if (normalizeBlank(next[field]) !== null) {
+      continue;
+    }
+    const savedHash = savedFieldHashes?.[`employee.${field}`];
+    const writtenBefore = Boolean(savedHash) && !blankHashes.has(savedHash);
+    if (writtenBefore && field !== "dateOfBirth") {
+      next[field] = null;
+    } else if (Object.prototype.hasOwnProperty.call(held, field)) {
+      next[field] = held[field];
+    } else {
+      delete next[field];
+    }
+  }
+  return next;
 }
 
 export function clientWritePlan({ existingContactId, lookedUpContactId }) {

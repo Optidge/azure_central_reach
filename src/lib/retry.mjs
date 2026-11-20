@@ -1,4 +1,5 @@
 import {
+  LABEL_NOT_SENDABLE,
   SYNC_FAILED,
   centralReachRejected,
   hubspotRejected,
@@ -52,6 +53,9 @@ const TEMPORARY_CODES = new Set([
   "CR_LOOKUP_UNKNOWN", // a lookup answered something other than 200 or 404
   "HUBSPOT_READ_FAILED", // HubSpot refused a read with 401 or 403, or answered with no list
   "CR_AUTH_FAILED", // the CentralReach token request failed, with any status
+  // Row 3.15: a create was sent less than 15 minutes ago and its lookup answers "not found".
+  // No second create is sent; the run is retried.
+  "CR_CREATE_PENDING",
   "CR_LABEL_NOT_IN_CATALOG",
   "CR_LABEL_READ_EMPTY",
   "CR_LABEL_POST_UNCONFIRMED"
@@ -127,6 +131,9 @@ export function permanentFailureReason(error) {
   if (error?.code === "METADATA_WRITE_FAILED") {
     return metadataWriteFailed(error.failedFieldIds);
   }
+  if (error?.code === "CR_LABEL_NOT_SENDABLE") {
+    return LABEL_NOT_SENDABLE;
+  }
   const status = error?.response?.status;
   if (status) {
     return error.provider === "hubspot" ? hubspotRejected(status) : centralReachRejected(status);
@@ -141,6 +148,21 @@ export function metadataWriteFailedError(summary) {
   error.code = "METADATA_WRITE_FAILED";
   error.failedFieldIds = summary?.failedFieldIds || [];
   error.failedFields = summary?.failedFields || [];
+  return error;
+}
+
+// Row L.3: a label POST that the read does not show yet. The worker throws this after it saved
+// the POST in the link record; the run is retried on the normal schedule.
+export function labelPostUnconfirmedError() {
+  const error = new Error("LabelPostUnconfirmed");
+  error.code = "CR_LABEL_POST_UNCONFIRMED";
+  return error;
+}
+
+// Row 3.15: thrown by the worker instead of sending a second create.
+export function createStillPendingError() {
+  const error = new Error("CreateStillPending");
+  error.code = "CR_CREATE_PENDING";
   return error;
 }
 

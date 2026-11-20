@@ -49,6 +49,7 @@ const EMPLOYEE_POST = "POST /contacts/employee";
 const EMPLOYEE_LOOKUP = "GET /contacts/employee/byExternalSystemId";
 const CLIENT_PUT = "PUT /contacts/client/{id}";
 const METADATA_PUT = "PUT /contacts/{id}/metadata/{fieldId}";
+const LABELS_GET = "GET /contacts/{id}/labels";
 
 function setup() {
   const container = memoryContainer();
@@ -57,7 +58,7 @@ function setup() {
   return { container, cr };
 }
 
-function linkedEmployee(cr, contactId = "CR1", externalSystemId = "WD1") {
+function linkedEmployee(cr, contactId = "7001", externalSystemId = "WD1") {
   cr.employees.set(contactId, {
     contactId,
     externalSystemId,
@@ -94,7 +95,7 @@ function linkWrites(container, pk) {
 test("[2.1] a successful employee run writes the link record with no expiry", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
 
   const result = await runBt(record);
 
@@ -102,7 +103,7 @@ test("[2.1] a successful employee run writes the link record with no expiry", as
   const link = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID);
   assert.equal(link.ttl, LINK_TTL_NEVER);
   assert.equal(LINK_TTL_NEVER, -1);
-  assert.equal(link.data.crContactId, "CR1");
+  assert.equal(link.data.crContactId, "7001");
   assert.equal(link.data.externalSystemId, "WD1");
   assert.equal(link.data.clean, true);
   assert.equal(Object.keys(link.data.fieldHashes).length > 0, true);
@@ -131,7 +132,7 @@ test("[2.1] a successful Case run writes the link record with no expiry", async 
 test("[2.1] a failed employee run keeps the CR ID and the last good hashes, with no expiry", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   await runBt(record);
   const goodHashes = { ...container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.fieldHashes };
 
@@ -141,9 +142,9 @@ test("[2.1] a failed employee run keeps the CR ID and the last good hashes, with
 
   const link = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID);
   assert.equal(link.ttl, -1);
-  assert.equal(link.data.crContactId, "CR1");
+  assert.equal(link.data.crContactId, "7001");
   assert.deepEqual(link.data.fieldHashes, goodHashes);
-  assert.equal(link.data.hashesContactId, "CR1");
+  assert.equal(link.data.hashesContactId, "7001");
   for (const entry of linkWrites(container, EMPLOYEE_LINK_PK)) {
     assert.equal(entry.doc.ttl, -1);
   }
@@ -170,7 +171,7 @@ test("[2.1] a failed Case run keeps the CR ID and the last good hashes, with no 
 test("[2.1] attempt details go to a second record that may expire, not to the link record", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   cr.fail(EMPLOYEE_PUT, timeoutError());
   await assert.rejects(
     runEmployeeSyncWorkflow(
@@ -213,9 +214,9 @@ test("[2.1] saveLinkRecord reads the record first and keeps the fields the calle
     type: "link",
     ttlSeconds: -1,
     data: {
-      crContactId: "CR1",
+      crContactId: "7001",
       fieldHashes: { "employee.firstName": "abc" },
-      hashesContactId: "CR1",
+      hashesContactId: "7001",
       pendingCreateExternalId: "WD1",
       clean: true
     }
@@ -232,9 +233,9 @@ test("[2.1] saveLinkRecord reads the record first and keeps the fields the calle
   const link = container.get("sync:employee", "k");
   assert.equal(link.ttl, -1);
   assert.equal(link.data.clean, false);
-  assert.equal(link.data.crContactId, "CR1");
+  assert.equal(link.data.crContactId, "7001");
   assert.deepEqual(link.data.fieldHashes, { "employee.firstName": "abc" });
-  assert.equal(link.data.hashesContactId, "CR1");
+  assert.equal(link.data.hashesContactId, "7001");
   assert.equal(link.data.pendingCreateExternalId, "WD1");
 });
 
@@ -257,7 +258,7 @@ test("[2.1] a run that ends waiting but whose CentralReach writes all succeeded 
 test("[2.1] a decided error on a linked employee does not remove the CR ID or the last good hashes", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   await runBt(record);
   const goodHashes = { ...container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.fieldHashes };
 
@@ -266,7 +267,7 @@ test("[2.1] a decided error on a linked employee does not remove the CR ID or th
 
   assert.equal(result.status, "error");
   const link = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID);
-  assert.equal(link.data.crContactId, "CR1");
+  assert.equal(link.data.crContactId, "7001");
   assert.deepEqual(link.data.fieldHashes, goodHashes);
   assert.equal(container.get(EMPLOYEE_ATTEMPT_PK, BT_LINK_ID).type, "fail");
 });
@@ -277,21 +278,21 @@ test("[2.1] a decided error on a linked employee does not remove the CR ID or th
 
 test("[2.2] changing an employee's CR ID drops the saved hashes and forces a full write", async () => {
   const { container, cr } = setup();
-  linkedEmployee(cr, "CR1");
-  linkedEmployee(cr, "CR2");
-  const record = btRecord({ employee_id: "CR1" });
+  linkedEmployee(cr, "7001");
+  linkedEmployee(cr, "7002");
+  const record = btRecord({ employee_id: "7001" });
   await runBt(record);
-  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.hashesContactId, "CR1");
+  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.hashesContactId, "7001");
 
   // Same mapped values and the same last_sync_hash in HubSpot. Only the CR ID changed.
-  record.properties.employee_id = "CR2";
+  record.properties.employee_id = "7002";
   const result = await runBt(record);
 
   assert.notEqual(result.status, "noop");
-  assert.equal(cr.calls.some((call) => call.method === "PUT" && call.url === "/contacts/employee/CR2"), true);
+  assert.equal(cr.calls.some((call) => call.method === "PUT" && call.url === "/contacts/employee/7002"), true);
   const link = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID);
-  assert.equal(link.data.crContactId, "CR2");
-  assert.equal(link.data.hashesContactId, "CR2");
+  assert.equal(link.data.crContactId, "7002");
+  assert.equal(link.data.hashesContactId, "7002");
 });
 
 test("[2.2] changing a Case's CR ID drops the saved hashes and forces a full write", async () => {
@@ -312,26 +313,26 @@ test("[2.2] changing a Case's CR ID drops the saved hashes and forces a full wri
 
 test("[2.2] hashesContactId is written only when hashes are saved, so old hashes never sit under a new CR ID", async () => {
   const { container, cr } = setup();
-  linkedEmployee(cr, "CR1");
-  linkedEmployee(cr, "CR2");
-  const record = btRecord({ employee_id: "CR1" });
+  linkedEmployee(cr, "7001");
+  linkedEmployee(cr, "7002");
+  const record = btRecord({ employee_id: "7001" });
   await runBt(record);
   const goodHashes = { ...container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.fieldHashes };
 
-  record.properties.employee_id = "CR2";
+  record.properties.employee_id = "7002";
   cr.fail(EMPLOYEE_PUT, timeoutError());
   await assert.rejects(runBt(record));
 
   const afterFailure = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data;
-  assert.equal(afterFailure.crContactId, "CR2");
-  assert.equal(afterFailure.hashesContactId, "CR1");
+  assert.equal(afterFailure.crContactId, "7002");
+  assert.equal(afterFailure.hashesContactId, "7001");
   assert.deepEqual(afterFailure.fieldHashes, goodHashes);
 
   const putsBefore = cr.count(EMPLOYEE_PUT);
   const result = await runBt(record);
   assert.equal(result.status, "success");
   assert.equal(cr.count(EMPLOYEE_PUT), putsBefore + 1);
-  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.hashesContactId, "CR2");
+  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.hashesContactId, "7002");
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -423,7 +424,7 @@ test("[2.3b] an employee found by the pending ID is linked and updated, not crea
 
 test("[2.3b] a pending Workday ID whose CentralReach employee another HubSpot record holds is an error, not a link", async () => {
   const { container, cr } = setup();
-  linkedEmployee(cr, "CR7", "WD1");
+  linkedEmployee(cr, "7007", "WD1");
   await putState({
     pk: EMPLOYEE_LINK_PK,
     id: BT_LINK_ID,
@@ -471,14 +472,18 @@ for (const status of [400, 409]) {
   });
 }
 
-test("[2.3c] the pending ID is cleared when its lookup answers 404", async () => {
+test("[2.3c] the pending ID is cleared when its lookup answers 404, 15 minutes or more after the create was sent", async () => {
+  // Row 3.15: a 404 inside the 15 minutes is no longer trusted (stage3PendingCreate.test.mjs).
   const { container, cr } = setup();
   await putState({
     pk: EMPLOYEE_LINK_PK,
     id: BT_LINK_ID,
     type: "link",
     ttlSeconds: -1,
-    data: { pendingCreateExternalId: "WD-OLD" }
+    data: {
+      pendingCreateExternalId: "WD-OLD",
+      pendingCreateSentAt: new Date(Date.now() - 16 * 60 * 1000).toISOString()
+    }
   });
   const record = btRecord({ workday_id: "WD1" });
 
@@ -542,14 +547,17 @@ test("[2.3d] a client create that returns no contact ID is an unknown create", a
 test("[2.4] an employee run that failed halfway, then the value changed back: the next run writes again", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   await runBt(record);
   const cleanHash = record.properties.last_sync_hash;
   assert.equal(typeof cleanHash, "string");
 
   record.properties.first_name = "Alexa";
-  cr.fail(METADATA_PUT, timeoutError());
+  // Row 3.8: a name change sends no metadata field any more, so the run is failed at the label
+  // read, which still comes after the employee update.
+  cr.fail(LABELS_GET, timeoutError());
   await assert.rejects(runBt(record));
+  assert.equal(cr.calls.filter((call) => call.name === EMPLOYEE_PUT).at(-1).body.firstName, "Alexa");
   // CentralReach now holds the new name. HubSpot still shows the old hash.
   assert.equal(record.properties.last_sync_hash, cleanHash);
   assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.clean, false);
@@ -572,8 +580,11 @@ test("[2.4] a Case run that failed halfway, then the value changed back: the nex
   const cleanHash = record.properties.last_sync_hash;
 
   record.properties.phi_last_name = "Rivers";
-  cr.fail(METADATA_PUT, timeoutError());
+  // Row 3.8: a name change sends no metadata field any more, so the run is failed at the label
+  // read, which still comes after the client update.
+  cr.fail(LABELS_GET, timeoutError());
   await assert.rejects(runCase(record));
+  assert.equal(cr.calls.filter((call) => call.name === CLIENT_PUT).at(-1).body.LastName, "Rivers");
   assert.equal(record.properties.last_sync_hash, cleanHash);
   assert.equal(container.get(CLIENT_LINK_PK, CASE_LINK_ID).data.clean, false);
 
@@ -589,7 +600,7 @@ test("[2.4] a Case run that failed halfway, then the value changed back: the nex
 test("[2.4] the link record is in progress before the first CentralReach write and clean after the last", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   const cleanAtWrites = [];
   cr.onRequest = (name, request) => {
     if (request.method !== "GET") {
@@ -625,7 +636,7 @@ test("[2.4] a Case link record is in progress before the first CentralReach writ
 test("[2.4] a matching last_sync_hash in HubSpot is not enough when Cosmos holds no clean record", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   await runBt(record);
   assert.equal(typeof record.properties.last_sync_hash, "string");
 
@@ -656,7 +667,7 @@ test("[2.4] a clean record whose hashes match is a no-op with no CentralReach wr
   const { cr } = setup();
   linkedEmployee(cr);
   linkedClient(cr);
-  const employee = btRecord({ employee_id: "CR1" });
+  const employee = btRecord({ employee_id: "7001" });
   const deal = caseRecord({ client_id_number: "2001" });
   await runBt(employee);
   await runCase(deal);
@@ -793,7 +804,7 @@ test("[2.5] a workflow with no lease length does not fall back to 120 seconds an
   const config = workflowConfig();
   delete config.ttl.leaseTtlSeconds;
 
-  await assert.rejects(runBt(btRecord({ employee_id: "CR1" }), { config }));
+  await assert.rejects(runBt(btRecord({ employee_id: "7001" }), { config }));
   await assert.rejects(runCase(caseRecord({ client_id_number: "2001" }), { config }));
 
   assert.equal(cr.calls.length, 0);

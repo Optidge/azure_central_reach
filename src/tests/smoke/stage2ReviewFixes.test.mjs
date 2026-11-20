@@ -86,9 +86,14 @@ function ttlContainer(clock) {
   };
 }
 
+// The clock stands still at the time the test started and moves only when the test sets
+// offsetMs. With a running clock, the lease's own clock read and the container's (a few
+// milliseconds later) could fall in different milliseconds, and the expiresAt check below failed
+// now and then.
 async function withClock(run) {
   const realNow = Date.now;
-  const clock = { offsetMs: 0, now: () => realNow() + clock.offsetMs };
+  const startedAt = realNow();
+  const clock = { offsetMs: 0, now: () => startedAt + clock.offsetMs };
   Date.now = clock.now;
   try {
     return await run(clock);
@@ -101,7 +106,7 @@ async function withClock(run) {
 // earlier test fetched would be reused from the module's cache.
 test("[2.7 decision 6] a CentralReach token request that is refused is retried, never an error on the record", async () => {
   const { cr } = setup();
-  cr.employees.set("CR1", { contactId: "CR1", externalSystemId: "WD1", primaryEmail: "s@example.com" });
+  cr.employees.set("7001", { contactId: "7001", externalSystemId: "WD1", primaryEmail: "s@example.com" });
   const answer = axios.defaults.adapter;
   axios.defaults.adapter = async (requestConfig) => {
     if (String(requestConfig.url).includes("token.test")) {
@@ -109,7 +114,7 @@ test("[2.7 decision 6] a CentralReach token request that is refused is retried, 
     }
     return answer(requestConfig);
   };
-  const record = btRecord({ employee_id: "CR1", last_sync_status: "success" });
+  const record = btRecord({ employee_id: "7001", last_sync_status: "success" });
   const scheduled = [];
   try {
     await processEmployeeQueue(
@@ -217,7 +222,7 @@ async function holdLease(container, pk, id) {
 
 test("[5.1] an employee that fails before the gate is checked gets no HubSpot writeback, also on the last attempt", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ employee_id: "CR1", sandbox_test_field: "false" });
+  const record = btRecord({ employee_id: "7001", sandbox_test_field: "false" });
   await holdLease(container, "sync-lock:employee", BT_LINK_ID);
 
   await assert.rejects(
@@ -250,7 +255,7 @@ test("[5.1] a Case that fails before the gate is checked gets no HubSpot writeba
 test("[5.1] a HubSpot read that fails leaves the gate unknown: no writeback for a temporary or a permanent failure", async () => {
   for (const status of [503, 404]) {
     setup();
-    const employee = btRecord({ employee_id: "CR1", sandbox_test_field: "false" });
+    const employee = btRecord({ employee_id: "7001", sandbox_test_field: "false" });
     const deal = caseRecord({ client_id_number: "2001", sandbox_test_field: "false" });
     const refuse = async () => {
       throw Object.assign(httpError(status), { provider: "hubspot" });
@@ -279,9 +284,9 @@ test("[5.1] a HubSpot read that fails leaves the gate unknown: no writeback for 
 
 test("[5.1] a record that passed the gate still gets Retries used up on the last attempt", async () => {
   const { cr } = setup();
-  cr.employees.set("CR1", { contactId: "CR1", externalSystemId: "WD1", primaryEmail: "s@example.com" });
+  cr.employees.set("7001", { contactId: "7001", externalSystemId: "WD1", primaryEmail: "s@example.com" });
   cr.fail("PUT /contacts/employee/{id}", httpError(503), { times: 10 });
-  const record = btRecord({ employee_id: "CR1", sandbox_test_field: "true" });
+  const record = btRecord({ employee_id: "7001", sandbox_test_field: "true" });
 
   await assert.rejects(
     runEmployeeSyncWorkflow(

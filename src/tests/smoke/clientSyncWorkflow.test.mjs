@@ -67,9 +67,10 @@ test("runClientSyncWorkflow writes success state and safe summary", async () => 
   assert.equal(calls.stateWrites.at(-1).type, "success");
 });
 
-test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
+test("runClientSyncWorkflow performs noop when hash unchanged, and writes nothing", async () => {
   // Stage 2 (row 2.4): a no-op also needs a clean Cosmos record with matching hashes, so a first
-  // run saves one.
+  // run saves one. Stage 3 (row 3.7): a no-op writes nothing, to HubSpot or to Cosmos, when
+  // HubSpot already shows success; the status noop is never written.
   const store = new Map();
   const stateful = {
     hashPayload: () => "same-hash",
@@ -92,7 +93,12 @@ test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
     ...stateful,
     getDealById: async () => ({
       id: "deal-1",
-      properties: { hs_object_id: "deal-1", last_sync_hash: "same-hash", client_id_number: "333" }
+      properties: {
+        hs_object_id: "deal-1",
+        last_sync_hash: "same-hash",
+        last_sync_status: "success",
+        client_id_number: "333"
+      }
     }),
     createOrUpdateClient: async () => {
       throw new Error("should not be called");
@@ -101,8 +107,9 @@ test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
 
   const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
   assert.equal(result.status, "noop");
-  assert.equal(calls.writebacks.length, 1);
-  assert.equal(calls.stateWrites[0].data.operation, "noop");
+  assert.equal(result.operation, "noop");
+  assert.equal(calls.writebacks.length, 0);
+  assert.equal(calls.stateWrites.length, 0);
 });
 
 test("runClientSyncWorkflow writes fail state when validation decides an error", async () => {

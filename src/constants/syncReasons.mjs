@@ -40,6 +40,11 @@ export const WORKDAY_ALREADY_IN_CENTRALREACH =
 export const CASE_CLIENT_ID_MISMATCH =
   "HubSpot client_id_number does not match the CentralReach client found for this Case record.";
 
+// propertyName is client_id_number or employee_id. The value is never part of the sentence.
+export function crIdNotDigits(propertyName) {
+  return `${propertyName} must contain digits only.`;
+}
+
 // Stage 2: failures the worker did not decide on purpose.
 
 // Written once, after the last retry of a temporary failure (1 min, 5 min, 15 min, 1 h, 4 h).
@@ -62,5 +67,10 @@ export function metadataWriteFailed(fieldIds) {
 export function unreadableCentralReachAnswer(call, expectedField) {
   return `CentralReach answered ${call} in a shape the integration cannot read. Expected field: ${expectedField}.`;
 }
+
+// A mapper asked for a label that is not in CENTRAL_REACH_SENDABLE_LABEL_IDS (row L.1). This is
+// a defect in the integration, not something staff can fix on the record.
+export const LABEL_NOT_SENDABLE =
+  "A required CentralReach label is not in the integration's list of sendable labels. No label was sent.";
 
 export const SYNC_FAILED = "Sync failed";

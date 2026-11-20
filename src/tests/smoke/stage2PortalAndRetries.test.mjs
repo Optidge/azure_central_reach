@@ -143,7 +143,7 @@ function setup() {
   return { container, cr };
 }
 
-function linkedEmployee(cr, contactId = "CR1", externalSystemId = "WD1") {
+function linkedEmployee(cr, contactId = "7001", externalSystemId = "WD1") {
   cr.employees.set(contactId, { contactId, externalSystemId, primaryEmail: "stored@example.com" });
 }
 
@@ -347,7 +347,7 @@ test("[2.6] the Case worker drops the excluded association types of its own port
 
 test("[2.6] a worker with a portal that is not in the table makes no HubSpot or CentralReach call", async () => {
   const { cr } = setup();
-  const employee = btRecord({ employee_id: "CR1" });
+  const employee = btRecord({ employee_id: "7001" });
   const deal = caseRecord({ client_id_number: "2001" });
   const config = workflowConfig();
   config.hubspot.hubspotPortalId = "50850427";
@@ -478,7 +478,7 @@ test("[2.6] the poller sends only through the portal-stamping senders", () => {
 for (const queue of QUEUES) {
   test(`[2.6] the ${queue.name} worker completes a message for the other portal without acting`, async () => {
     const { cr } = setup();
-    const record = queue.name === "client" ? caseRecord({ client_id_number: "2001" }) : btRecord({ employee_id: "CR1" });
+    const record = queue.name === "client" ? caseRecord({ client_id_number: "2001" }) : btRecord({ employee_id: "7001" });
     let workflowRuns = 0;
     const scheduled = [];
     const runWorkflow = (input) => {
@@ -685,7 +685,7 @@ test("[2.7] a timeout or 5xx on the create call itself is an unknown create", ()
 test("[2.7] employee worker, temporary: the run is thrown for a retry and HubSpot keeps its last status", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1", last_sync_status: "success", last_sync_error: "" });
+  const record = btRecord({ employee_id: "7001", last_sync_status: "success", last_sync_error: "" });
   cr.fail(EMPLOYEE_PUT, timeoutError());
 
   await assert.rejects(runBt(record));
@@ -697,7 +697,7 @@ test("[2.7] employee worker, temporary: the run is thrown for a retry and HubSpo
 test("[2.7] employee worker, permanent: a CentralReach 400 on an update is error with no retry", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   cr.fail(EMPLOYEE_PUT, httpError(400, { data: { message: "Alex Rivera alex@example.com" } }));
 
   const result = await runBt(record);
@@ -870,7 +870,7 @@ test("[2.7 decision 4] the three readers throw a permanent error that carries th
   linkedEmployee(cr);
 
   cr.answer(EMPLOYEE_GET, { employee: { name: "Alex Rivera" } });
-  await assert.rejects(getEmployeeByContactId("CR1"), (error) => {
+  await assert.rejects(getEmployeeByContactId("7001"), (error) => {
     assert.equal(error.code, "CR_EMPLOYEE_READ_FAILED");
     assert.equal(error.answerShape.call, "GET /contacts/employee/{id}");
     assert.equal(error.answerShape.httpStatus, 200);
@@ -885,7 +885,7 @@ test("[2.7 decision 4] the three readers throw a permanent error that carries th
   });
 
   cr.answer(LABELS_GET, { labels: [{ name: "Secret Label" }] });
-  await assert.rejects(updateClientMetadata("CR1", {}, { labelIds: [22] }), (error) => {
+  await assert.rejects(updateClientMetadata("7001", {}, { labelIds: [22] }), (error) => {
     assert.equal(error.code, "CR_LABEL_READ_FAILED");
     assert.equal(error.answerShape.call, "GET /contacts/{id}/labels");
     assert.equal(error.answerShape.expectedFieldTypes.labels, "list");
@@ -917,7 +917,7 @@ test("[2.7 decision 4] the three readers throw a permanent error that carries th
 test("[2.7 decision 4] an unreadable employee read is error on the record, no retry, no CentralReach write, and it is logged in detail", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   const logs = [];
   cr.answer(EMPLOYEE_GET, { employee: { name: "Alex Rivera" } });
 
@@ -974,7 +974,7 @@ test("[2.7 decision 4] a Case lookup that answers 200 with no contact ID is erro
 
 test("[2.7 decision 4] an employee lookup that answers 200 with no contact ID never creates", async () => {
   const { cr } = setup();
-  linkedEmployee(cr, "CR9", "HS1");
+  linkedEmployee(cr, "7009", "HS1");
   const record = btRecord({ workday_id: "WD1" });
   cr.answer("GET /contacts/employee/byExternalSystemId", { contact: {} });
 
@@ -1151,7 +1151,7 @@ test("[2.8a] while a temporary failure is being retried, HubSpot keeps its last 
   const { cr } = setup();
   linkedEmployee(cr);
   linkedClient(cr);
-  const employee = btRecord({ employee_id: "CR1", last_sync_status: "waiting", last_sync_error: "kept" });
+  const employee = btRecord({ employee_id: "7001", last_sync_status: "waiting", last_sync_error: "kept" });
   const deal = caseRecord({ client_id_number: "2001", last_sync_status: "success", last_sync_error: "" });
   cr.fail(EMPLOYEE_PUT, timeoutError());
   cr.fail(CLIENT_PUT, timeoutError());
@@ -1169,7 +1169,7 @@ test("[2.8a] while a temporary failure is being retried, HubSpot keeps its last 
 test("[2.8b] on the last attempt the employee worker writes error Retries used up once, then throws", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   cr.fail(EMPLOYEE_PUT, timeoutError());
 
   await assert.rejects(runBt(record, { lastAttempt: true }));
@@ -1197,7 +1197,7 @@ test("[2.8b] on the last attempt the Case worker writes error Retries used up on
 test("[2.8b] every kind of temporary failure ends as Retries used up, never as the raw message", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   cr.fail(
     METADATA_PUT,
     httpError(429, { data: { message: "Alex Rivera" }, headers: { "retry-after": "600" } }),
@@ -1251,7 +1251,7 @@ test("[2.8c] a permanent error writes a fixed sentence, never the provider's mes
   const { cr } = setup();
   linkedEmployee(cr);
   linkedClient(cr);
-  const employee = btRecord({ employee_id: "CR1" });
+  const employee = btRecord({ employee_id: "7001" });
   const deal = caseRecord({ client_id_number: "2001" });
   const secret = httpError(422, { data: { message: "Alex Rivera 1990-10-20" } });
   secret.message = "Alex Rivera 1990-10-20 was rejected";
@@ -1283,7 +1283,7 @@ function gate() {
 test("[2.9] two messages for one employee: the second is rescheduled at 1 minute and later runs as a no-op", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   const scheduled = [];
   const results = [];
   const deps = {
@@ -1378,7 +1378,7 @@ test("[2.9] two messages for one Case: the second is rescheduled at 1 minute and
 test("[2.9] a record that changed during the run is rescheduled at 1 minute, not failed", async () => {
   const { container, cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   const scheduled = [];
   // A person edits the record while the integration is writing to CentralReach.
   cr.onRequest = (name) => {
@@ -1419,7 +1419,7 @@ test("[2.9 decision 5] a busy record counts toward the five attempts: the last o
   const { container, cr } = setup();
   linkedEmployee(cr);
   linkedClient(cr);
-  const employee = btRecord({ employee_id: "CR1" });
+  const employee = btRecord({ employee_id: "7001" });
   const deal = caseRecord({ client_id_number: "2001" });
   // Another run holds both record leases.
   const held = { type: "lease", ttl: 660, expiresAt: new Date(Date.now() + 600000).toISOString() };
@@ -1548,10 +1548,10 @@ test("[2.10] through the Case queue: a CentralReach 429 with a long Retry-After 
 test("[2.10] the per-field metadata results keep the status and Retry-After, and the retry waits that long", async () => {
   const { cr } = setup();
   linkedEmployee(cr);
-  const record = btRecord({ employee_id: "CR1" });
+  const record = btRecord({ employee_id: "7001" });
   cr.fail(METADATA_PUT, httpError(429, { headers: { "retry-after": "900" } }), { times: 50 });
 
-  const summary = await updateClientMetadata("CR1", { 126214: "x" }, { labelIds: [] });
+  const summary = await updateClientMetadata("7001", { 126214: "x" }, { labelIds: [] });
   assert.deepEqual(summary.failedFields, [
     { fieldId: 126214, operation: "error", status: 429, retryAfterSeconds: 900 }
   ]);
