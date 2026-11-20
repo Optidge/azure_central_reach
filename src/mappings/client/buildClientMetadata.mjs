@@ -36,6 +36,7 @@ function toMetadataDate(value) {
 }
 
 // The carrier, or the "Other" summary when the carrier is Other (C29 primary, C30 secondary).
+// A blank carrier sends a blank field, even when the "Other" summary is filled.
 function insuranceCarrier(carrierValue, otherSummaryValue) {
   const carrier = toTrimmedOrNull(carrierValue);
   const otherSummary = toTrimmedOrNull(otherSummaryValue);
@@ -44,7 +45,7 @@ function insuranceCarrier(carrierValue, otherSummaryValue) {
     return otherSummary || "Other";
   }
 
-  return carrier || otherSummary || null;
+  return carrier || null;
 }
 
 // C31, row 4.23 (decision 32). The six stored values of n1_what_type_of_insurance, read from the

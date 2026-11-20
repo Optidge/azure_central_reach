@@ -246,6 +246,10 @@ test("[C30][4.10] Secondary Insurance uses insurance_2__other__summary when insu
   );
 });
 
+test("[C30][4.10] secondary insurance blank with an Other summary filled sends a blank Secondary Insurance (144600)", () => {
+  assert.equal(meta({ insurance_2: "", insurance_2__other__summary: "Regional Plan" })[144600], null);
+});
+
 test("[C30][4.10] n2_what_type_of_insurance is never the secondary carrier", () => {
   const values = meta({ n2_what_type_of_insurance: "Commercial Enrolled" });
   assert.equal(values[144600], null);
@@ -520,6 +524,10 @@ test("[C29][4.10] primary insurance and its ID are unchanged by the secondary ma
   });
   assert.equal(values[126210], "Regional Plan");
   assert.equal(values[131316], "ABC-123");
+});
+
+test("[C29][4.10] primary insurance blank with an Other summary filled sends a blank Current Insurance (126210)", () => {
+  assert.equal(meta({ insurance_primary: "", insurance_1__other__summary: "Regional Plan" })[126210], null);
 });
 
 // --- Review fix C-R1: rule 5.7 on the five Case metadata dates ---
