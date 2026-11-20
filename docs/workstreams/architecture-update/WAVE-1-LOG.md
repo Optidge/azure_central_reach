@@ -176,6 +176,7 @@ Plan wording to fix in the same docs update: rule 5.5 and BR22 (External System 
 6. The model split relayed by the planning chat on 2026-11-20 (cheaper models for lanes C and D, Fable for the final review): replaced by Zeke's word of 2026-11-20. Every review stays on Opus 5.5 high, the lane reviews and the final whole-diff review from `8fe5c54`; wave 2 builders are lane D Sonnet 5.5 high and lane E Opus 5.5 high (BUILD-PLAN section 17).
 7. Held on Zeke's word (relayed by the planning chat 2026-11-20): the "Order after the build" text for section 13 and the "Azure runs for all of Stage 8" wording. Apply after the build is finished and committed and Zeke has reviewed the plan. Applied to BUILD-PLAN on 2026-11-20 on Zeke's word.
 8. Assumption A-22 (BUILD-PLAN section 16): confirm the BR11 reading used by the proof tests.
+   Confirmed by Zeke on 2026-11-20 (decision 38); the BT-to-BCBA case stays open for United Care.
 
 ## 10. Scripts the orchestrator wrote (session scratchpad; they can be cleared by a reboot)
 
