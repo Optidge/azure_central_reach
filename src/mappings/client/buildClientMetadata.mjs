@@ -148,12 +148,24 @@ function staffNamesInRole(staffInRole) {
   );
 }
 
-const STAFF_ROLE_FIELDS = {
+// The CentralReach field of each staff role. The worker reads the field IDs to name the fields
+// whose input was not read (contract P.5 (c)).
+export const STAFF_ROLE_FIELDS = {
   initialAssessmentBcba: CENTRAL_REACH_CLIENT_METADATA_FIELDS.INITIAL_ASSESSMENT_BCBA,
   reEvaluationBcba: CENTRAL_REACH_CLIENT_METADATA_FIELDS.REASSESSMENT_BCBA,
   primaryBt1: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_1_NAME,
   primaryBt2: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_2_NAME
 };
+
+// The roles that hold a staff record with no readable name. The mapper leaves those roles' fields
+// out and warns; the worker names the same fields in its omit list (row 3.18), so their saved
+// hashes are kept.
+export function staffRolesWithoutName(staffNames) {
+  return Object.keys(STAFF_ROLE_FIELDS).filter(
+    (role) =>
+      Array.isArray(staffNames?.[role]) && staffNamesInRole(staffNames[role]).some((name) => !name)
+  );
+}
 
 // The four staff name fields: the names of a role joined by ", " (assumed format, O-28), and a
 // blank field for an empty list. Rule 5.8: a role whose list was not passed was not read, and a

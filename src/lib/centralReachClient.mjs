@@ -1,5 +1,6 @@
 import axios from "axios";
 import { retryAfterSeconds, withRetry } from "./retry.mjs";
+import { CR_CALL_KINDS } from "./syncRunSummary.mjs";
 import { unreadableAnswerError } from "./unreadableAnswer.mjs";
 import {
   CENTRAL_REACH_METADATA_FIELD_TYPES,
@@ -169,7 +170,7 @@ function lookupAnsweredNotFound(error) {
   }
 }
 
-async function findByExternalSystemId(kind, id) {
+async function findByExternalSystemId(kind, id, options = {}) {
   const normalized = String(id ?? "").trim();
   if (!normalized) {
     const missing = new Error(`CentralReach ${kind} lookup needs an External System ID`);
@@ -180,7 +181,7 @@ async function findByExternalSystemId(kind, id) {
   try {
     response = await crSend(
       `/contacts/${kind}/byExternalSystemId?ExternalSystemId=${encodeURIComponent(normalized)}`,
-      { method: "GET" }
+      { method: "GET", kind: "lookup", onCall: options?.onCall }
     );
   } catch (error) {
     if (lookupAnsweredNotFound(error)) {
@@ -211,12 +212,12 @@ export function lookupWithoutContactId(kind, response) {
   });
 }
 
-export function findEmployeeByExternalSystemId(id) {
-  return findByExternalSystemId("employee", id);
+export function findEmployeeByExternalSystemId(id, options) {
+  return findByExternalSystemId("employee", id, options);
 }
 
-export function findClientByExternalSystemId(id) {
-  return findByExternalSystemId("client", id);
+export function findClientByExternalSystemId(id, options) {
+  return findByExternalSystemId("client", id, options);
 }
 
 function readCrExternalSystemId(data) {
@@ -264,14 +265,50 @@ async function crRequest(path, options) {
   return response?.data || null;
 }
 
+// Call observer (row 3.20). Every exported function that sends requests takes an optional
+// `onCall` in its options: a function called as onCall({ kind, status }) once per HTTP request
+// actually sent, in the order sent, including the in-process retries of withRetry. `status` is the
+// HTTP status of the answer, success or failure, and null when there was no answer (a timeout, the
+// network). It gets no URL, body or header. `kind` is one of CR_CALL_KINDS (src/lib/syncRunSummary.mjs):
+//   lookup     GET by External System ID (client or employee), and GET employee by contact ID
+//   create     POST /contacts/client and POST /contacts/employee
+//   update     PUT /contacts/client/{id} and PUT /contacts/employee/{id}
+//   metadata   PUT and DELETE of a metadata field, including the second route after a 404
+//   labelRead  GET /contacts/{id}/labels (the read, the read-backs) and GET /contacts/labels
+//   labelPost  POST /contacts/{id}/labels
+// The token request is not listed. With no `onCall` nothing changes. An observer that throws is
+// ignored: a log aid must not change what the run does.
+function observedRequest(send, kind, onCall) {
+  if (!CR_CALL_KINDS.includes(kind)) {
+    throw new Error("CentralReach call observer: the call has no kind");
+  }
+  const report = (status) => {
+    try {
+      onCall({ kind, status: Number.isInteger(status) ? status : null });
+    } catch {
+      // See above.
+    }
+  };
+  return async () => {
+    try {
+      const response = await send();
+      report(response?.status);
+      return response;
+    } catch (error) {
+      report(error?.response?.status);
+      throw error;
+    }
+  };
+}
+
 // The full response, for readers that need the HTTP status as well as the body.
-async function crSend(path, { method = "GET", body, suppressRetry = false } = {}) {
+async function crSend(path, { method = "GET", body, suppressRetry = false, kind, onCall } = {}) {
   if (!centralReachHttpClient || !centralReachConfig) {
     throw new Error("CentralReach client is not initialized");
   }
 
   const token = await getCentralReachAccessToken();
-  const request = () =>
+  const send = () =>
     centralReachHttpClient.request({
       url: path,
       method,
@@ -281,6 +318,7 @@ async function crSend(path, { method = "GET", body, suppressRetry = false } = {}
         "x-api-key": centralReachConfig.centralReach.apiKey
       }
     });
+  const request = typeof onCall === "function" ? observedRequest(send, kind, onCall) : send;
 
   return suppressRetry ? request() : withRetry(request, {
     maxAttempts: 3,
@@ -325,6 +363,7 @@ export async function createOrUpdateClient(payloadOrOptions) {
     Object.prototype.hasOwnProperty.call(payloadOrOptions, "payload");
 
   const payload = isOptionsObject ? payloadOrOptions.payload : payloadOrOptions;
+  const onCall = isOptionsObject ? payloadOrOptions.onCall : undefined;
   // Trimmed once, and this one value decides both the lookup and the write plan.
   const existingContactId = isOptionsObject
     ? String(payloadOrOptions.existingContactId ?? "").trim() || null
@@ -336,7 +375,7 @@ export async function createOrUpdateClient(payloadOrOptions) {
 
   let lookedUpContactId = null;
   if (!existingContactId) {
-    const lookedUp = await findClientByExternalSystemId(payload.ExternalSystemId);
+    const lookedUp = await findClientByExternalSystemId(payload.ExternalSystemId, { onCall });
     if (lookedUp.found) {
       lookedUpContactId = lookedUp.crContactId;
     }
@@ -354,7 +393,9 @@ export async function createOrUpdateClient(payloadOrOptions) {
     }
     await crRequest(`/contacts/client/${plan.crContactId}`, {
       method: "PUT",
-      body: updatePayload
+      body: updatePayload,
+      kind: "update",
+      onCall
     });
     return {
       operation: "update",
@@ -367,7 +408,9 @@ export async function createOrUpdateClient(payloadOrOptions) {
     created = await crRequest("/contacts/client", {
       method: "POST",
       body: payload,
-      suppressRetry: true
+      suppressRetry: true,
+      kind: "create",
+      onCall
     });
   } catch (error) {
     throw markCreateOutcome(error);
@@ -399,13 +442,17 @@ function readEmployeeContactId(data) {
   return null;
 }
 
-export async function getEmployeeByContactId(contactId) {
+export async function getEmployeeByContactId(contactId, options = {}) {
   const normalizedId = String(contactId || "").trim();
   if (!normalizedId) {
     throw new Error("CentralReach employee contactId is required");
   }
 
-  const response = await crSend(`/contacts/employee/${normalizedId}`, { method: "GET" });
+  const response = await crSend(`/contacts/employee/${normalizedId}`, {
+    method: "GET",
+    kind: "lookup",
+    onCall: options?.onCall
+  });
   const employee = response?.data || null;
   // Rule 5.8: an answer that does not show this employee is a failed read. It is never read as
   // "CentralReach holds no External System ID and no email".
@@ -474,7 +521,7 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
   };
 }
 
-async function updateEmployeeByContactId(contactId, payload) {
+async function updateEmployeeByContactId(contactId, payload, onCall) {
   const normalizedId = String(contactId || "").trim();
   if (!normalizedId) {
     throw new Error("CentralReach employee contactId is required");
@@ -482,7 +529,9 @@ async function updateEmployeeByContactId(contactId, payload) {
 
   await crRequest(`/contacts/employee/${normalizedId}`, {
     method: "PUT",
-    body: payload
+    body: payload,
+    kind: "update",
+    onCall
   });
 
   return {
@@ -491,7 +540,7 @@ async function updateEmployeeByContactId(contactId, payload) {
   };
 }
 
-async function createEmployee(payload, workStates) {
+async function createEmployee(payload, workStates, onCall) {
   const createPayload = { ...payload };
   const contactForm = getEmployeeContactForm(payload?.employeeType, workStates);
   delete createPayload.employeeId;
@@ -511,7 +560,9 @@ async function createEmployee(payload, workStates) {
     response = await crRequest("/contacts/employee", {
       method: "POST",
       body: createPayload,
-      suppressRetry: true
+      suppressRetry: true,
+      kind: "create",
+      onCall
     });
   } catch (error) {
     throw markCreateOutcome(error);
@@ -660,8 +711,12 @@ function readMapperLabelIds(list, listName) {
   return Array.from(new Set(ids));
 }
 
-async function readContactLabelIds(contactId) {
-  const response = await crSend(`/contacts/${contactId}/labels`, { method: "GET" });
+async function readContactLabelIds(contactId, onCall) {
+  const response = await crSend(`/contacts/${contactId}/labels`, {
+    method: "GET",
+    kind: "labelRead",
+    onCall
+  });
   const labelIds = readLabelIds(response?.data);
   if (!labelIds) {
     throw unreadableAnswerError({
@@ -678,8 +733,8 @@ async function readContactLabelIds(contactId) {
 }
 
 // CentralReach's live label catalog. Read once, by a run that is about to post (row L.1).
-async function readLabelCatalogIds() {
-  const response = await crSend("/contacts/labels", { method: "GET" });
+async function readLabelCatalogIds(onCall) {
+  const response = await crSend("/contacts/labels", { method: "GET", kind: "labelRead", onCall });
   const labelIds = readLabelIds(response?.data);
   if (!labelIds) {
     throw unreadableAnswerError({
@@ -702,7 +757,7 @@ async function readLabelCatalogIds() {
 // timeout, the network) or with a 5xx, CentralReach may have applied it: the error then carries
 // labelPost, the set and the time, so the worker can save it and the 150-second window holds on
 // the retry. A 4xx was refused, so it carries nothing. Returns the time of the POST.
-async function postContactLabels(contactId, labelIds) {
+async function postContactLabels(contactId, labelIds, onCall) {
   if (!labelIds.length) {
     throw new Error("CentralReach label POST refused: the label set is empty");
   }
@@ -710,7 +765,9 @@ async function postContactLabels(contactId, labelIds) {
     await crRequest(`/contacts/${contactId}/labels`, {
       method: "POST",
       body: { labels: labelIds.map((labelId) => ({ labelId })) },
-      suppressRetry: true
+      suppressRetry: true,
+      kind: "labelPost",
+      onCall
     });
   } catch (error) {
     const status = error?.response?.status;
@@ -724,13 +781,13 @@ async function postContactLabels(contactId, labelIds) {
 
 // True when one of the read-backs shows the posted set. A read-back that fails counts as "not
 // shown": the POST was sent, so the caller must still get the posted set and its time.
-async function readBackShowsLabels(contactId, postedLabelIds, delayMs) {
+async function readBackShowsLabels(contactId, postedLabelIds, delayMs, onCall) {
   for (let attempt = 1; attempt <= LABEL_READ_BACK_TRIES; attempt += 1) {
     if (attempt > 1) {
       await sleep(delayMs);
     }
     try {
-      if (sameLabelSet(await readContactLabelIds(contactId), postedLabelIds)) {
+      if (sameLabelSet(await readContactLabelIds(contactId, onCall), postedLabelIds)) {
         return true;
       }
     } catch {
@@ -764,7 +821,7 @@ function buildLabelResult(operation, { postedLabelIds = null, postedAt = null, c
 // Contract P.5 (e), written out above updateClientMetadata.
 async function updateContactLabels(
   contactId,
-  { requiredLabelIds, managedLabelIds, lastLabelPost, contactCreatedThisRun, readBackDelayMs }
+  { requiredLabelIds, managedLabelIds, lastLabelPost, contactCreatedThisRun, readBackDelayMs, onCall }
 ) {
   const required = readMapperLabelIds(requiredLabelIds, "requiredLabelIds");
   const managed = readMapperLabelIds(managedLabelIds, "managedLabelIds");
@@ -790,11 +847,11 @@ async function updateContactLabels(
       // The labels changed after the saved POST. The run is retried and posts after the window.
       return buildLabelResult("skip_window", { confirmed: false });
     }
-    const shown = await readContactLabelIds(contactId);
+    const shown = await readContactLabelIds(contactId, onCall);
     return buildLabelResult("skip_window", { confirmed: sameLabelSet(shown, savedLabelIds) });
   }
 
-  const current = await readContactLabelIds(contactId);
+  const current = await readContactLabelIds(contactId, onCall);
   if (!current.length && !contactCreatedThisRun) {
     throw labelError(
       "CR_LABEL_READ_EMPTY",
@@ -810,7 +867,7 @@ async function updateContactLabels(
 
   // Row L.1: every ID in the set to post, the integration's and CentralReach's own, must be in
   // the live catalog. The managed labels are already out, so a remove-only ID never blocks.
-  const catalog = new Set(await readLabelCatalogIds());
+  const catalog = new Set(await readLabelCatalogIds(onCall));
   const notInCatalog = toPost.filter((id) => !catalog.has(id));
   if (notInCatalog.length) {
     throw labelError(
@@ -820,16 +877,18 @@ async function updateContactLabels(
     );
   }
 
-  const postedAt = await postContactLabels(contactId, toPost);
-  const confirmed = await readBackShowsLabels(contactId, toPost, readBackDelayMs);
+  const postedAt = await postContactLabels(contactId, toPost, onCall);
+  const confirmed = await readBackShowsLabels(contactId, toPost, readBackDelayMs, onCall);
   return buildLabelResult("updated", { postedLabelIds: toPost, postedAt, confirmed });
 }
 
-async function clearMetadataField(contactId, fieldId) {
+async function clearMetadataField(contactId, fieldId, onCall) {
   const normalizedFieldId = Number(fieldId);
   try {
     await crRequest(`/contacts/${contactId}/metadata/${normalizedFieldId}`, {
-      method: "DELETE"
+      method: "DELETE",
+      kind: "metadata",
+      onCall
     });
     return { fieldId: normalizedFieldId, operation: "cleared" };
   } catch (error) {
@@ -856,7 +915,7 @@ function failedMetadataField(fieldId, error, fallbackMessage) {
   };
 }
 
-async function updateMetadataField(contactId, fieldId, value) {
+async function updateMetadataField(contactId, fieldId, value, onCall) {
   if (value === undefined || value === null || String(value).trim() === "") {
     return { fieldId: Number(fieldId), operation: "skip_empty" };
   }
@@ -867,7 +926,9 @@ async function updateMetadataField(contactId, fieldId, value) {
   try {
     await crRequest(`/contacts/${contactId}/metadata/${normalizedFieldId}`, {
       method: "PUT",
-      body
+      body,
+      kind: "metadata",
+      onCall
     });
 
     return {
@@ -882,7 +943,9 @@ async function updateMetadataField(contactId, fieldId, value) {
 
     await crRequest(`/contacts/client/${contactId}/metadata/${normalizedFieldId}`, {
       method: "PUT",
-      body
+      body,
+      kind: "metadata",
+      onCall
     });
 
     return {
@@ -979,7 +1042,8 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
     managedLabelIds: options.managedLabelIds ?? [],
     lastLabelPost: options.lastLabelPost || null,
     contactCreatedThisRun: Boolean(options.contactCreatedThisRun),
-    readBackDelayMs: options.labelReadBackDelayMs ?? LABEL_READ_BACK_DELAY_MS
+    readBackDelayMs: options.labelReadBackDelayMs ?? LABEL_READ_BACK_DELAY_MS,
+    onCall: options.onCall
   });
   const clearFieldIds = new Set((options.clearFieldIds || []).map((value) => Number(value)));
   const results = [];
@@ -989,8 +1053,8 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
       const blank = value === undefined || value === null || String(value).trim() === "";
       const result =
         blank && clearFieldIds.has(Number(fieldId))
-          ? await clearMetadataField(normalizedContactId, fieldId)
-          : await updateMetadataField(normalizedContactId, fieldId, value);
+          ? await clearMetadataField(normalizedContactId, fieldId, options.onCall)
+          : await updateMetadataField(normalizedContactId, fieldId, value, options.onCall);
       results.push(result);
     } catch (error) {
       results.push(failedMetadataField(fieldId, error, "Metadata update failed"));
@@ -1044,7 +1108,7 @@ export async function createOrUpdateEmployee(payload) {
   }
 
   if (existingContactId) {
-    return updateEmployeeByContactId(existingContactId, employeePayload);
+    return updateEmployeeByContactId(existingContactId, employeePayload, options.onCall);
   }
 
   // A lookup or create with no External System ID could match or duplicate the wrong employee.
@@ -1068,7 +1132,8 @@ export async function createOrUpdateEmployee(payload) {
         ...employeePayload,
         ...(employeeType ? { employeeType } : {})
       },
-      workStates
+      workStates,
+      options.onCall
     );
   } catch (error) {
     const status = error?.response?.status;

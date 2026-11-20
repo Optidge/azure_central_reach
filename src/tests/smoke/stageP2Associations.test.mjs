@@ -38,8 +38,9 @@ function fakeHubSpotAssociations(answer) {
   client.defaults.adapter = async (requestConfig) => {
     const url = String(requestConfig.url || "");
     const after = requestConfig.params?.after ?? null;
+    const body = typeof requestConfig.data === "string" ? JSON.parse(requestConfig.data) : null;
     calls.push({ url, after });
-    return { data: answer({ url, after }), status: 200, headers: {}, config: requestConfig };
+    return { data: answer({ url, after, body }), status: 200, headers: {}, config: requestConfig };
   };
   return calls;
 }
@@ -204,9 +205,17 @@ test("[P.2][BR17] the Case worker compares staffing by record ID and role from t
     cr.clients.set("2001", { contactId: "2001", externalSystemId: "deal-1", primaryEmail: null });
     cr.labels.set("2001", [1052619]);
     const record = caseRecord({ client_id_number: "2001" });
-    fakeHubSpotAssociations(({ url }) => ({
-      results: url.endsWith(`/associations/${BT_RBT_TYPE}`) ? btRows : []
-    }));
+    // Row 4.14: the worker also reads the names of the staff it finds, in one batch call.
+    fakeHubSpotAssociations(({ url, body }) =>
+      url.endsWith("/batch/read")
+        ? {
+            results: body.inputs.map(({ id }) => ({
+              id,
+              properties: { first_name: "Sam", last_name: "Staff" }
+            }))
+          }
+        : { results: url.endsWith(`/associations/${BT_RBT_TYPE}`) ? btRows : [] }
+    );
     const result = await runCaseWithRealAssociations(record);
     assert.equal(result.status, "success");
     return container.get(CLIENT_LINK_PK, `${SANDBOX_PORTAL}:deal-1`).data.fieldHashes.relationships;

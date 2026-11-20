@@ -29,6 +29,7 @@ import {
   fakeCentralReach,
   hubspotRecord,
   memoryContainer,
+  withBlankKeys,
   workflowConfig
 } from "./stage2Fakes.mjs";
 
@@ -163,7 +164,7 @@ test("[BR5][P.1] the Case worker asks HubSpot for the listed properties plus the
       }),
       getDealById: async (dealId, properties) => {
         requested.push(properties);
-        return record.read();
+        return withBlankKeys(record.read(), properties);
       }
     }
   );

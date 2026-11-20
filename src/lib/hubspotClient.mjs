@@ -383,6 +383,80 @@ export async function listAssociations({ fromObjectType, fromId, toObjectType, m
   return collected;
 }
 
+// Row 4.14: the property values of several records of one object type, in one POST
+// /crm/v3/objects/{type}/batch/read per 100 IDs (HubSpot's limit). A read call, not a write.
+// Returns one { id, properties } per record HubSpot answered. It never fills in a record HubSpot
+// did not answer: the caller checks that every ID it asked for is there (rule 5.8). A 401 or 403,
+// or an answer with no results list, is a failed read.
+const BATCH_READ_LIMIT = 100;
+
+export async function readObjectsBatch({ objectTypeId, ids, properties }) {
+  assertHubSpotReady();
+  const typeId = String(objectTypeId || "").trim();
+  if (!typeId) {
+    throw new Error("HubSpot objectTypeId is required for a batch read");
+  }
+  const wanted = [...new Set((ids || []).map((id) => String(id ?? "").trim()).filter(Boolean))];
+  const found = [];
+  for (let start = 0; start < wanted.length; start += BATCH_READ_LIMIT) {
+    let response;
+    try {
+      response = await withRetry(
+        () =>
+          hubSpotHttpClient.post(`/crm/v3/objects/${typeId}/batch/read`, {
+            properties,
+            inputs: wanted.slice(start, start + BATCH_READ_LIMIT).map((id) => ({ id }))
+          }),
+        { maxAttempts: 3, baseDelayMs: 400, maxDelayMs: 5000 }
+      );
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 403 || status === 401) {
+        throw new HubSpotReadError(`batch:${typeId}`, status);
+      }
+      throw error;
+    }
+    if (!Array.isArray(response?.data?.results)) {
+      throw new HubSpotReadError(`batch:${typeId}`, response?.status);
+    }
+    for (const row of response.data.results) {
+      found.push({ id: String(row?.id ?? ""), properties: row?.properties || {} });
+    }
+  }
+  return found;
+}
+
+// Row 4.16: one owner, from GET /crm/v3/owners/{id}. The answer is kept in memory for 5 minutes,
+// per owner ID, so a busy queue does not ask again for every Case. Only an answer is kept, never
+// a failure. A 401, 403 or 404 is thrown as it is: the caller decides what a refused read means.
+const OWNER_CACHE_MS = 5 * 60 * 1000;
+const ownerCache = new Map();
+
+export function clearOwnerCache() {
+  ownerCache.clear();
+}
+
+export async function getOwnerById(ownerId) {
+  assertHubSpotReady();
+  const id = String(ownerId ?? "").trim();
+  if (!id) {
+    throw new Error("HubSpot ownerId is required");
+  }
+  const cached = ownerCache.get(id);
+  if (cached && Date.now() - cached.at < OWNER_CACHE_MS) {
+    return cached.owner;
+  }
+  const response = await withRetry(
+    () => hubSpotHttpClient.get(`/crm/v3/owners/${encodeURIComponent(id)}`),
+    { maxAttempts: 3, baseDelayMs: 400, maxDelayMs: 5000 }
+  );
+  const owner = response?.data || null;
+  if (owner) {
+    ownerCache.set(id, { owner, at: Date.now() });
+  }
+  return owner;
+}
+
 export async function writeEmployeeIdToObject({
   objectTypeId,
   recordId,

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
+import { withBlankKeys } from "./stage2Fakes.mjs";
 
 function buildDeps(overrides = {}) {
   const calls = {
@@ -17,14 +18,18 @@ function buildDeps(overrides = {}) {
     createHubSpotClient: () => {},
     createCentralReachClient: () => {},
     createStateClient: () => {},
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: {
-        hs_object_id: "deal-1",
-        last_sync_hash: "old-hash",
-        client_id_number: "2001"
-      }
-    }),
+    getDealById: async (_id, requested) =>
+      withBlankKeys(
+        {
+          id: "deal-1",
+          properties: {
+            hs_object_id: "deal-1",
+            last_sync_hash: "old-hash",
+            client_id_number: "2001"
+          }
+        },
+        requested
+      ),
     buildClientPayload: () => ({ FirstName: "Alex", LastName: "Rivera" }),
     validateClientPayload: () => ({ isValid: true, errors: [] }),
     hashPayload: () => "new-hash",
@@ -78,10 +83,14 @@ test("runClientSyncWorkflow performs noop when hash unchanged, and writes nothin
   };
   const first = buildDeps({
     ...stateful,
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", client_id_number: "333" }
-    }),
+    getDealById: async (_id, requested) =>
+      withBlankKeys(
+        {
+          id: "deal-1",
+          properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", client_id_number: "333" }
+        },
+        requested
+      ),
     createOrUpdateClient: async () => ({ operation: "update", crContactId: "333" }),
     putState: async (input) => {
       store.set(`${input.pk}|${input.id}`, { data: input.data });
@@ -91,15 +100,19 @@ test("runClientSyncWorkflow performs noop when hash unchanged, and writes nothin
 
   const { deps, calls } = buildDeps({
     ...stateful,
-    getDealById: async () => ({
-      id: "deal-1",
-      properties: {
-        hs_object_id: "deal-1",
-        last_sync_hash: "same-hash",
-        last_sync_status: "success",
-        client_id_number: "333"
-      }
-    }),
+    getDealById: async (_id, requested) =>
+      withBlankKeys(
+        {
+          id: "deal-1",
+          properties: {
+            hs_object_id: "deal-1",
+            last_sync_hash: "same-hash",
+            last_sync_status: "success",
+            client_id_number: "333"
+          }
+        },
+        requested
+      ),
     createOrUpdateClient: async () => {
       throw new Error("should not be called");
     }
@@ -126,10 +139,14 @@ test("runClientSyncWorkflow writes fail state when validation decides an error",
 });
 
 function dealWith(properties) {
-  return async () => ({
-    id: "deal-1",
-    properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", ...properties }
-  });
+  return async (_id, requested) =>
+    withBlankKeys(
+      {
+        id: "deal-1",
+        properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", ...properties }
+      },
+      requested
+    );
 }
 
 for (const stageId of ["1383894301", "1383894303", "1383894302", "1332962645"]) {

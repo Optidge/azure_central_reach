@@ -107,6 +107,23 @@ export function hubspotRecord(properties) {
   };
 }
 
+// What HubSpot answers for a record read that asks for `requested` properties: a property that is
+// blank comes back as a key with a null value (checked on 2026-11-20, P.7 (b)). Row 4.18 treats a
+// requested key that is not in the answer as a failed read, so a fake that stands for HubSpot
+// fills the blanks in this way. `deal` is { id, properties }. Added for lane D.
+export function withBlankKeys(deal, requested = []) {
+  if (!deal || typeof deal !== "object") {
+    return deal;
+  }
+  const properties = { ...(deal.properties || {}) };
+  for (const name of requested || []) {
+    if (!Object.hasOwn(properties, name)) {
+      properties[name] = null;
+    }
+  }
+  return { ...deal, properties };
+}
+
 const CR_ROUTES = [
   {
     method: "GET",
@@ -370,7 +387,7 @@ export function clientWorkflowDeps({
     createHubSpotClient: () => {},
     createCentralReachClient: () => {},
     createStateClient: () => {},
-    getDealById: async () => record.read(),
+    getDealById: async (dealId, requested) => withBlankKeys(record.read(), requested),
     listAssociations: associations,
     updateDealProperties: async (dealId, properties) => {
       record.write(properties);
