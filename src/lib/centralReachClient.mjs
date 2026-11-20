@@ -3,6 +3,7 @@ import { retryAfterSeconds, withRetry } from "./retry.mjs";
 import { unreadableAnswerError } from "./unreadableAnswer.mjs";
 import {
   CENTRAL_REACH_METADATA_FIELD_TYPES,
+  CENTRAL_REACH_SENDABLE_LABEL_IDS,
   EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH
 } from "../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
@@ -19,6 +20,8 @@ const EMPLOYEE_CONTACT_FORMS = {
   [HUBSPOT_EMPLOYEE_TYPES.BT_RBT]: "Behavior Technician NY",
   [HUBSPOT_EMPLOYEE_TYPES.BCBA]: "Admin"
 };
+// Rule 5.9: a BT/RBT whose work states hold Colorado and not New York. New Jersey has no form.
+const BT_RBT_COLORADO_CONTACT_FORM = "RBT CO";
 
 // CONTRACT P.5 (d): the contact form of an employee create (rule 5.9, row 5.13).
 //   getEmployeeContactForm(employeeType, workStates)
@@ -28,11 +31,19 @@ const EMPLOYEE_CONTACT_FORMS = {
 //                 HubSpot `location` is blank
 // Returns the ContactForm name, or null for an unknown employee type.
 // The worker passes workStates to createOrUpdateEmployee, which passes it here on a create. It is
-// never part of the request body. Until row 5.13 is built workStates is not read: a BT/RBT gets
-// "Behavior Technician NY" and a BCBA gets "Admin".
+// never part of the request body. Row 5.13: a BCBA gets "Admin" for every state. A BT/RBT gets
+// "RBT CO" when workStates holds CO and not NY, and "Behavior Technician NY" otherwise (New York,
+// New Jersey, several states with New York, or no work state).
 export function getEmployeeContactForm(employeeType, workStates = []) {
-  void workStates;
   const normalizedType = String(employeeType || "").trim();
+  if (normalizedType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
+    const states = new Set(
+      (Array.isArray(workStates) ? workStates : []).map((state) => String(state).trim().toUpperCase())
+    );
+    if (states.has("CO") && !states.has("NY")) {
+      return BT_RBT_COLORADO_CONTACT_FORM;
+    }
+  }
   return EMPLOYEE_CONTACT_FORMS[normalizedType] || null;
 }
 
@@ -112,31 +123,50 @@ export async function getCentralReachAccessToken() {
   return accessToken;
 }
 
-function extractCrContactId(data) {
-  const candidates = [
-    data?.contactId,
-    data?.id,
-    data?.contact?.contactId,
-    data?.contact?.id,
-    data?.result?.contactId,
-    data?.result?.id
-  ];
+// A CentralReach contact ID is digits only and greater than 0. Anything else is not read as an
+// ID: it would end up in a request path or in HubSpot.
+function readContactIdValue(value) {
+  const text = typeof value === "number" || typeof value === "string" ? String(value) : "";
+  return /^\d+$/.test(text) && Number(text) > 0 ? text : null;
+}
 
-  for (const candidate of candidates) {
-    if (candidate !== null && candidate !== undefined && String(candidate).trim() !== "") {
-      return String(candidate);
-    }
+// A create answers { contact: { contactId }, result, failed }. Only contact.contactId, then a
+// top-level contactId, is read as the new CR ID. An answer that says failed, or names no readable
+// ID, gives null: the caller treats the create as an unknown outcome.
+function readCreatedContactId(data) {
+  if (data?.failed === true) {
+    return null;
   }
-
-  return null;
+  return readContactIdValue(data?.contact?.contactId) ?? readContactIdValue(data?.contactId);
 }
 
 function readLookupContactId(data) {
-  const id = data?.contact?.contactId;
-  if (id === null || id === undefined || String(id).trim() === "") {
-    return null;
+  return readContactIdValue(data?.contact?.contactId);
+}
+
+// A 404 means "nobody holds this External System ID" only when CentralReach itself answered:
+// a JSON body or no body. A 404 with an HTML or plain-text body comes from something in between
+// (a gateway, a wrong path) and is not proof that the record is absent.
+function lookupAnsweredNotFound(error) {
+  if (error?.response?.status !== 404) {
+    return false;
   }
-  return String(id);
+  const body = error.response.data;
+  if (body === null || body === undefined || typeof body === "object") {
+    return true;
+  }
+  if (typeof body !== "string") {
+    return false;
+  }
+  if (body.trim() === "") {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(body);
+    return parsed !== null && typeof parsed === "object";
+  } catch {
+    return false;
+  }
 }
 
 async function findByExternalSystemId(kind, id) {
@@ -153,10 +183,10 @@ async function findByExternalSystemId(kind, id) {
       { method: "GET" }
     );
   } catch (error) {
-    if (error?.response?.status === 404) {
+    if (lookupAnsweredNotFound(error)) {
       return { found: false, crContactId: null };
     }
-    // Not 200 and not 404: the answer is unclear. Retry later, whatever the status was.
+    // Not 200 and not a clear 404: the answer is unclear. Retry later, whatever the status was.
     error.code = "CR_LOOKUP_UNKNOWN";
     throw error;
   }
@@ -167,14 +197,14 @@ async function findByExternalSystemId(kind, id) {
   return { found: true, crContactId };
 }
 
-// A 200 with no contact ID cannot be read as found or as not found. It is a permanent error,
-// never a create (BUILD-PLAN Stage 2, decision 4).
+// A 200 with no contact ID, or with one that is not digits greater than 0, cannot be read as
+// found or as not found. It is a permanent error, never a create (BUILD-PLAN Stage 2, decision 4).
 export function lookupWithoutContactId(kind, response) {
   return unreadableAnswerError({
     code: "CR_LOOKUP_UNREADABLE",
     call: `GET /contacts/${kind}/byExternalSystemId`,
     status: response?.status,
-    expected: `the ${kind} under contact, with contactId`,
+    expected: `the ${kind} under contact, with a contactId of digits greater than 0`,
     expectedFields: ["contact", "contact.contactId"],
     reasonField: "contact.contactId",
     answer: response?.data
@@ -210,48 +240,6 @@ function readCrExternalSystemId(data) {
   return null;
 }
 
-function responseLooksNotFound(data) {
-  const text = [
-    data?.message,
-    data?.responseStatus?.message,
-    ...(Array.isArray(data?.responseStatus?.errors)
-      ? data.responseStatus.errors.map((item) => `${item?.message ?? ""} ${item?.errorCode ?? ""}`)
-      : [])
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return /not\s*found|no\s*match|unable\s*to\s*find/.test(text);
-}
-
-// Requirement 9 (no duplicate creates): a create is allowed only when Central Reach clearly says
-// the external id has no match. Anything else is an unknown outcome and must not lead to a create.
-// - 404, or a 400 whose message says "not found": no match.
-// - Any other error status (429, 5xx, ...) is rethrown, whatever its message says.
-export function externalIdLookupMissed(error) {
-  const status = error?.response?.status;
-  if (status === 404) {
-    return true;
-  }
-  return status === 400 && responseLooksNotFound(error?.response?.data || {});
-}
-
-// A 2xx answer: an id means found, explicit "not found" text means no match, and a body with
-// neither is unknown.
-export function readExternalIdLookup(response, entity) {
-  const crContactId = extractCrContactId(response);
-  if (responseLooksNotFound(response)) {
-    return { found: false, crContactId: null };
-  }
-  if (crContactId) {
-    return { found: true, crContactId, operation: "update" };
-  }
-  const unknown = new Error(`CentralReach ${entity} lookup returned no contactId`);
-  unknown.code = "CR_LOOKUP_UNKNOWN";
-  throw unknown;
-}
-
 // A create is sent once. A timeout or 5xx leaves the outcome unknown: Central Reach may have
 // created the record. The next run finds it through the external-id lookup instead of posting again.
 function markCreateOutcome(error) {
@@ -262,10 +250,11 @@ function markCreateOutcome(error) {
   return error;
 }
 
-// CentralReach accepted the create but the answer names no contact ID. The record may exist, so
-// this is an unknown outcome too, not a plain error.
+// CentralReach answered the create with 200, but the answer says failed or names no readable
+// contact ID. The record may exist, so this is an unknown outcome too, not a plain error and not
+// a success: the next run looks the record up before it creates anything.
 function createWithoutContactId(entity) {
-  const error = new Error(`CentralReach ${entity} create succeeded but returned no contactId`);
+  const error = new Error(`CentralReach ${entity} create returned no readable contactId`);
   error.code = "CR_CREATE_OUTCOME_UNKNOWN";
   return error;
 }
@@ -300,32 +289,35 @@ async function crSend(path, { method = "GET", body, suppressRetry = false } = {}
   });
 }
 
-async function updateClientByExternalSystemId(payload) {
-  let response;
-  try {
-    response = await crRequest("/contacts/client/byExternalSystemId", {
-      method: "PUT",
-      body: payload
-    });
-  } catch (error) {
-    if (externalIdLookupMissed(error)) {
-      return { found: false, crContactId: null };
-    }
-    throw error;
-  }
-
-  return readExternalIdLookup(response, "client");
-}
-
 // CONTRACT P.5 (f): createOrUpdateClient keeps its signature while row 3.14 changes what it does.
-//   createOrUpdateClient({ payload, existingContactId })
-//   payload            the mapped client payload (buildClientPayload.mjs), without the
-//                      dateOfBirthStatus note. It holds ExternalSystemId and ContactForm; from
-//                      row 3.14 this function leaves both out of an update request (BR22).
-//   existingContactId  the CR ID the worker knows, or null / blank when the Case is not linked
+//   createOrUpdateClient({ payload, existingContactId, externalSystemIdHeld })
+//   payload               the mapped client payload (buildClientPayload.mjs), without the
+//                         dateOfBirthStatus note. It holds ExternalSystemId (the Case record ID)
+//                         and ContactForm. The payload passed in is not changed.
+//   existingContactId     the CR ID the worker knows, or null / blank when the Case is not
+//                         linked. It is trimmed once; a value of only spaces is "not linked".
+//   externalSystemIdHeld  optional. Exactly true when the worker's linked-Case lookup found this
+//                         client, by this Case's record ID, under the same CR ID as
+//                         existingContactId: CentralReach is then known to hold
+//                         payload.ExternalSystemId. Anything else counts as not known.
 // Returns { operation: "create" | "update", crContactId }. Throws when the outcome is not clear:
-// CR_CREATE_OUTCOME_UNKNOWN for a create whose answer never arrived, CR_LOOKUP_UNKNOWN or
-// CR_LOOKUP_UNREADABLE for the lookup. It never creates after an unclear lookup.
+// CR_CREATE_OUTCOME_UNKNOWN for a create whose answer never arrived, said failed, or named no
+// readable contact ID; CR_LOOKUP_UNKNOWN or CR_LOOKUP_UNREADABLE for the lookup;
+// CR_EXTERNAL_ID_REQUIRED (permanent) when there is no CR ID and payload.ExternalSystemId is
+// blank, so no lookup and no create can be made. It never creates after an unclear lookup.
+// Row 3.14 (rule 5.5): with no CR ID it looks the client up by payload.ExternalSystemId with the
+// read-only GET. 404: one POST with the whole payload. Found: one PUT by the CR ID found. With a
+// CR ID: one PUT by that ID and no lookup; the worker compares the IDs of a linked Case before it
+// calls. There is no client-create switch (decision 18): the record gate is the only control.
+// What an update PUT carries (BR22, review fix L-R2):
+//   ContactForm       never.
+//   ExternalSystemId  only when CentralReach is known to hold that same value: the lookup inside
+//                     this call found the client (its own earlier create), or
+//                     externalSystemIdHeld is true. Sending back the value CentralReach holds
+//                     changes nothing, and it protects the ID if the client PUT clears a field
+//                     that is left out (not tested, O-35). In every other case it is left out:
+//                     the client read does not show what CentralReach holds, so the update could
+//                     overwrite an ID it cannot see. A blank value is never sent.
 export async function createOrUpdateClient(payloadOrOptions) {
   const isOptionsObject =
     payloadOrOptions &&
@@ -333,15 +325,18 @@ export async function createOrUpdateClient(payloadOrOptions) {
     Object.prototype.hasOwnProperty.call(payloadOrOptions, "payload");
 
   const payload = isOptionsObject ? payloadOrOptions.payload : payloadOrOptions;
-  const existingContactId = isOptionsObject ? payloadOrOptions.existingContactId : null;
+  // Trimmed once, and this one value decides both the lookup and the write plan.
+  const existingContactId = isOptionsObject
+    ? String(payloadOrOptions.existingContactId ?? "").trim() || null
+    : null;
 
   if (!payload || typeof payload !== "object") {
     throw new Error("CentralReach client payload must be an object");
   }
 
   let lookedUpContactId = null;
-  if (!String(existingContactId || "").trim()) {
-    const lookedUp = await updateClientByExternalSystemId(payload);
+  if (!existingContactId) {
+    const lookedUp = await findClientByExternalSystemId(payload.ExternalSystemId);
     if (lookedUp.found) {
       lookedUpContactId = lookedUp.crContactId;
     }
@@ -349,12 +344,18 @@ export async function createOrUpdateClient(payloadOrOptions) {
 
   const plan = clientWritePlan({ existingContactId, lookedUpContactId });
   if (plan.operation === "update") {
-    if (!lookedUpContactId) {
-      await crRequest(`/contacts/client/${plan.crContactId}`, {
-        method: "PUT",
-        body: payload
-      });
+    const externalSystemIdHeld =
+      Boolean(lookedUpContactId) ||
+      (isOptionsObject && payloadOrOptions.externalSystemIdHeld === true);
+    const updatePayload = { ...payload };
+    delete updatePayload.ContactForm;
+    if (!externalSystemIdHeld || String(updatePayload.ExternalSystemId ?? "").trim() === "") {
+      delete updatePayload.ExternalSystemId;
     }
+    await crRequest(`/contacts/client/${plan.crContactId}`, {
+      method: "PUT",
+      body: updatePayload
+    });
     return {
       operation: "update",
       crContactId: plan.crContactId
@@ -372,7 +373,7 @@ export async function createOrUpdateClient(payloadOrOptions) {
     throw markCreateOutcome(error);
   }
 
-  const crContactId = extractCrContactId(created);
+  const crContactId = readCreatedContactId(created);
   if (!crContactId) {
     throw createWithoutContactId("client");
   }
@@ -515,7 +516,7 @@ async function createEmployee(payload, workStates) {
   } catch (error) {
     throw markCreateOutcome(error);
   }
-  const crContactId = extractCrContactId(response);
+  const crContactId = readCreatedContactId(response);
   if (!crContactId) {
     throw createWithoutContactId("employee");
   }
@@ -602,43 +603,67 @@ function readLabelIds(data) {
   return ids;
 }
 
-async function postContactLabels(contactId, labelIds) {
-  try {
-    await crRequest(`/contacts/${contactId}/labels`, {
-      method: "POST",
-      body: { labels: labelIds.map((labelId) => ({ labelId })) }
-    });
-    return { operation: "updated", bodyShape: "labels[]" };
-  } catch (error) {
-    if (error?.response?.status !== 400) {
-      throw error;
-    }
-    await crRequest(`/contacts/${contactId}/labels`, {
-      method: "POST",
-      body: { labelIds }
-    });
-    return { operation: "updated", bodyShape: "labelIds[]" };
-  }
+// Rule 5.6: for this long after a saved label POST no new label POST is made for the contact. A
+// label read can be about two minutes behind a write (label test of 2026-11-20).
+const LABEL_POST_WINDOW_MS = 150 * 1000;
+// After a POST the labels are read back this many times, this far apart (row L.3).
+const LABEL_READ_BACK_TRIES = 3;
+const LABEL_READ_BACK_DELAY_MS = 5000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Contract P.5 (e), written out above updateClientMetadata. managedLabelIds, lastLabelPost and
-// contactCreatedThisRun are passed through and not read until rows L.1 to L.3 are built: with an
-// empty managed list this is the add-only sender.
-async function updateContactLabels(
-  contactId,
-  { requiredLabelIds, managedLabelIds, lastLabelPost, contactCreatedThisRun }
-) {
-  void managedLabelIds;
-  void lastLabelPost;
-  void contactCreatedThisRun;
-  const required = mergeUniqueNumericIds(requiredLabelIds);
-  if (!required.length) {
-    return { operation: "skip_empty" };
-  }
+function sameLabelSet(left, right) {
+  const rightSet = new Set(right);
+  return new Set(left).size === rightSet.size && left.every((id) => rightSet.has(id));
+}
 
+// What the contact must hold: the labels it holds, minus managed, plus required (rule 5.6).
+function labelSetToPost(heldLabelIds, managedLabelIds, requiredLabelIds) {
+  const managed = new Set(managedLabelIds);
+  return mergeUniqueNumericIds([
+    ...heldLabelIds.filter((id) => !managed.has(id)),
+    ...requiredLabelIds
+  ]);
+}
+
+// The error carries label IDs only, never a label name.
+function labelError(code, message, labelIds) {
+  const error = new Error(message);
+  error.code = code;
+  error.labelIds = labelIds;
+  return error;
+}
+
+// The mapper's list as positive whole numbers. An entry that is not one (a text, 1.5, -1, an
+// object) is a code defect and stops the run before any CentralReach call: dropping it silently
+// would take a label off the contact. The error names the list and the positions, never a value.
+function readMapperLabelIds(list, listName) {
+  const entries = Array.isArray(list) ? list : null;
+  const ids = (entries || []).map((entry) => {
+    const text = typeof entry === "number" || typeof entry === "string" ? String(entry).trim() : "";
+    const id = text === "" ? NaN : Number(text);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  });
+  const positions = ids.flatMap((id, position) => (id === null ? [position] : []));
+  if (!entries || positions.length) {
+    const error = labelError(
+      "CR_LABEL_NOT_SENDABLE",
+      `${listName} is not a list of CentralReach label IDs`,
+      []
+    );
+    error.labelList = listName;
+    error.positions = positions;
+    throw error;
+  }
+  return Array.from(new Set(ids));
+}
+
+async function readContactLabelIds(contactId) {
   const response = await crSend(`/contacts/${contactId}/labels`, { method: "GET" });
-  const current = readLabelIds(response?.data);
-  if (!current) {
+  const labelIds = readLabelIds(response?.data);
+  if (!labelIds) {
     throw unreadableAnswerError({
       code: "CR_LABEL_READ_FAILED",
       call: "GET /contacts/{id}/labels",
@@ -649,12 +674,155 @@ async function updateContactLabels(
       answer: response?.data
     });
   }
-  const union = mergeUniqueNumericIds([...current, ...required]);
-  const missing = required.filter((id) => !current.includes(id));
-  if (!missing.length) {
-    return { operation: "skip_present" };
+  return labelIds;
+}
+
+// CentralReach's live label catalog. Read once, by a run that is about to post (row L.1).
+async function readLabelCatalogIds() {
+  const response = await crSend("/contacts/labels", { method: "GET" });
+  const labelIds = readLabelIds(response?.data);
+  if (!labelIds) {
+    throw unreadableAnswerError({
+      code: "CR_LABEL_CATALOG_UNREADABLE",
+      call: "GET /contacts/labels",
+      status: response?.status,
+      expected: "a list of labels, each with a numeric labelId",
+      expectedFields: ["labels", "labelIds", "results"],
+      reasonField: "labels[].labelId",
+      answer: response?.data
+    });
   }
-  return postContactLabels(contactId, union);
+  return labelIds;
+}
+
+// One body shape (row L.4). The POST replaces the contact's whole label set, and an empty list
+// clears every label, so an empty set is refused here whatever the caller worked out. A 400 is
+// thrown as it is: retry.mjs sorts it as permanent, and no second body shape is tried.
+// The POST is sent once per run, with no in-process retry. When it fails with no HTTP status (a
+// timeout, the network) or with a 5xx, CentralReach may have applied it: the error then carries
+// labelPost, the set and the time, so the worker can save it and the 150-second window holds on
+// the retry. A 4xx was refused, so it carries nothing. Returns the time of the POST.
+async function postContactLabels(contactId, labelIds) {
+  if (!labelIds.length) {
+    throw new Error("CentralReach label POST refused: the label set is empty");
+  }
+  try {
+    await crRequest(`/contacts/${contactId}/labels`, {
+      method: "POST",
+      body: { labels: labelIds.map((labelId) => ({ labelId })) },
+      suppressRetry: true
+    });
+  } catch (error) {
+    const status = error?.response?.status;
+    if (!status || status >= 500) {
+      error.labelPost = { contactId, labelIds, postedAt: new Date().toISOString() };
+    }
+    throw error;
+  }
+  return new Date().toISOString();
+}
+
+// True when one of the read-backs shows the posted set. A read-back that fails counts as "not
+// shown": the POST was sent, so the caller must still get the posted set and its time.
+async function readBackShowsLabels(contactId, postedLabelIds, delayMs) {
+  for (let attempt = 1; attempt <= LABEL_READ_BACK_TRIES; attempt += 1) {
+    if (attempt > 1) {
+      await sleep(delayMs);
+    }
+    try {
+      if (sameLabelSet(await readContactLabelIds(contactId), postedLabelIds)) {
+        return true;
+      }
+    } catch {
+      // Not shown.
+    }
+  }
+  return false;
+}
+
+// The saved POST, when it is for this contact and inside the 150-second window. Otherwise null.
+// A saved POST that names another contactId is ignored (SP-R5). One with no contactId is used:
+// the worst a wrongly used one can do is hold a POST back until the window ends.
+function recentLabelPost(lastLabelPost, contactId) {
+  const savedLabelIds = mergeUniqueNumericIds(lastLabelPost?.labelIds);
+  const postedAtMs = Date.parse(lastLabelPost?.postedAt);
+  if (!savedLabelIds.length || !Number.isFinite(postedAtMs)) {
+    return null;
+  }
+  const savedContactId = String(lastLabelPost.contactId ?? "").trim();
+  if (savedContactId && savedContactId !== contactId) {
+    return null;
+  }
+  // Math.abs: a postedAt far in the future (a wrong clock) must not hold the labels back for good.
+  return Math.abs(Date.now() - postedAtMs) < LABEL_POST_WINDOW_MS ? savedLabelIds : null;
+}
+
+function buildLabelResult(operation, { postedLabelIds = null, postedAt = null, confirmed = null } = {}) {
+  return { operation, postedLabelIds, postedAt, confirmed };
+}
+
+// Contract P.5 (e), written out above updateClientMetadata.
+async function updateContactLabels(
+  contactId,
+  { requiredLabelIds, managedLabelIds, lastLabelPost, contactCreatedThisRun, readBackDelayMs }
+) {
+  const required = readMapperLabelIds(requiredLabelIds, "requiredLabelIds");
+  const managed = readMapperLabelIds(managedLabelIds, "managedLabelIds");
+  if (!required.length) {
+    return buildLabelResult("skip_empty");
+  }
+
+  // Row L.1: an ID the integration adds that is not in the sendable list is a code defect.
+  const notSendable = required.filter((id) => !CENTRAL_REACH_SENDABLE_LABEL_IDS.includes(id));
+  if (notSendable.length) {
+    throw labelError(
+      "CR_LABEL_NOT_SENDABLE",
+      "A required CentralReach label is not in the sendable list",
+      notSendable
+    );
+  }
+
+  // Row L.3: inside the window nothing is posted. The set is worked out from the saved POST,
+  // because the read may still show the labels from before it.
+  const savedLabelIds = recentLabelPost(lastLabelPost, contactId);
+  if (savedLabelIds) {
+    if (!sameLabelSet(labelSetToPost(savedLabelIds, managed, required), savedLabelIds)) {
+      // The labels changed after the saved POST. The run is retried and posts after the window.
+      return buildLabelResult("skip_window", { confirmed: false });
+    }
+    const shown = await readContactLabelIds(contactId);
+    return buildLabelResult("skip_window", { confirmed: sameLabelSet(shown, savedLabelIds) });
+  }
+
+  const current = await readContactLabelIds(contactId);
+  if (!current.length && !contactCreatedThisRun) {
+    throw labelError(
+      "CR_LABEL_READ_EMPTY",
+      "The CentralReach label read came back empty for a contact this run did not create",
+      []
+    );
+  }
+
+  const toPost = labelSetToPost(current, managed, required);
+  if (sameLabelSet(toPost, current)) {
+    return buildLabelResult("skip_present", { confirmed: true });
+  }
+
+  // Row L.1: every ID in the set to post, the integration's and CentralReach's own, must be in
+  // the live catalog. The managed labels are already out, so a remove-only ID never blocks.
+  const catalog = new Set(await readLabelCatalogIds());
+  const notInCatalog = toPost.filter((id) => !catalog.has(id));
+  if (notInCatalog.length) {
+    throw labelError(
+      "CR_LABEL_NOT_IN_CATALOG",
+      "A label in the set to post is not in CentralReach's label catalog",
+      notInCatalog
+    );
+  }
+
+  const postedAt = await postContactLabels(contactId, toPost);
+  const confirmed = await readBackShowsLabels(contactId, toPost, readBackDelayMs);
+  return buildLabelResult("updated", { postedLabelIds: toPost, postedAt, confirmed });
 }
 
 async function clearMetadataField(contactId, fieldId) {
@@ -729,40 +897,76 @@ async function updateMetadataField(contactId, fieldId, value) {
 // updateClientMetadata, for clients and for employees.
 //   updateClientMetadata(contactId, metadataValues, options)
 // Label options, all passed by the worker:
-//   labelIds               the mapper's requiredLabelIds: the labels the contact must hold now.
-//                          The option keeps its old name.
+//   requiredLabelIds       the mapper's requiredLabelIds: the labels the contact must hold now.
+//                          The old option name `labelIds` is still read when requiredLabelIds is
+//                          not passed.
 //   managedLabelIds        the mapper's managedLabelIds. Default []: nothing is removed.
+//                          Every entry of both lists must be a positive whole number (a number,
+//                          or a text of digits). Anything else, or a value that is not a list,
+//                          is CR_LABEL_NOT_SENDABLE before any CentralReach call; the error
+//                          carries `labelList` (the list's name) and `positions`, never a value.
 //   lastLabelPost          the last label POST the worker saved in the link record under
 //                          `lastLabelPost`: { contactId, labelIds: [numbers], postedAt: ISO time },
 //                          or null when none is saved. The worker passes null when the saved
 //                          contactId is not the contact being synced (the CR ID changed).
+//                          The sender also ignores a saved post that names another contactId;
+//                          one with no contactId is used. A saved post is used only when
+//                          labelIds is a list with at least one ID and postedAt can be read as a
+//                          time.
 //   contactCreatedThisRun  true when an empty label read may be taken as "no labels" (row L.2):
 //                          this run created the contact, or the link record still holds
 //                          `labelsPending: true`. The worker sets labelsPending when the
 //                          integration creates the contact or links the record to its own earlier
-//                          create, and clears it when a label POST is confirmed. Without it, a
-//                          create that timed out would leave a contact whose empty read is retried
-//                          until the record ends as `error`.
-// The answer's labelResult:
+//                          create, and clears it whenever labelResult.confirmed is exactly true,
+//                          whatever the operation ("updated", "skip_present" or "skip_window"),
+//                          not only after a POST. Without it, a create that timed out would
+//                          leave a contact whose empty read is retried until the record ends as
+//                          `error`.
+//   labelReadBackDelayMs   the wait between the read-backs after a POST, in milliseconds.
+//                          Default 5000. A test passes 0 (or a few milliseconds) so it does not
+//                          sleep; the workers leave it out.
+// The answer's labelResult always has these four keys:
 //   operation       "skip_empty" (no required label: no CentralReach call), "skip_present"
-//                   (nothing to change: no POST) or "updated" (a POST was sent)
+//                   (nothing to change: no POST), "skip_window" (inside the 150-second window:
+//                   no POST) or "updated" (a POST was sent)
 //   postedLabelIds  the whole set posted in this run, as numbers; null when no POST was sent
 //   postedAt        the ISO time of that POST; null when no POST was sent
 //   confirmed       true when a read shows the set CentralReach must hold; false when the read
-//                   does not show it yet
-// The set to post is: what CentralReach holds, minus managed, plus required. The catalog check of
-// row L.1 runs on that set, after the managed labels are taken out, so a remove-only ID that
-// CentralReach still holds never blocks a post.
+//                   does not show it yet, or when the set changed inside the window; null for
+//                   "skip_empty", where nothing was read
+// The set to post is: what CentralReach holds, minus managed, plus required. No POST when that
+// set equals what CentralReach holds. An empty set is never posted. Every required ID must be in
+// CENTRAL_REACH_SENDABLE_LABEL_IDS, checked before any CentralReach call. The catalog check of
+// row L.1 (GET /contacts/labels, read once, only when a POST would follow) runs on the set to
+// post, after the managed labels are taken out, so a remove-only ID that CentralReach still
+// holds never blocks a post.
+// An empty read is "no labels" only when contactCreatedThisRun is true; otherwise it is the
+// temporary failure CR_LABEL_READ_EMPTY.
+// The label POST is sent once per run: it is never retried in-process. When it fails with no
+// HTTP status (a timeout, the network) or with a 5xx, CentralReach may have applied it, so the
+// thrown error carries `labelPost`: { contactId, labelIds, postedAt }. A 4xx carries none.
+// After a POST that answered 200 the labels are read back three times, labelReadBackDelayMs
+// apart, the first time at once. confirmed is true when a read-back shows exactly the posted
+// set. A read-back that fails counts as not shown, so the posted set and its time are still
+// returned.
 // Inside the 150-second window after lastLabelPost the sender posts nothing (row L.3). It works
 // out the set from the saved post instead of the read: saved labelIds, minus managed, plus
 // required. If that set differs from the saved labelIds, the required labels changed after the
 // post: confirmed is false, so the run is retried and posts after the window. If it equals the
-// saved labelIds: confirmed is true when the read shows them and false when it does not.
-// postedLabelIds, postedAt and confirmed are returned from row L.3 on. The worker then saves
-// { labelIds: postedLabelIds, postedAt } as lastLabelPost whenever postedLabelIds is not null,
-// and ends the run with the temporary failure CR_LABEL_POST_UNCONFIRMED only when confirmed is
-// exactly false. The label step runs before the metadata fields; when it throws, no field is
-// written. Error codes: contract (g) in src/lib/retry.mjs.
+// saved labelIds: confirmed is true when the read shows them and false when it does not. After
+// the window the set is worked out from a fresh read again.
+// What the worker does with the answer, in this order:
+//   1. It saves lastLabelPost first, before any throw: { contactId, labelIds: postedLabelIds,
+//      postedAt } whenever postedLabelIds is not null; or, when updateClientMetadata throws an
+//      error that carries `labelPost`, that object as it is, before it rethrows. This comes
+//      before the throw for failed metadata fields (failedCount) too, because the labels were
+//      posted before the fields were written.
+//   2. It clears labelsPending when confirmed is exactly true.
+//   3. It ends the run with the temporary failure CR_LABEL_POST_UNCONFIRMED only when confirmed
+//      is exactly false.
+// The label step runs before the metadata fields; when it throws, no field is written. Error
+// codes: contract (g) in src/lib/retry.mjs. A label error carries `labelIds` (IDs only) for the
+// log.
 export async function updateClientMetadata(contactId, metadataValues, options = {}) {
   const normalizedContactId = String(contactId || "").trim();
   if (!normalizedContactId) {
@@ -771,10 +975,11 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
 
   const values = metadataValues && typeof metadataValues === "object" ? metadataValues : {};
   const labelResult = await updateContactLabels(normalizedContactId, {
-    requiredLabelIds: options.labelIds || [],
-    managedLabelIds: options.managedLabelIds || [],
+    requiredLabelIds: options.requiredLabelIds ?? options.labelIds ?? [],
+    managedLabelIds: options.managedLabelIds ?? [],
     lastLabelPost: options.lastLabelPost || null,
-    contactCreatedThisRun: Boolean(options.contactCreatedThisRun)
+    contactCreatedThisRun: Boolean(options.contactCreatedThisRun),
+    readBackDelayMs: options.labelReadBackDelayMs ?? LABEL_READ_BACK_DELAY_MS
   });
   const clearFieldIds = new Set((options.clearFieldIds || []).map((value) => Number(value)));
   const results = [];
