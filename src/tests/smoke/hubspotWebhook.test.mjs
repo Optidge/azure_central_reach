@@ -16,6 +16,9 @@ const DOCUMENTED_HASH = "9569219f8ba981ffa6f6f16aa0f48637d35d728c7e4d93d0d52efaa
 const settings = {
   clientSecret: CLIENT_SECRET,
   webhookUri: URI,
+  // Stage 2 (row 2.6): the webhook stamps its configured portal on every message.
+  portalId: "52311591",
+  portalReady: true,
   btRbtObjectTypeId: "2-55656309",
   bcbaObjectTypeId: "2-55656302",
   coalesceSeconds: 30,
@@ -83,6 +86,7 @@ test("deal webhook enqueues the existing client sync path", async () => {
   assert.equal(response.jsonBody.recordId, "12345");
   assert.deepEqual(sent, [{
     dealId: "12345",
+    portalId: "52311591",
     source: "hubspotWorkflow",
     workflow: "clientSync",
     enqueuedAt: sent[0].enqueuedAt
@@ -166,7 +170,8 @@ test("client queue accepts hubspotWorkflow as a source", async () => {
     {
       dealId: "12345",
       workflow: "clientSync",
-      source: "hubspotWorkflow"
+      source: "hubspotWorkflow",
+      portalId: "52311591"
     },
     {
       functionName: "processClientQueue",
@@ -174,6 +179,8 @@ test("client queue accepts hubspotWorkflow as a source", async () => {
       triggerMetadata: {}
     },
     {
+      // Stage 2 (row 2.6): the worker runs only messages for its own portal.
+      portalId: "52311591",
       runWorkflow: async () => {
         called = true;
       }

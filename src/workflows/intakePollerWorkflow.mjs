@@ -100,12 +100,25 @@ function buildEmployeeDedupeId(employeeType, recordId, hsLastModifiedDate) {
   return `${String(employeeType)}:${String(recordId)}:${String(hsLastModifiedDate)}`;
 }
 
+// Every message the poller sends says which portal it is for. The poller sends only through
+// these two senders.
+export function portalSenders(
+  portalId,
+  { sendClient = sendClientSyncMessage, sendEmployee = sendEmployeeSyncMessage } = {}
+) {
+  return {
+    sendClient: (message) => sendClient({ ...message, portalId }),
+    sendEmployee: (message) => sendEmployee({ ...message, portalId })
+  };
+}
+
 export async function runIntakePollerWorkflow(context) {
   void context;
   const config = getIntakePollerConfig();
   createHubSpotClient(config);
   createStateClient(config);
   createServiceBusClient(config);
+  const { sendClient, sendEmployee } = portalSenders(config.hubspot.hubspotPortalId);
 
   const summary = {
     leaseAcquired: false,
@@ -128,14 +141,14 @@ export async function runIntakePollerWorkflow(context) {
     errorsCount: 0
   };
 
-  const leaseAcquired = await acquireLease({
+  const lease = await acquireLease({
     pk: POLLER_LEASE_PK,
     id: POLLER_LEASE_ID,
     ttlSeconds: config.ttl.leaseTtlSeconds
   });
-  summary.leaseAcquired = leaseAcquired;
+  summary.leaseAcquired = Boolean(lease);
 
-  if (!leaseAcquired) {
+  if (!lease) {
     safeLog("info", "Intake poller skipped; active lease exists.");
     return summary;
   }
@@ -182,7 +195,7 @@ export async function runIntakePollerWorkflow(context) {
       }
 
       try {
-        await sendClientSyncMessage({
+        await sendClient({
           dealId,
           hsLastModifiedDate,
           source: "intakePoller",
@@ -249,7 +262,7 @@ export async function runIntakePollerWorkflow(context) {
         }
 
         try {
-          await sendEmployeeSyncMessage({
+          await sendEmployee({
             workflow: "employeeSync",
             source: "employeePoller",
             employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
@@ -330,7 +343,7 @@ export async function runIntakePollerWorkflow(context) {
         }
 
         try {
-          await sendEmployeeSyncMessage({
+          await sendEmployee({
             workflow: "employeeSync",
             source: "employeePoller",
             employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
@@ -389,7 +402,7 @@ export async function runIntakePollerWorkflow(context) {
           limit: config.limits.maxDealsPerRun,
           countKey: "linkedClientEnqueued",
           send: async (recordId) =>
-            sendClientSyncMessage({
+            sendClient({
               dealId: recordId,
               source: "linkedRecheck",
               workflow: "clientSync"
@@ -402,7 +415,7 @@ export async function runIntakePollerWorkflow(context) {
           limit: config.limits.maxBtRbtPerRun,
           countKey: "linkedBtRbtEnqueued",
           send: async (recordId) =>
-            sendEmployeeSyncMessage({
+            sendEmployee({
               workflow: "employeeSync",
               source: "linkedRecheck",
               employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
@@ -416,7 +429,7 @@ export async function runIntakePollerWorkflow(context) {
           limit: config.limits.maxBcbaPerRun,
           countKey: "linkedBcbaEnqueued",
           send: async (recordId) =>
-            sendEmployeeSyncMessage({
+            sendEmployee({
               workflow: "employeeSync",
               source: "linkedRecheck",
               employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
@@ -470,7 +483,7 @@ export async function runIntakePollerWorkflow(context) {
     return summary;
   } finally {
     try {
-      await releaseLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID });
+      await releaseLease({ pk: POLLER_LEASE_PK, id: POLLER_LEASE_ID, etag: lease.etag });
     } catch (error) {
       safeLog(
         "error",

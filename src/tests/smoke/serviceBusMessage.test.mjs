@@ -5,6 +5,8 @@ import { buildClientSyncMessage } from "../../lib/serviceBusClient.mjs";
 test("buildClientSyncMessage returns lightweight intake payload", () => {
   const message = buildClientSyncMessage({
     dealId: "999",
+    // Stage 2 (row 2.6): every queue message carries the portal ID.
+    portalId: "52311591",
     hsLastModifiedDate: "1700000000000",
     enqueuedAt: "2025-05-01T12:00:00.000Z"
   });
@@ -15,6 +17,7 @@ test("buildClientSyncMessage returns lightweight intake payload", () => {
     "dealId",
     "enqueuedAt",
     "hsLastModifiedDate",
+    "portalId",
     "source",
     "workflow"
   ]);

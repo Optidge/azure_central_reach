@@ -39,3 +39,28 @@ export const WORKDAY_ALREADY_IN_CENTRALREACH =
 
 export const CASE_CLIENT_ID_MISMATCH =
   "HubSpot client_id_number does not match the CentralReach client found for this Case record.";
+
+// Stage 2: failures the worker did not decide on purpose.
+
+// Written once, after the last retry of a temporary failure (1 min, 5 min, 15 min, 1 h, 4 h).
+export const RETRIES_USED_UP = "Retries used up";
+
+export function centralReachRejected(status) {
+  return `CentralReach rejected the request (${status}).`;
+}
+
+export function hubspotRejected(status) {
+  return `HubSpot rejected the request (${status}).`;
+}
+
+// Field IDs are CentralReach metadata field numbers, not values.
+export function metadataWriteFailed(fieldIds) {
+  return `MetadataWriteFailed fields: ${(fieldIds || []).join(",")}`;
+}
+
+// call is the method and path template, for example "GET /contacts/{id}/labels".
+export function unreadableCentralReachAnswer(call, expectedField) {
+  return `CentralReach answered ${call} in a shape the integration cannot read. Expected field: ${expectedField}.`;
+}
+
+export const SYNC_FAILED = "Sync failed";

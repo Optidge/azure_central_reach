@@ -128,13 +128,14 @@ test("Hybrid minimum changes: an unclear lookup answer never leads to a create",
   await assert.rejects(createOrUpdateClient({ payload: { ExternalSystemId: "deal-1" } }));
   assert.equal(cr.count("POST /contacts/client"), 0);
 
-  // A 200 employee lookup with no contact.contactId is unknown and must not create.
+  // A 200 employee lookup with no contact.contactId cannot be read and must not create.
+  // Stage 2 (decision 4): it is a permanent error with its own code, not a retry.
   cr = fakeCentralReach({
     "GET /contacts/employee/byExternalSystemId?ExternalSystemId=1": () => ({ result: "ok" })
   });
   await assert.rejects(
     findEmployeeByExternalSystemId("1"),
-    (error) => error.code === "CR_LOOKUP_UNKNOWN"
+    (error) => error.code === "CR_LOOKUP_UNREADABLE"
   );
   assert.equal(cr.count("POST /contacts/employee"), 0);
   assert.equal(cr.calls.some((call) => call.method === "PUT"), false);
@@ -219,7 +220,12 @@ function employeeDeps(overrides = {}) {
   const calls = { writebacks: [], stateWrites: [], upserts: 0, order: [] };
   const deps = {
     getConfig: () => ({
-      hubspot: { btRbtObjectTypeId: "2-bt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
+      hubspot: {
+        btRbtObjectTypeId: "2-bt",
+        bcbaObjectTypeId: "2-bcba",
+        employeeIdProperty: "employee_id",
+        hubspotPortalId: "52311591"
+      },
       features: { allowEmployeeCreate: true, putOnlyMode: false },
       ttl: { successTtlSeconds: 86400, failTtlSeconds: 3600 }
     }),
@@ -273,8 +279,19 @@ test("[GER-BCBA] Employee ID · CR → HS: a new CR id is saved in Cosmos and Hu
   const result = await runEmployeeSyncWorkflow({ recordId: "2", employeeType: "bcba" }, deps);
 
   assert.equal(result.crContactId, "900");
-  assert.deepEqual(calls.order.slice(0, 4), ["upsert", "state:pending_link", "writeback", "metadata"]);
-  assert.equal(calls.stateWrites[0].data.crContactId, "900");
+  // Stage 2 (rows 2.1, 2.3): one link record. The pending create is saved before the create,
+  // the CR id right after it.
+  assert.deepEqual(calls.order.slice(0, 5), [
+    "state:link",
+    "upsert",
+    "state:link",
+    "writeback",
+    "metadata"
+  ]);
+  assert.equal(calls.stateWrites[0].data.pendingCreateExternalId, "2");
+  assert.equal(calls.stateWrites[1].data.crContactId, "900");
+  assert.equal(calls.stateWrites[1].data.pendingCreateExternalId, null);
+  assert.equal(calls.stateWrites[1].ttlSeconds, -1);
   assert.deepEqual(calls.writebacks[0], {
     employee_id: "900",
     central_reach_record_link: "https://members.centralreach.com/#contacts/details/?id=900"
@@ -292,16 +309,18 @@ test("Hybrid minimum changes: a metadata failure after an employee create keeps 
     /MetadataWriteFailed/
   );
 
+  // Stage 2 (decision 1): this failure is retried, so HubSpot gets the CR id but no status.
   const errorWriteback = calls.writebacks.at(-1);
-  assert.equal(errorWriteback.last_sync_status, "error");
-  assert.equal(errorWriteback.last_sync_error, "MetadataWriteFailed fields: 138069");
+  assert.equal(errorWriteback.last_sync_status, undefined);
   assert.equal(errorWriteback.employee_id, "900");
   assert.equal(errorWriteback.last_sync_hash, undefined);
 
-  const failState = calls.stateWrites.at(-1);
-  assert.equal(failState.type, "fail");
-  assert.equal(failState.data.crContactId, "900");
-  assert.equal(failState.ttlSeconds, 86400);
+  // Stage 2 (row 2.1): the CR id is in the link record, which never expires. The attempt record
+  // is separate.
+  assert.equal(calls.stateWrites.at(-1).type, "fail");
+  const link = calls.stateWrites.filter((item) => item.type === "link").at(-1);
+  assert.equal(link.data.crContactId, "900");
+  assert.equal(link.ttlSeconds, -1);
 });
 
 test("Hybrid minimum changes: a stale source after an employee create still leaves the CR id saved", async () => {
@@ -324,8 +343,10 @@ test("Hybrid minimum changes: a stale source after an employee create still leav
     runEmployeeSyncWorkflow({ recordId: "2", employeeType: "bcba" }, deps),
     /SyncStale/
   );
-  assert.equal(calls.stateWrites[0].type, "pending_link");
-  assert.equal(calls.stateWrites[0].data.crContactId, "900");
+  // Stage 2 (row 2.1): the CR id is saved in the one link record, with no expiry.
+  const link = calls.stateWrites.find((item) => item.data.crContactId === "900");
+  assert.equal(link.type, "link");
+  assert.equal(link.ttlSeconds, -1);
   assert.equal(calls.writebacks[0].employee_id, "900");
 });
 
@@ -341,10 +362,12 @@ test("Hybrid minimum changes: a failure before the CR write keeps a Cosmos-recov
   await assert.rejects(runEmployeeSyncWorkflow({ recordId: "2", employeeType: "bcba" }, deps));
 
   assert.equal(calls.upserts, 0);
-  const failState = calls.stateWrites.at(-1);
-  assert.equal(failState.type, "fail");
-  assert.equal(failState.data.crContactId, "555");
-  assert.deepEqual(failState.data.fieldHashes, { "metadata.138069": "abc" });
+  // Stage 2 (row 2.1): the link record keeps both; the attempt record is separate.
+  assert.equal(calls.stateWrites.at(-1).type, "fail");
+  const link = calls.stateWrites.filter((item) => item.type === "link").at(-1);
+  assert.equal(link.data.crContactId, "555");
+  assert.deepEqual(link.data.fieldHashes, { "metadata.138069": "abc" });
+  assert.equal(link.ttlSeconds, -1);
   assert.equal(calls.writebacks.at(-1).employee_id, "555");
 });
 
@@ -361,9 +384,10 @@ test("Hybrid minimum changes: a failed HubSpot read does not erase the stored CR
     runEmployeeSyncWorkflow({ recordId: "2", employeeType: "bcba" }, deps),
     /HubSpotReadFailed/
   );
-  const failState = calls.stateWrites.at(-1);
-  assert.equal(failState.data.crContactId, "555");
-  assert.deepEqual(failState.data.fieldHashes, { "metadata.138069": "abc" });
+  // Stage 2 (row 2.1): the stored link record is not written at all, so nothing is erased. Only
+  // the attempt record is written.
+  assert.deepEqual(calls.stateWrites.map((item) => item.type), ["fail"]);
+  assert.equal(calls.stateWrites[0].pk, "sync-attempt:employee");
   assert.equal(calls.upserts, 0);
 });
 
@@ -377,7 +401,8 @@ test("[G11] Monitoring: every employee failure is written to HubSpot as an error
   assert.equal(calls.writebacks[0].last_sync_status, "error");
   assert.equal(calls.writebacks[0].last_sync_error, "externalSystemId is required");
   assert.equal(typeof calls.writebacks[0].integration_last_write, "string");
-  // No CR id is known, so the fail state uses the short lifetime.
+  // Stage 2 (row 2.1): attempt details are their own record, with the fail lifetime.
+  assert.equal(calls.stateWrites.at(-1).pk, "sync-attempt:employee");
   assert.equal(calls.stateWrites.at(-1).ttlSeconds, 3600);
 });
 
@@ -406,7 +431,7 @@ function clientDeps(overrides = {}) {
   let stored = overrides.prior || null;
   const deps = {
     getConfig: () => ({
-      hubspot: { crContactIdProperty: "client_id_number" },
+      hubspot: { crContactIdProperty: "client_id_number", hubspotPortalId: "52311591" },
       ttl: { successTtlSeconds: 86400, failTtlSeconds: 3600 }
     }),
     createHubSpotClient: () => {},
@@ -451,7 +476,16 @@ test("[GER-CASE] Client ID · CR → HS: a new CR id is saved in Cosmos and HubS
   const result = await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, deps);
 
   assert.equal(result.crContactId, "700");
-  assert.deepEqual(calls.order.slice(0, 4), ["upsert", "state:pending_link", "writeback", "metadata"]);
+  // Stage 2 (rows 2.1, 2.4): one link record, marked in progress before the first CR write.
+  assert.deepEqual(calls.order.slice(0, 5), [
+    "state:link",
+    "upsert",
+    "state:link",
+    "writeback",
+    "metadata"
+  ]);
+  assert.equal(calls.stateWrites[0].data.clean, false);
+  assert.equal(calls.stateWrites[1].data.crContactId, "700");
   assert.deepEqual(calls.writebacks[0], {
     client_id_number: "700",
     central_reach_link_to_client: "https://members.centralreach.com/#contacts/details/?id=700"
@@ -470,14 +504,17 @@ test("Hybrid minimum changes: a metadata failure after a client create keeps the
     /MetadataWriteFailed/
   );
 
+  // Stage 2 (decision 1): this failure is retried, so HubSpot gets the CR id but no status.
   const errorWriteback = calls.writebacks.at(-1);
-  assert.equal(errorWriteback.last_sync_status, "error");
+  assert.equal(errorWriteback.last_sync_status, undefined);
   assert.equal(errorWriteback.client_id_number, "700");
   assert.equal(errorWriteback.last_sync_hash, undefined);
 
-  const failState = calls.stateWrites.at(-1);
-  assert.equal(failState.type, "fail");
-  assert.equal(failState.data.crContactId, "700");
-  assert.deepEqual(failState.data.fieldHashes, { "metadata.126214": "old" });
-  assert.equal(failState.ttlSeconds, 86400);
+  // Stage 2 (row 2.1): the link record keeps both and never expires; the attempt record is
+  // separate.
+  assert.equal(calls.stateWrites.at(-1).type, "fail");
+  const link = calls.stateWrites.filter((item) => item.type === "link").at(-1);
+  assert.equal(link.data.crContactId, "700");
+  assert.deepEqual(link.data.fieldHashes, { "metadata.126214": "old" });
+  assert.equal(link.ttlSeconds, -1);
 });

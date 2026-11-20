@@ -212,7 +212,7 @@ function clientHarness({
   };
   const deps = {
     getConfig: () => ({
-      hubspot: { crContactIdProperty: "client_id_number" },
+      hubspot: { crContactIdProperty: "client_id_number", hubspotPortalId: "52311591" },
       ttl: { successTtlSeconds: 100, failTtlSeconds: 50, leaseTtlSeconds: 120 },
       sync,
       centralReach: {}
@@ -253,6 +253,11 @@ function clientHarness({
 
 function lastWrite(calls) {
   return calls.writebacks.at(-1) || {};
+}
+
+// Stage 2: the link record (type "link") is separate from the attempt record.
+function lastLinkWrite(calls) {
+  return calls.stateWrites.filter((item) => item.type === "link").at(-1);
 }
 
 test("[G17] SYNC_RECORD_GATE_PROPERTY is required for the worker and the poller", () => {
@@ -1123,14 +1128,22 @@ test("[G17] an unclear linked Case lookup writes nothing to CentralReach", async
     properties: { client_id_number: "2001" },
     findClientByExternalSystemId: async () => ({ found: true, crContactId: null })
   });
-  await assert.rejects(runClientSyncWorkflow({ dealId: "deal-1" }, deps));
+  // Stage 2 (decision 4): a 200 with no contact ID is a permanent error on the record, not a
+  // thrown retry. It still writes nothing to CentralReach.
+  const result = await runClientSyncWorkflow({ dealId: "deal-1" }, deps);
+  assert.equal(result.status, "error");
+  assert.equal(lastWrite(calls).last_sync_status, "error");
   assert.equal(calls.upserts.length, 0);
 });
 
 test("[G17] a Case run with nothing to send does not look up the client", async () => {
+  // Stage 2 (row 2.4): "nothing to send" also needs the clean link record an earlier run saved.
+  const first = clientHarness({ hash: "same-hash", properties: { client_id_number: "2001" } });
+  await runClientSyncWorkflow({ dealId: "deal-1" }, first.deps);
   const { deps, calls } = clientHarness({
     hash: "same-hash",
-    properties: { client_id_number: "2001", last_sync_hash: "same-hash" }
+    properties: { client_id_number: "2001", last_sync_hash: "same-hash" },
+    prior: { data: lastLinkWrite(first.calls).data }
   });
   const result = await runClientSyncWorkflow({ dealId: "deal-1" }, deps);
   assert.equal(result.status, "noop");
@@ -1204,9 +1217,11 @@ test("[GBR] a linked Case with no change and the real hash ends as noop and is n
   const first = clientHarness({ realHash: true, properties: { client_id_number: "2001" } });
   await runClientSyncWorkflow({ dealId: "deal-1" }, first.deps);
   const savedHash = lastWrite(first.calls).last_sync_hash;
+  // Stage 2 (row 2.4): the second run reads the clean link record the first run saved.
   const second = clientHarness({
     realHash: true,
-    properties: { client_id_number: "2001", last_sync_hash: savedHash }
+    properties: { client_id_number: "2001", last_sync_hash: savedHash },
+    prior: { data: lastLinkWrite(first.calls).data }
   });
   const result = await runClientSyncWorkflow({ dealId: "deal-1" }, second.deps);
   assert.equal(result.status, "noop");
@@ -1295,7 +1310,11 @@ test("[GBR] a failed employee read sends nothing to CentralReach", async () => {
     failed.code = "CR_EMPLOYEE_READ_FAILED";
     throw failed;
   };
-  await assert.rejects(runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps));
+  // Stage 2 (decision 4): an unreadable employee answer is a permanent error on the record, not
+  // a thrown retry. It still sends nothing to CentralReach.
+  const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
+  assert.equal(result.status, "error");
+  assert.equal(lastWrite(calls).last_sync_status, "error");
   assert.equal(calls.upserts.length, 0);
   assert.equal(calls.metadata.length, 0);
 });
@@ -1308,11 +1327,13 @@ test("[GBR] an employee error decided on purpose keeps the CentralReach ID and t
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "error");
-  const saved = calls.stateWrites.at(-1);
-  assert.equal(saved.type, "fail");
-  assert.equal(saved.data.crContactId, "CR1");
-  assert.deepEqual(saved.data.fieldHashes, savedHashes);
-  assert.equal(saved.ttlSeconds, 120);
+  // Stage 2 (row 2.1): the link record is not written, so the stored CR ID and hashes stay. The
+  // failure goes to the attempt record, which may expire.
+  assert.equal(lastLinkWrite(calls), undefined);
+  const attempt = calls.stateWrites.at(-1);
+  assert.equal(attempt.type, "fail");
+  assert.equal(attempt.pk, "sync-attempt:employee");
+  assert.equal(attempt.ttlSeconds, 60);
   assert.equal(calls.upserts.length, 0);
 });
 
@@ -1327,10 +1348,10 @@ test("[GBR] the employee ID mismatch error keeps the saved field hashes", async 
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   assert.equal(result.status, "error");
-  const saved = calls.stateWrites.at(-1);
-  assert.equal(saved.data.crContactId, "CR1");
-  assert.deepEqual(saved.data.fieldHashes, savedHashes);
-  assert.equal(saved.ttlSeconds, 120);
+  // Stage 2 (row 2.1): the link record is not written, so the stored CR ID and hashes stay.
+  assert.equal(lastLinkWrite(calls), undefined);
+  assert.equal(calls.stateWrites.at(-1).pk, "sync-attempt:employee");
+  assert.equal(calls.upserts.length, 0);
 });
 
 test("[GBR] a client error decided on purpose keeps the CentralReach ID and the saved field hashes", async () => {
@@ -1341,11 +1362,13 @@ test("[GBR] a client error decided on purpose keeps the CentralReach ID and the 
   });
   const result = await runClientSyncWorkflow({ dealId: "deal-1" }, deps);
   assert.equal(result.status, "error");
-  const saved = calls.stateWrites.at(-1);
-  assert.equal(saved.type, "fail");
-  assert.equal(saved.data.crContactId, "2001");
-  assert.deepEqual(saved.data.fieldHashes, savedHashes);
-  assert.equal(saved.ttlSeconds, 100);
+  // Stage 2 (row 2.1): the link record is not written, so the stored CR ID and hashes stay. The
+  // failure goes to the attempt record, which may expire.
+  assert.equal(lastLinkWrite(calls), undefined);
+  const attempt = calls.stateWrites.at(-1);
+  assert.equal(attempt.type, "fail");
+  assert.equal(attempt.pk, "sync-attempt:client");
+  assert.equal(attempt.ttlSeconds, 50);
   assert.equal(calls.upserts.length, 0);
 });
 
@@ -1358,10 +1381,9 @@ test("[GBR] the Case ID mismatch error keeps the saved field hashes", async () =
   });
   const result = await runClientSyncWorkflow({ dealId: "deal-1" }, deps);
   assert.equal(result.status, "error");
-  const saved = calls.stateWrites.at(-1);
-  assert.equal(saved.data.crContactId, "2001");
-  assert.deepEqual(saved.data.fieldHashes, savedHashes);
-  assert.equal(saved.ttlSeconds, 100);
+  // Stage 2 (row 2.1): the link record is not written, so the stored CR ID and hashes stay.
+  assert.equal(lastLinkWrite(calls), undefined);
+  assert.equal(calls.stateWrites.at(-1).pk, "sync-attempt:client");
   assert.equal(calls.upserts.length, 0);
 });
 
@@ -1370,16 +1392,28 @@ test("[G17] the CentralReach ID of a new employee is saved before the create lea
     properties: { employee_id: "", workday_id: "WD9" },
     createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "CR9" })
   });
+  // Stage 2 (row 2.1): the CR ID is saved in the one link record (there is no pending_link
+  // record any more), so this test marks the link write that carries the CR ID.
+  const putState = deps.putState;
+  deps.putState = async (input) => {
+    await putState(input);
+    if (input.type === "link" && input.data.crContactId === "CR9") {
+      calls.events.push("state:link-with-cr-id");
+    }
+  };
   await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps);
   const released = calls.events.indexOf("release:create-lock:employee");
-  const savedInCosmos = calls.events.indexOf("state:pending_link");
+  const savedInCosmos = calls.events.indexOf("state:link-with-cr-id");
   const savedInHubSpot = calls.events.indexOf("writeback:employee_id");
   assert.notEqual(released, -1);
   assert.notEqual(savedInCosmos, -1);
   assert.notEqual(savedInHubSpot, -1);
   assert.equal(savedInCosmos < released, true);
   assert.equal(savedInHubSpot < released, true);
-  assert.equal(calls.events.filter((item) => item === "state:pending_link").length, 1);
+  assert.equal(
+    calls.events.slice(0, released).filter((item) => item === "state:link-with-cr-id").length,
+    1
+  );
 });
 
 test("[G17] when the Cosmos save fails after a create, the CentralReach ID still reaches HubSpot", async () => {
@@ -1387,17 +1421,23 @@ test("[G17] when the Cosmos save fails after a create, the CentralReach ID still
     properties: { employee_id: "", workday_id: "WD9" },
     createOrUpdateEmployee: async () => ({ operation: "create", crContactId: "CR9" })
   });
+  // Stage 2 (row 2.1): the CR ID is saved in the one link record, so the failing write is the
+  // first link write that carries the CR ID.
+  let failedOnce = false;
   deps.putState = async (input) => {
-    if (input.type === "pending_link") {
+    if (!failedOnce && input.type === "link" && input.data.crContactId) {
+      failedOnce = true;
       throw new Error("Cosmos write failed");
     }
     calls.stateWrites.push(input);
   };
   await assert.rejects(runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bt_rbt" }, deps));
   assert.equal(calls.upserts.length, 1);
-  assert.equal(lastWrite(calls).last_sync_status, "error");
+  // Stage 2 (decision 1): the failure is retried, so the CR ID reaches HubSpot with no status.
+  assert.equal(lastWrite(calls).last_sync_status, undefined);
   assert.equal(lastWrite(calls).employee_id, "CR9");
-  assert.equal(calls.stateWrites.at(-1).data.crContactId, "CR9");
+  assert.equal(lastLinkWrite(calls).data.crContactId, "CR9");
+  assert.equal(lastLinkWrite(calls).ttlSeconds, -1);
 });
 
 for (const [name, answer] of [

@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { HUBSPOT_PORTAL } from "./config.mjs";
+import { resolveHubSpotPortal } from "./config.mjs";
 
 const DEAL_OBJECT_TYPES = new Set(["0-3", "deal", "deals"]);
 const PLACEHOLDER_VALUES = new Set(["", "CHANGE_ME"]);
@@ -25,10 +25,7 @@ function isConfigured(value) {
 export function readWebhookSettings(env = process.env) {
   const clientSecret = readFrom(env, "HUBSPOT_WEBHOOK_CLIENT_SECRET");
   const webhookUri = readFrom(env, "HUBSPOT_WEBHOOK_URI");
-  const btRbtObjectTypeId =
-    readFrom(env, "HS_BT_RBT_OBJECT_TYPE_ID") || HUBSPOT_PORTAL.btRbtObjectTypeId;
-  const bcbaObjectTypeId =
-    readFrom(env, "HS_BCBA_OBJECT_TYPE_ID") || HUBSPOT_PORTAL.bcbaObjectTypeId;
+  const portal = readPortal(env);
   const serviceBusConnectionString = readFrom(env, "SERVICE_BUS_CONNECTION_STRING");
   const parsedCoalesce = Number(readFrom(env, "HUBSPOT_WEBHOOK_COALESCE_SECONDS") || "30");
   const coalesceSeconds = Number.isFinite(parsedCoalesce) && parsedCoalesce > 0
@@ -38,8 +35,12 @@ export function readWebhookSettings(env = process.env) {
   return {
     clientSecret,
     webhookUri,
-    btRbtObjectTypeId,
-    bcbaObjectTypeId,
+    // The webhook does not check a portal ID in the notice. It stamps the configured portal on
+    // every message it queues, and the worker compares.
+    portalId: portal?.portalId || "",
+    btRbtObjectTypeId: portal?.btRbtObjectTypeId || "",
+    bcbaObjectTypeId: portal?.bcbaObjectTypeId || "",
+    portalReady: Boolean(portal),
     coalesceSeconds,
     secretReady: isConfigured(clientSecret),
     serviceBusReady: isConfigured(serviceBusConnectionString),
@@ -47,6 +48,16 @@ export function readWebhookSettings(env = process.env) {
       (name) => isConfigured(readFrom(env, name))
     )
   };
+}
+
+// The portal row is read from the settings each time, not when this module loads. Invalid portal
+// configuration gives no row, and the webhook then queues nothing.
+function readPortal(env) {
+  try {
+    return resolveHubSpotPortal(env);
+  } catch {
+    return null;
+  }
 }
 
 function readFrom(env, name) {

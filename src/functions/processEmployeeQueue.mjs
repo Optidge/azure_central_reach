@@ -1,6 +1,9 @@
 import { app } from "@azure/functions";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
+import { hubspotPortalId } from "../lib/config.mjs";
+import { processSyncMessage, readAttempt } from "../lib/queueRetry.mjs";
+import { scheduleEmployeeRetry } from "../lib/serviceBusClient.mjs";
 import { QUEUE_WORKFLOWS } from "../constants/queues.mjs";
 import { HUBSPOT_EMPLOYEE_TYPE_SET } from "../constants/hubspot.mjs";
 import { runEmployeeSyncWorkflow } from "../workflows/employeeSyncWorkflow.mjs";
@@ -46,11 +49,20 @@ function validateQueueMessage(payload) {
     recordId,
     employeeType,
     workflow: workflow || QUEUE_WORKFLOWS.EMPLOYEE_SYNC,
-    hsLastModifiedDate
+    hsLastModifiedDate,
+    attempt: readAttempt(payload?.attempt)
   };
 }
 
-function buildQueueMeta({ context, message, recordId, employeeType, workflow, hsLastModifiedDate }) {
+function buildQueueMeta({
+  context,
+  message,
+  recordId,
+  employeeType,
+  workflow,
+  hsLastModifiedDate,
+  attempt
+}) {
   return {
     functionName: context?.functionName,
     invocationId: context?.invocationId,
@@ -58,6 +70,7 @@ function buildQueueMeta({ context, message, recordId, employeeType, workflow, hs
     employeeType,
     workflow,
     hsLastModifiedDate,
+    attempt,
     messageId: message?.messageId ?? context?.triggerMetadata?.messageId,
     deliveryCount: message?.deliveryCount ?? context?.triggerMetadata?.deliveryCount,
     enqueuedTimeUtc:
@@ -69,20 +82,33 @@ function buildQueueMeta({ context, message, recordId, employeeType, workflow, hs
 
 export async function processEmployeeQueue(message, context, dependencies = {}) {
   const runWorkflow = dependencies.runWorkflow || runEmployeeSyncWorkflow;
+  const scheduleRetry = dependencies.scheduleRetry || scheduleEmployeeRetry;
 
   try {
+    // An invalid message always throws, so it reaches the dead-letter queue and the alert.
     const payload = parseMessageBody(message);
     const validated = validateQueueMessage(payload);
     const queueMeta = buildQueueMeta({ context, message, ...validated });
 
     safeLog("info", "Employee queue message accepted.", queueMeta);
 
-    const workflowResult = await runWorkflow({
-      recordId: validated.recordId,
-      employeeType: validated.employeeType,
-      hsLastModifiedDate: validated.hsLastModifiedDate,
-      source: asNonEmptyString(payload?.source) || undefined,
-      context
+    let workflowResult;
+    await processSyncMessage({
+      body: payload,
+      attempt: validated.attempt,
+      configuredPortalId: dependencies.portalId || hubspotPortalId(),
+      queueMeta,
+      scheduleRetry,
+      run: async ({ lastAttempt }) => {
+        workflowResult = await runWorkflow({
+          recordId: validated.recordId,
+          employeeType: validated.employeeType,
+          hsLastModifiedDate: validated.hsLastModifiedDate,
+          source: asNonEmptyString(payload?.source) || undefined,
+          context,
+          lastAttempt
+        });
+      }
     });
 
     safeLog("info", "Employee queue message processed.", {

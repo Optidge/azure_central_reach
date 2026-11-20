@@ -1,6 +1,9 @@
 import { app } from "@azure/functions";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
+import { hubspotPortalId } from "../lib/config.mjs";
+import { processSyncMessage, readAttempt } from "../lib/queueRetry.mjs";
+import { scheduleClientRetry } from "../lib/serviceBusClient.mjs";
 import { QUEUE_WORKFLOWS } from "../constants/queues.mjs";
 import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
 
@@ -37,7 +40,16 @@ function parseMessageBody(message) {
   throw new Error("Invalid queue message body: expected object or JSON string");
 }
 
-function buildQueueMeta({ context, message, dealId, hsLastModifiedDate, workflow, source, enqueuedAt }) {
+function buildQueueMeta({
+  context,
+  message,
+  dealId,
+  hsLastModifiedDate,
+  workflow,
+  source,
+  enqueuedAt,
+  attempt
+}) {
   return {
     functionName: context?.functionName,
     invocationId: context?.invocationId,
@@ -46,6 +58,7 @@ function buildQueueMeta({ context, message, dealId, hsLastModifiedDate, workflow
     workflow,
     source,
     enqueuedAt,
+    attempt,
     messageId: message?.messageId ?? context?.triggerMetadata?.messageId,
     deliveryCount: message?.deliveryCount ?? context?.triggerMetadata?.deliveryCount,
     enqueuedTimeUtc:
@@ -79,25 +92,37 @@ function validateQueueMessage(payload) {
     workflow: workflow || QUEUE_WORKFLOWS.CLIENT_SYNC,
     source,
     hsLastModifiedDate,
-    enqueuedAt
+    enqueuedAt,
+    attempt: readAttempt(payload?.attempt)
   };
 }
 
 export async function processClientQueue(message, context, dependencies = {}) {
   const runWorkflow = dependencies.runWorkflow || runClientSyncWorkflow;
+  const scheduleRetry = dependencies.scheduleRetry || scheduleClientRetry;
 
   try {
+    // An invalid message always throws, so it reaches the dead-letter queue and the alert.
     const payload = parseMessageBody(message);
     const validated = validateQueueMessage(payload);
     const queueMeta = buildQueueMeta({ context, message, ...validated });
 
     safeLog("info", "Client queue message accepted.", queueMeta);
 
-    await runWorkflow({
-      dealId: validated.dealId,
-      hsLastModifiedDate: validated.hsLastModifiedDate,
-      source: validated.source,
-      context
+    await processSyncMessage({
+      body: payload,
+      attempt: validated.attempt,
+      configuredPortalId: dependencies.portalId || hubspotPortalId(),
+      queueMeta,
+      scheduleRetry,
+      run: ({ lastAttempt }) =>
+        runWorkflow({
+          dealId: validated.dealId,
+          hsLastModifiedDate: validated.hsLastModifiedDate,
+          source: validated.source,
+          context,
+          lastAttempt
+        })
     });
 
     safeLog("info", "Client queue message processed.", queueMeta);

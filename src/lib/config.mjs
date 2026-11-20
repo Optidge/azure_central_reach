@@ -32,7 +32,8 @@ const REQUIRED_ENV_NAMES = [
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
   "EMPLOYEE_SYNC_QUEUE_NAME",
-  "SYNC_RECORD_GATE_PROPERTY"
+  "SYNC_RECORD_GATE_PROPERTY",
+  "HUBSPOT_PORTAL_ID"
 ];
 
 const REQUIRED_INTAKE_ENV_NAMES = [
@@ -50,8 +51,13 @@ const REQUIRED_INTAKE_ENV_NAMES = [
   "SERVICE_BUS_CONNECTION_STRING",
   "CLIENT_SYNC_QUEUE_NAME",
   "EMPLOYEE_SYNC_QUEUE_NAME",
-  "SYNC_RECORD_GATE_PROPERTY"
+  "SYNC_RECORD_GATE_PROPERTY",
+  "HUBSPOT_PORTAL_ID"
 ];
+
+// host.json functionTimeout is 00:10:00. A lease must outlive the longest run, so
+// LEASE_TTL_SECONDS has to be larger than this (BUILD-PLAN Stage 2, decision 9: 660).
+export const FUNCTION_TIMEOUT_SECONDS = 600;
 
 export function getRequiredEnv(name) {
   const value = process.env[name];
@@ -70,47 +76,95 @@ export function getOptionalEnv(name, defaultValue = "") {
 }
 
 /**
- * HubSpot portal values. One block is active at a time.
+ * HubSpot portal values, keyed by portal ID. HUBSPOT_PORTAL_ID picks the row and must be one of
+ * these two; any other value is invalid configuration (retired 50850427, never 246184070).
+ * The table is read when a function runs, never when a module loads.
  *
- * ACTIVE: SANDBOX 52311591 (HubSpot CLI account central-reach-integration-sandbox).
- * After sandbox testing, comment out the SANDBOX block and uncomment the PRODUCTION block.
- * An app setting with the same name (HUBSPOT_PORTAL_ID, HS_BCBA_OBJECT_TYPE_ID,
- * HS_BT_RBT_OBJECT_TYPE_ID) wins over the value here, so switch local.settings.json and the
- * Azure app settings at the same time.
- *
- * Source: integration guide [SCURRENT] crosswalk, sandbox values read 2026-11-16.
+ * Source: integration guide [SCURRENT] crosswalk and BUILD-PLAN section 3 "IDs".
  * No pipeline id or stage allowlist is needed. The guide syncs every pipeline and stage and
  * only skips CASE_EXCLUDED_STAGE_IDS (src/constants/hubspot.mjs), which match in both portals.
+ *
+ * excludedStaffingAssociationTypeIds: Case -> BCBA / BT/RBT association types that must not
+ * sync (unlabeled BCBA, unlabeled BT/RBT, Potential IA, Potential Supervising, Potential BT 1,
+ * Potential BT 2, Previous IA).
  */
-export const HUBSPOT_PORTAL = Object.freeze({
-  // --- SANDBOX 52311591 (active) ---
-  portalId: "52311591",
-  bcbaObjectTypeId: "2-72890322",
-  btRbtObjectTypeId: "2-72890325",
-  // Case -> BCBA / BT/RBT association types that must not sync: unlabeled BCBA 164,
-  // unlabeled BT/RBT 187, Potential IA 251, Potential Supervising 249, Potential BT 1 242,
-  // Potential BT 2 218, Previous IA 235.
-  excludedStaffingAssociationTypeIds: Object.freeze([164, 187, 251, 249, 242, 218, 235])
-
-  // --- PRODUCTION 50317927 (swap in after sandbox testing) ---
-  // portalId: "50317927",
-  // bcbaObjectTypeId: "2-48354212",
-  // btRbtObjectTypeId: "2-48354559",
-  // // Unlabeled BCBA 20, unlabeled BT/RBT 64, Potential IA 153, Potential Supervising 80,
-  // // Potential BT 1 74, Potential BT 2 164, Previous IA 286.
-  // excludedStaffingAssociationTypeIds: Object.freeze([20, 64, 153, 80, 74, 164, 286])
+export const HUBSPOT_PORTALS = Object.freeze({
+  // Sandbox
+  "52311591": Object.freeze({
+    bcbaObjectTypeId: "2-72890322",
+    btRbtObjectTypeId: "2-72890325",
+    excludedStaffingAssociationTypeIds: Object.freeze([164, 187, 251, 249, 242, 218, 235]),
+    staffingRoleAssociationTypeIds: Object.freeze({
+      supervisingBcba: 247,
+      initialAssessmentBcba: 223,
+      reEvaluationBcba: 229,
+      primaryBt1: 238,
+      primaryBt2: 240
+    })
+  }),
+  // Production
+  "50317927": Object.freeze({
+    bcbaObjectTypeId: "2-48354212",
+    btRbtObjectTypeId: "2-48354559",
+    excludedStaffingAssociationTypeIds: Object.freeze([20, 64, 153, 80, 74, 164, 286]),
+    staffingRoleAssociationTypeIds: Object.freeze({
+      supervisingBcba: 82,
+      initialAssessmentBcba: 86,
+      reEvaluationBcba: 145,
+      primaryBt1: 76,
+      primaryBt2: 143
+    })
+  })
 });
 
+// The object type settings no longer override the table. They may be left out; a value that
+// differs from the table is invalid configuration.
+const PORTAL_OBJECT_TYPE_ENV_NAMES = Object.freeze({
+  HS_BCBA_OBJECT_TYPE_ID: "bcbaObjectTypeId",
+  HS_BT_RBT_OBJECT_TYPE_ID: "btRbtObjectTypeId"
+});
+
+function invalidConfiguration(name) {
+  return new Error(`Invalid configuration: ${name}`);
+}
+
+// The table row for one portal ID. Throws for any portal that is not in the table.
+export function hubspotPortalSettings(portalId) {
+  const id = String(portalId ?? "").trim();
+  if (!Object.hasOwn(HUBSPOT_PORTALS, id)) {
+    throw invalidConfiguration("HUBSPOT_PORTAL_ID");
+  }
+  return { portalId: id, ...HUBSPOT_PORTALS[id] };
+}
+
+function invalidPortalEnvNames(env) {
+  const portalId = String(env.HUBSPOT_PORTAL_ID ?? "").trim();
+  if (!portalId) {
+    return [];
+  }
+  if (!Object.hasOwn(HUBSPOT_PORTALS, portalId)) {
+    return ["HUBSPOT_PORTAL_ID"];
+  }
+  return Object.entries(PORTAL_OBJECT_TYPE_ENV_NAMES)
+    .filter(([name, key]) => {
+      const value = String(env[name] ?? "").trim();
+      return value !== "" && value !== HUBSPOT_PORTALS[portalId][key];
+    })
+    .map(([name]) => name);
+}
+
+// The configured portal and its table row, read from the app settings at call time.
+export function resolveHubSpotPortal(env = process.env) {
+  const portal = hubspotPortalSettings(env.HUBSPOT_PORTAL_ID);
+  const invalid = invalidPortalEnvNames(env);
+  if (invalid.length > 0) {
+    throw invalidConfiguration(invalid.join(", "));
+  }
+  return portal;
+}
+
 export function hubspotPortalId() {
-  return getOptionalEnv("HUBSPOT_PORTAL_ID", HUBSPOT_PORTAL.portalId);
-}
-
-export function hubspotBcbaObjectTypeId() {
-  return getOptionalEnv("HS_BCBA_OBJECT_TYPE_ID", HUBSPOT_PORTAL.bcbaObjectTypeId);
-}
-
-export function hubspotBtRbtObjectTypeId() {
-  return getOptionalEnv("HS_BT_RBT_OBJECT_TYPE_ID", HUBSPOT_PORTAL.btRbtObjectTypeId);
+  return resolveHubSpotPortal().portalId;
 }
 
 // Guide: skip test_record = true in normal processing. Set INCLUDE_TEST_RECORDS=true only for a
@@ -162,27 +216,14 @@ function isPlaceholderValue(value) {
   );
 }
 
-export function validateConfig() {
-  const missing = [];
-  const placeholders = [];
-
-  REQUIRED_ENV_NAMES.forEach((name) => {
-    const value = process.env[name];
-    if (!value || value.trim() === "") {
-      missing.push(name);
-      return;
-    }
-
-    if (isPlaceholderValue(value)) {
-      placeholders.push(name);
-    }
-  });
-
-  return {
-    isValid: missing.length === 0 && placeholders.length === 0,
-    missing,
-    placeholders
-  };
+function invalidLeaseEnvNames(env) {
+  const raw = String(env.LEASE_TTL_SECONDS ?? "").trim();
+  if (!raw) {
+    return [];
+  }
+  const seconds = Number(raw);
+  const outlivesTheRun = Number.isFinite(seconds) && seconds > FUNCTION_TIMEOUT_SECONDS;
+  return outlivesTheRun ? [] : ["LEASE_TTL_SECONDS"];
 }
 
 function validateEnvNames(requiredNames) {
@@ -201,11 +242,35 @@ function validateEnvNames(requiredNames) {
     }
   });
 
+  // Set, but with a value the integration must not run with.
+  const invalid = [...invalidPortalEnvNames(process.env), ...invalidLeaseEnvNames(process.env)];
+
   return {
-    isValid: missing.length === 0 && placeholders.length === 0,
+    isValid: missing.length === 0 && placeholders.length === 0 && invalid.length === 0,
     missing,
-    placeholders
+    placeholders,
+    invalid
   };
+}
+
+function assertValidConfiguration(validation) {
+  if (validation.isValid) {
+    return;
+  }
+  const details = [
+    validation.missing.length > 0 ? `Missing variables: ${validation.missing.join(", ")}` : "",
+    validation.placeholders.length > 0
+      ? `Placeholder variables: ${validation.placeholders.join(", ")}`
+      : "",
+    validation.invalid.length > 0 ? `Invalid variables: ${validation.invalid.join(", ")}` : ""
+  ]
+    .filter(Boolean)
+    .join(". ");
+  throw new Error(`Configuration validation failed. ${details}`);
+}
+
+export function validateConfig() {
+  return validateEnvNames(REQUIRED_ENV_NAMES);
 }
 
 export function validateIntakePollerConfig() {
@@ -213,26 +278,16 @@ export function validateIntakePollerConfig() {
 }
 
 export function getIntakePollerConfig() {
-  const validation = validateIntakePollerConfig();
-  if (!validation.isValid) {
-    const missingMessage =
-      validation.missing.length > 0
-        ? `Missing variables: ${validation.missing.join(", ")}`
-        : "";
-    const placeholderMessage =
-      validation.placeholders.length > 0
-        ? `Placeholder variables: ${validation.placeholders.join(", ")}`
-        : "";
-    const details = [missingMessage, placeholderMessage].filter(Boolean).join(". ");
-    throw new Error(`Configuration validation failed. ${details}`);
-  }
+  assertValidConfiguration(validateIntakePollerConfig());
+  const portal = resolveHubSpotPortal();
 
   return {
     hubspot: {
       privateAppToken: getRequiredEnv("HUBSPOT_PRIVATE_APP_TOKEN"),
       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
-      btRbtObjectTypeId: hubspotBtRbtObjectTypeId(),
-      bcbaObjectTypeId: hubspotBcbaObjectTypeId()
+      hubspotPortalId: portal.portalId,
+      btRbtObjectTypeId: portal.btRbtObjectTypeId,
+      bcbaObjectTypeId: portal.bcbaObjectTypeId
     },
     limits: {
       maxDealsPerRun: Number(getRequiredEnv("MAX_DEALS_PER_RUN")),
@@ -264,19 +319,8 @@ export function getIntakePollerConfig() {
 }
 
 export function getConfig() {
-  const validation = validateConfig();
-  if (!validation.isValid) {
-    const missingMessage =
-      validation.missing.length > 0
-        ? `Missing variables: ${validation.missing.join(", ")}`
-        : "";
-    const placeholderMessage =
-      validation.placeholders.length > 0
-        ? `Placeholder variables: ${validation.placeholders.join(", ")}`
-        : "";
-    const details = [missingMessage, placeholderMessage].filter(Boolean).join(". ");
-    throw new Error(`Configuration validation failed. ${details}`);
-  }
+  assertValidConfiguration(validateConfig());
+  const portal = resolveHubSpotPortal();
 
   return {
     centralReach: {
@@ -290,9 +334,9 @@ export function getConfig() {
       privateAppToken: getRequiredEnv("HUBSPOT_PRIVATE_APP_TOKEN"),
       baseUrl: getRequiredEnv("HUBSPOT_BASE_URL"),
       crContactIdProperty: getRequiredEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY"),
-      btRbtObjectTypeId: hubspotBtRbtObjectTypeId(),
-      bcbaObjectTypeId: hubspotBcbaObjectTypeId(),
-      hubspotPortalId: hubspotPortalId(),
+      btRbtObjectTypeId: portal.btRbtObjectTypeId,
+      bcbaObjectTypeId: portal.bcbaObjectTypeId,
+      hubspotPortalId: portal.portalId,
       employeeIdProperty: getOptionalEnv("HUBSPOT_EMPLOYEE_ID_PROPERTY", "employee_id")
     },
     sync: {

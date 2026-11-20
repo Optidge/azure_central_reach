@@ -1,5 +1,6 @@
 import axios from "axios";
-import { withRetry } from "./retry.mjs";
+import { retryAfterSeconds, withRetry } from "./retry.mjs";
+import { unreadableAnswerError } from "./unreadableAnswer.mjs";
 import {
   CENTRAL_REACH_METADATA_FIELD_TYPES,
   EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH
@@ -38,6 +39,13 @@ export function createCentralReachClient(config) {
   return centralReachHttpClient;
 }
 
+// A token request that fails is a credentials or sign-in problem, not a problem with the
+// record. Whatever the status, it is retried and ends in the dead-letter alert (decision 6).
+function asAuthFailure(error) {
+  error.code = "CR_AUTH_FAILED";
+  return error;
+}
+
 export async function getCentralReachAccessToken() {
   if (!centralReachConfig) {
     throw new Error("CentralReach client is not initialized");
@@ -58,25 +66,30 @@ export async function getCentralReachAccessToken() {
     scope: "cr-api"
   });
 
-  const response = await withRetry(
-    () =>
-      axios.post(centralReachConfig.centralReach.tokenUrl, body.toString(), {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json"
-        },
-        timeout: 15000
-      }),
-    {
-      maxAttempts: 3,
-      baseDelayMs: 400,
-      maxDelayMs: 5000
-    }
-  );
+  let response;
+  try {
+    response = await withRetry(
+      () =>
+        axios.post(centralReachConfig.centralReach.tokenUrl, body.toString(), {
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json"
+          },
+          timeout: 15000
+        }),
+      {
+        maxAttempts: 3,
+        baseDelayMs: 400,
+        maxDelayMs: 5000
+      }
+    );
+  } catch (error) {
+    throw asAuthFailure(error);
+  }
 
   const accessToken = response?.data?.access_token;
   if (!accessToken) {
-    throw new Error("CentralReach token request failed: access_token missing");
+    throw asAuthFailure(new Error("CentralReach token request failed: access_token missing"));
   }
 
   const expiresIn = Number(response?.data?.expires_in || 3600);
@@ -122,27 +135,39 @@ async function findByExternalSystemId(kind, id) {
     missing.code = "CR_EXTERNAL_ID_REQUIRED";
     throw missing;
   }
+  let response;
   try {
-    const response = await crRequest(
+    response = await crSend(
       `/contacts/${kind}/byExternalSystemId?ExternalSystemId=${encodeURIComponent(normalized)}`,
       { method: "GET" }
     );
-    const crContactId = readLookupContactId(response);
-    if (!crContactId) {
-      const unknown = new Error(`CentralReach ${kind} lookup returned no contactId`);
-      unknown.code = "CR_LOOKUP_UNKNOWN";
-      throw unknown;
-    }
-    return { found: true, crContactId };
   } catch (error) {
-    if (error?.code === "CR_LOOKUP_UNKNOWN" || error?.code === "CR_EXTERNAL_ID_REQUIRED") {
-      throw error;
-    }
     if (error?.response?.status === 404) {
       return { found: false, crContactId: null };
     }
+    // Not 200 and not 404: the answer is unclear. Retry later, whatever the status was.
+    error.code = "CR_LOOKUP_UNKNOWN";
     throw error;
   }
+  const crContactId = readLookupContactId(response?.data);
+  if (!crContactId) {
+    throw lookupWithoutContactId(kind, response);
+  }
+  return { found: true, crContactId };
+}
+
+// A 200 with no contact ID cannot be read as found or as not found. It is a permanent error,
+// never a create (BUILD-PLAN Stage 2, decision 4).
+export function lookupWithoutContactId(kind, response) {
+  return unreadableAnswerError({
+    code: "CR_LOOKUP_UNREADABLE",
+    call: `GET /contacts/${kind}/byExternalSystemId`,
+    status: response?.status,
+    expected: `the ${kind} under contact, with contactId`,
+    expectedFields: ["contact", "contact.contactId"],
+    reasonField: "contact.contactId",
+    answer: response?.data
+  });
 }
 
 export function findEmployeeByExternalSystemId(id) {
@@ -226,7 +251,21 @@ function markCreateOutcome(error) {
   return error;
 }
 
-async function crRequest(path, { method = "GET", body, suppressRetry = false } = {}) {
+// CentralReach accepted the create but the answer names no contact ID. The record may exist, so
+// this is an unknown outcome too, not a plain error.
+function createWithoutContactId(entity) {
+  const error = new Error(`CentralReach ${entity} create succeeded but returned no contactId`);
+  error.code = "CR_CREATE_OUTCOME_UNKNOWN";
+  return error;
+}
+
+async function crRequest(path, options) {
+  const response = await crSend(path, options);
+  return response?.data || null;
+}
+
+// The full response, for readers that need the HTTP status as well as the body.
+async function crSend(path, { method = "GET", body, suppressRetry = false } = {}) {
   if (!centralReachHttpClient || !centralReachConfig) {
     throw new Error("CentralReach client is not initialized");
   }
@@ -243,13 +282,11 @@ async function crRequest(path, { method = "GET", body, suppressRetry = false } =
       }
     });
 
-  const response = suppressRetry ? await request() : await withRetry(request, {
+  return suppressRetry ? request() : withRetry(request, {
     maxAttempts: 3,
     baseDelayMs: 400,
     maxDelayMs: 5000
   });
-
-  return response?.data || null;
 }
 
 async function updateClientByExternalSystemId(payload) {
@@ -317,7 +354,7 @@ export async function createOrUpdateClient(payloadOrOptions) {
 
   const crContactId = extractCrContactId(created);
   if (!crContactId) {
-    throw new Error("CentralReach create succeeded but returned no contactId");
+    throw createWithoutContactId("client");
   }
 
   return {
@@ -347,15 +384,22 @@ export async function getEmployeeByContactId(contactId) {
     throw new Error("CentralReach employee contactId is required");
   }
 
-  const employee = await crRequest(`/contacts/employee/${normalizedId}`, { method: "GET" });
+  const response = await crSend(`/contacts/employee/${normalizedId}`, { method: "GET" });
+  const employee = response?.data || null;
   // Rule 5.8: an answer that does not show this employee is a failed read. It is never read as
   // "CentralReach holds no External System ID and no email".
   const answeredId = readEmployeeContactId(employee);
   const unreadable = !answeredId && !readCrPrimaryEmail(employee);
   if (unreadable || (answeredId && answeredId !== normalizedId)) {
-    const failed = new Error("CentralReach employee read could not be read");
-    failed.code = "CR_EMPLOYEE_READ_FAILED";
-    throw failed;
+    throw unreadableAnswerError({
+      code: "CR_EMPLOYEE_READ_FAILED",
+      call: "GET /contacts/employee/{id}",
+      status: response?.status,
+      expected: "the requested employee under contact, with its contactId or primaryEmail",
+      expectedFields: ["contact", "contact.contactId", "contact.primaryEmail"],
+      reasonField: "contact.contactId",
+      answer: employee
+    });
   }
   return employee;
 }
@@ -453,7 +497,7 @@ async function createEmployee(payload) {
   }
   const crContactId = extractCrContactId(response);
   if (!crContactId) {
-    throw new Error("CentralReach employee create succeeded but returned no contactId");
+    throw createWithoutContactId("employee");
   }
 
   return {
@@ -563,12 +607,18 @@ async function updateContactLabels(contactId, labelIds) {
     return { operation: "skip_empty" };
   }
 
-  const currentBody = await crRequest(`/contacts/${contactId}/labels`, { method: "GET" });
-  const current = readLabelIds(currentBody);
+  const response = await crSend(`/contacts/${contactId}/labels`, { method: "GET" });
+  const current = readLabelIds(response?.data);
   if (!current) {
-    const failed = new Error("CentralReach label read could not be read as label ids");
-    failed.code = "CR_LABEL_READ_FAILED";
-    throw failed;
+    throw unreadableAnswerError({
+      code: "CR_LABEL_READ_FAILED",
+      call: "GET /contacts/{id}/labels",
+      status: response?.status,
+      expected: "a list of labels, each with a numeric labelId",
+      expectedFields: ["labels", "labelIds", "results"],
+      reasonField: "labels[].labelId",
+      answer: response?.data
+    });
   }
   const union = mergeUniqueNumericIds([...current, ...required]);
   const missing = required.filter((id) => !current.includes(id));
@@ -593,12 +643,20 @@ async function clearMetadataField(contactId, fieldId) {
     if (status === 400 || status === 405 || status === 501) {
       return { fieldId: normalizedFieldId, operation: "clear_unsupported" };
     }
-    return {
-      fieldId: normalizedFieldId,
-      operation: "error",
-      errorMessage: String(error?.message || "Metadata clear failed").slice(0, 300)
-    };
+    return failedMetadataField(normalizedFieldId, error, "Metadata clear failed");
   }
+}
+
+// A failed field keeps its HTTP status and Retry-After, so the failure can be sorted as temporary
+// or permanent and the retry can wait long enough.
+function failedMetadataField(fieldId, error, fallbackMessage) {
+  return {
+    fieldId: Number(fieldId),
+    operation: "error",
+    status: error?.response?.status ?? null,
+    retryAfterSeconds: retryAfterSeconds(error),
+    errorMessage: String(error?.message || fallbackMessage).slice(0, 300)
+  };
 }
 
 async function updateMetadataField(contactId, fieldId, value) {
@@ -658,23 +716,27 @@ export async function updateClientMetadata(contactId, metadataValues, options = 
           : await updateMetadataField(normalizedContactId, fieldId, value);
       results.push(result);
     } catch (error) {
-      results.push({
-        fieldId: Number(fieldId),
-        operation: "error",
-        errorMessage: String(error?.message || "Metadata update failed").slice(0, 300)
-      });
+      results.push(failedMetadataField(fieldId, error, "Metadata update failed"));
     }
   }
+
+  const failed = results.filter(
+    (item) => item.operation === "error" || item.operation === "clear_unsupported"
+  );
 
   return {
     labelResult,
     totalFields: results.length,
     updatedCount: results.filter((item) => item.operation === "updated" || item.operation === "cleared").length,
     skippedEmptyCount: results.filter((item) => item.operation === "skip_empty").length,
-    failedCount: results.filter((item) => item.operation === "error" || item.operation === "clear_unsupported").length,
-    failedFieldIds: results
-      .filter((item) => item.operation === "error" || item.operation === "clear_unsupported")
-      .map((item) => item.fieldId),
+    failedCount: failed.length,
+    failedFieldIds: failed.map((item) => item.fieldId),
+    failedFields: failed.map((item) => ({
+      fieldId: item.fieldId,
+      operation: item.operation,
+      status: item.status ?? null,
+      retryAfterSeconds: item.retryAfterSeconds ?? null
+    })),
     clearUnsupportedFieldIds: results
       .filter((item) => item.operation === "clear_unsupported")
       .map((item) => item.fieldId),

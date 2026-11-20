@@ -14,6 +14,7 @@ import {
   metadataClearFieldIds,
   normalizeBlank
 } from "../../lib/mappedState.mjs";
+import { hubspotPortalSettings } from "../../lib/config.mjs";
 import { retryDelayMs } from "../../lib/retry.mjs";
 import { filterWritebackProperties } from "../../lib/writebackAllowlist.mjs";
 import { isLinkedForOngoingRefresh } from "../../workflows/intakePollerWorkflow.mjs";
@@ -21,14 +22,24 @@ import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 
 test("association sets ignore order and excluded role types", () => {
-  const first = associationsForComparison([
-    { toObjectId: "20", typeIds: [76, 64] },
-    { toObjectId: "10", typeIds: [82, 20] }
-  ]);
-  const second = associationsForComparison([
-    { toObjectId: "10", typeIds: [20, 82] },
-    { toObjectId: "20", typeIds: [64, 76] }
-  ]);
+  // Stage 2 (row 2.6): the excluded types are passed in from the portal table. These rows use
+  // production ids (unlabeled BT/RBT 64, unlabeled BCBA 20).
+  const excluded = hubspotPortalSettings("50317927").excludedStaffingAssociationTypeIds;
+  const first = associationsForComparison(
+    [
+      { toObjectId: "20", typeIds: [76, 64] },
+      { toObjectId: "10", typeIds: [82, 20] }
+    ],
+    excluded
+  );
+  const second = associationsForComparison(
+    [
+      { toObjectId: "10", typeIds: [20, 82] },
+      { toObjectId: "20", typeIds: [64, 76] }
+    ],
+    excluded
+  );
+  assert.deepEqual(first.map((row) => row.typeIds), [[76], [82]]);
   const left = buildComparableState({
     core: { FirstName: "A" },
     metadata: {},
@@ -131,13 +142,14 @@ test("linked recheck does not require stage or a newer timestamp", () => {
 });
 
 function clientDeps(overrides = {}) {
-  const calls = { upserts: [], metadata: [], writebacks: [] };
+  const calls = { upserts: [], metadata: [], writebacks: [], stateWrites: [] };
   const deps = {
     getConfig: () => ({
       hubspot: {
         crContactIdProperty: "client_id_number",
         bcbaObjectTypeId: "2-bcba",
-        btRbtObjectTypeId: "2-bt"
+        btRbtObjectTypeId: "2-bt",
+        hubspotPortalId: "52311591"
       },
       ttl: { successTtlSeconds: 10, failTtlSeconds: 10, leaseTtlSeconds: 30 }
     }),
@@ -164,7 +176,9 @@ function clientDeps(overrides = {}) {
     updateDealProperties: async (dealId, properties) => {
       calls.writebacks.push({ dealId, properties });
     },
-    putState: async () => {},
+    putState: async (input) => {
+      calls.stateWrites.push(input);
+    },
     safeLog: () => {},
     buildErrorLog: () => ({})
   };
@@ -185,10 +199,13 @@ test("client metadata-only change skips nothing required and label order does no
   assert.equal(first.calls.metadata.length, 1);
 
   const savedHash = first.calls.writebacks[0].properties.last_sync_hash;
+  // Stage 2 (row 2.4): a no-op needs the clean link record the first run saved in Cosmos.
+  const savedLink = first.calls.stateWrites.filter((item) => item.type === "link").at(-1);
+  assert.equal(savedLink.data.clean, true);
   const second = clientDeps({
     deal: { id: "deal-1", properties: { last_sync_hash: savedHash, client_id_number: "2001" } },
     metadata: { labelIds: [1, 2], metadataValues: { 126214: "peanuts" } },
-    prior: { data: { fieldHashes: {} } }
+    prior: { data: savedLink.data }
   });
   const result = await runClientSyncWorkflow({ dealId: "deal-1", source: "linkedRecheck" }, second.deps);
   assert.equal(result.status, "noop");
@@ -207,8 +224,9 @@ test("client read failure does not write a blank baseline", async () => {
   };
   await assert.rejects(runClientSyncWorkflow({ dealId: "deal-1" }, deps), /HubSpotReadFailed/);
   assert.equal(calls.upserts.length, 0);
-  assert.equal(calls.writebacks[0].properties.last_sync_hash, undefined);
-  assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
+  // Stage 2 (decisions 1 and 6): a refused HubSpot read is retried and HubSpot keeps its last
+  // status, so nothing is written back at all.
+  assert.equal(calls.writebacks.length, 0);
 });
 
 test("stored CentralReach id is reused when HubSpot writeback has not landed", async () => {
@@ -227,7 +245,12 @@ test("employee timestamp shortcut no longer skips a mapped change", async () => 
     { recordId: "1", employeeType: "bt_rbt", source: "linkedRecheck" },
     {
       getConfig: () => ({
-        hubspot: { btRbtObjectTypeId: "2-bt", bcbaObjectTypeId: "2-bcba", employeeIdProperty: "employee_id" },
+        hubspot: {
+          btRbtObjectTypeId: "2-bt",
+          bcbaObjectTypeId: "2-bcba",
+          employeeIdProperty: "employee_id",
+          hubspotPortalId: "52311591"
+        },
         features: { allowEmployeeCreate: true, putOnlyMode: false },
         ttl: { successTtlSeconds: 10, failTtlSeconds: 10 }
       }),

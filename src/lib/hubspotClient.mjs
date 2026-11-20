@@ -135,6 +135,14 @@ export function createHubSpotClient(config) {
     },
     timeout: 15000
   });
+  // HubSpot and CentralReach failures are sorted by different rules (src/lib/retry.mjs), so a
+  // HubSpot failure says where it came from.
+  hubSpotHttpClient.interceptors.response.use(undefined, (error) => {
+    if (error && typeof error === "object") {
+      error.provider = "hubspot";
+    }
+    return Promise.reject(error);
+  });
 
   return hubSpotHttpClient;
 }

@@ -19,7 +19,7 @@ This file is written so a builder with no history of the project can build from 
 |---|---|---|---|
 | 0 | Prep: decisions recorded, guide aligned, guide copy saved, baseline test run | Claude, Zeke | Stage 1 starts |
 | 1 | Create and identity checks | Grok built, Claude reviewed and fixed (done, `ef83b6b`) | Reviewed diff, `npm test` green |
-| 2 | Durable state and retries | Claude builder agent builds, Claude reviewer agent reviews, the orchestrator verifies | same |
+| 2 | Durable state and retries | Claude builder agent builds, Claude reviewer agent reviews, the orchestrator verifies (built and reviewed 2026-11-18, `npm test` 402 pass, committed 2026-11-20) | same |
 | 3 | Poller and fewer calls | same | same |
 | 4 | Case mappings | same | same |
 | 5 | Employee mappings | same | same |
@@ -350,6 +350,22 @@ More files for this stage: `src/lib/hubspotWebhook.mjs`, `src/workflows/intakePo
 
 **Not in Stage 2:** poller changes, the no-op that writes nothing, mappings.
 
+**Stage 2 status, 2026-11-18.** Built by the Claude builder agent (Fable 5.2), reviewed by the reviewer agent (Opus 5.5) from the diff alone, and every finding confirmed by the orchestrator by running code. Rows 2.1 to 2.11 and every addition are built; no row was left out. `npm test` 402 pass (237 before the stage). Committed 2026-11-20 on Zeke's word. The review found no path that creates a duplicate, writes to the wrong CentralReach record or calls CentralReach for a gated record. It found eleven points (S2-R1 to S2-R11): five fixed with tests, six left as built, each recorded in OPEN-ITEMS section 6.
+
+Where the build now differs from the rows above (the review fixes and the builder's additions). These win over the rows:
+
+| Row | What is built | Why |
+|---|---|---|
+| 2.5 | The lease's Cosmos item lives twice as long as the lease (`ttl` 1320 seconds for a 660-second lease). The lease still ends at its own `expiresAt`. A conflict with nothing to read is followed by one more create, then the record is busy. | S2-R1: Cosmos stops returning an item once its ttl has passed, so an item that expired together with the lease could never be read and taken over. A crashed run would have kept its record busy until Cosmos deleted the item. |
+| 2.8 (b), decision 5 | A failure **before the gate is checked** (a busy record, a failed HubSpot read, a failed Cosmos read) writes nothing to HubSpot, also on the last attempt. The message still dead-letters and the alert fires. "Retries used up" is written only for a record that passed the gate in that run. | S2-R3, rule 5.1: before the record is read the worker cannot know whether the gate lets it write. A busy run also does not overwrite the status of the run that holds the record. **Confirmed by Zeke 2026-11-20 (OPEN-ITEMS section 1, row 23).** |
+| 2.7, decision 6 | A failed CentralReach token request is temporary whatever its status (`CR_AUTH_FAILED`). | S2-R2: a 400 from the token call was sorted as permanent, so a wrong or rotated secret would have marked every record `error` with no retry and no alert. **Confirmed by Zeke 2026-11-20 (OPEN-ITEMS section 1, row 23).** |
+| 2.10 | No retry is scheduled more than 24 hours out, whatever Retry-After says. | S2-R8. 24 hours is HubSpot's longest Retry-After (decision 1). |
+| 2.3 (b) | A pending ID that is a Workday ID, found on a CentralReach employee that another HubSpot record already holds, is `error` "Another HubSpot record is already linked", not a link. | Builder's addition. Without it two records with one Workday ID could link to one employee after a timed-out create. **Confirmed by Zeke 2026-11-20 (OPEN-ITEMS section 1, row 23).** |
+| 2.6 | The webhook answers 503 and queues nothing when the portal settings are invalid. HubSpot retries a 503. | Builder's addition; the plan did not state this case. |
+| 2.7, decision 1 | A HubSpot 4xx other than 400 and 404 (405, 409, 415, 422) is retried and ends in "Retries used up" and the alert. | The decision names only 400 and 404 as permanent. **Confirmed by Zeke 2026-11-20 (OPEN-ITEMS section 1, row 23).** |
+
+Workflow contract after this stage: a workflow that returns is finished; a workflow that throws wants a retry. The queue function only schedules. Link record: partition `sync:employee` or `sync:client`, `ttl: -1`; attempt record: `sync-attempt:*`. Every key starts with the portal ID.
+
 ## 9. Stage 3 — Poller and fewer calls
 
 **Goal.** The poller becomes an hourly safety check that never loses its place and never touches a record outside the gate. A record with no change costs reads only and writes nothing.
@@ -375,7 +391,14 @@ More files for this stage: `src/lib/hubspotWebhook.mjs`, `src/workflows/intakePo
 **From the Stage 1 review (2026-11-18), for step 3.7.** Two cases write on every run today. Step 3.7 must end both, and its tests must name them:
 
 - A linked employee that is `waiting` (CR still holds the temporary ID) with no field change: each run writes the same `waiting` status to HubSpot again. No CR write.
-- A linked employee whose status is `error` but whose updates continue (checklist ticked while CR holds the temporary ID): `last_sync_hash` is not saved on an `error`, so each run sends the same update to CR again.
+- A linked employee whose status is `error` but whose updates continue (checklist ticked while CR holds the temporary ID): `last_sync_hash` is not saved on an `error`, so each run sends the same update to CR again. Confirmed again in the Stage 2 review (S2-R6): three runs sent three identical updates, although the Cosmos record was clean and its hashes matched.
+
+**From the Stage 2 review (2026-11-18), for this stage.**
+
+- The poller's lease, dedupe entries and recheck cursor, and the webhook's coalesce key, carry no portal ID. Rows 3.2, 3.5 and 3.11 rebuild or remove all of them; the new keys carry the portal ID (Stage 2 addition, row 2.6).
+- The employee queue function has no list of allowed sources, so `dailySweep` (row 3.5) needs adding to the Case queue function only.
+- `README.md` still describes the retired `HUBSPOT_PORTAL_ID_TEST` setting and the old object type override (row 3.11).
+- The poller's portal stamping is proven by one direct test of the senders and one test that reads the source text. Replace the source-text test with a real run once the poller takes `dependencies` (row 3.2).
 
 **Stage 3 additions from the plan check (2026-11-18).** Same rules as the Stage 2 additions: they are part of the rows above and win where they differ. Decisions 7 and 8 are answered below the table.
 
@@ -479,7 +502,7 @@ Live testing of Stage 6 waits for the sandbox Contact workflow. The code and its
 |---|---|---|---|
 | 7.1 | Finish `SANDBOX-TEST-PLAN.md` from the draft list below and the rules in section 5. The record convention (Zeke, 2026-11-18) is already in that file. Keep it. From the Stage 1 review: check every property name in the convention against the finished mappers before round 1, because Stage 5 changes the employee state, address and apartment properties (steps 5.2, 5.4, 5.9, 5.11). | Claude | Zeke agrees |
 | 7.2 | Sandbox HubSpot: one fresh Case, BT/RBT, and BCBA per round, named in `SANDBOX-TEST-PLAN.md` (`sandbox_test_field` = true, `test_record` blank, Entered in CentralReach blank until its test). Log HubSpot and CentralReach IDs in `sandbox-test-log.md`. Every webhook workflow filters on its test list (`1463` Deals, `1464` BCBAs, `1465` BT/RBTs). The employee ongoing-update workflows trigger on `workday_id` and the checklist. Failures and waiting views per object. Trigger lists exported into `webhook-triggers.json`. | Zeke | `npm run check:triggers` passes |
-| 7.3 | Azure, app Stopped, each write on Zeke's go-ahead: settings for `52311591` (portal ID, both object type IDs); the sandbox token and webhook secret entered by Zeke in the portal; `SYNC_RECORD_GATE_PROPERTY` = `sandbox_test_field`; remove the six unused pipeline and allowlist settings and the settings Stage 3 retired; safe switches (poller and both workers disabled, `ALLOW_EMPLOYEE_CREATE` = `false`, `PUT_ONLY_MODE` = `true`); purge both dead-letter queues (never replay); confirm both queues are empty and Cosmos holds nothing from `50850427`; one email alert on dead-letter count above zero; deploy the reviewed commit and record its hash and the function timeout. | Zeke, or Claude through the Azure CLI on Zeke's go-ahead for each write | Every value read back (setting names, never values); app still Stopped |
+| 7.3 | Azure, app Stopped, each write on Zeke's go-ahead: settings for `52311591` (portal ID, both object type IDs); the sandbox token and webhook secret entered by Zeke in the portal; `SYNC_RECORD_GATE_PROPERTY` = `sandbox_test_field`; remove the six unused pipeline and allowlist settings and the settings Stage 3 retired; safe switches (poller and both workers disabled, `ALLOW_EMPLOYEE_CREATE` = `false`, `PUT_ONLY_MODE` = `true`); purge both dead-letter queues (never replay); confirm both queues are empty and Cosmos holds nothing from `50850427`; one email alert on dead-letter count above zero; deploy the reviewed commit and record its hash and the function timeout. From Stage 2: `LEASE_TTL_SECONDS` = `660` (600 or less is invalid configuration and nothing syncs); `HUBSPOT_PORTAL_ID` is required and must be `52311591`; the two object type settings must equal the portal table or be removed; `HUBSPOT_PORTAL_ID_TEST` is no longer read and is removed. Cosmos records written before Stage 2 have keys without the portal ID and are never read again, so the first run of each linked record after the deploy is one full write. Check whether duplicate detection can be turned on for `employee-sync-queue` without recreating it (S2-R5, OPEN-ITEMS section 6). | Zeke, or Claude through the Azure CLI on Zeke's go-ahead for each write | Every value read back (setting names, never values); app still Stopped |
 | 7.4 | From the Stage 1 review. Before round 1, confirm the answer shape of `GET /contacts/{id}/labels` with one read-only GET on a test contact Zeke names. Record the field names only, never values. The code reads a label ID only from `labelId` or a plain number (`readLabelIds` in `src/lib/centralReachClient.mjs`). If CR names the field differently, change that reader and its test first. Until it matches, every create and update stops at the label step with `error`: the core fields are written, the labels and metadata are not. | Zeke runs the GET; Claude changes the reader | The reader matches the real answer; `npm test` passes |
 
 ### Stage 8 — Full sandbox testing

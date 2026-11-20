@@ -18,7 +18,8 @@ export async function connectivityTest(request, context) {
         missingCount: validation.missing.length,
         placeholderCount: validation.placeholders.length,
         missingNames: validation.missing,
-        placeholderNames: validation.placeholders
+        placeholderNames: validation.placeholders,
+        invalidNames: validation.invalid
       },
       clients: {
         hubspot: false,

@@ -1,6 +1,6 @@
 # Sandbox test plan
 
-Agreed record convention, Zeke, 2026-11-18. The same day Zeke confirmed four additions from the Stage 1 review: the BT/RBT has its own email, a rule for `workday_id`, a state on every record, and a cleanup step after each round. The rest of this plan is still the draft list in [BUILD-PLAN.md](BUILD-PLAN.md) Stage 8. Stage 7 writes those tests here. Do not drop the convention below when that happens.
+Agreed record convention, Zeke, 2026-11-18. The same day Zeke confirmed four additions from the Stage 1 review: the BT/RBT has its own email, a rule for `workday_id`, a state on every record, and a cleanup step after each round. On 2026-11-18 Zeke added two more rules: the state varies across New York, Colorado and New Jersey, one state per round, and every record is created with Sandbox Test Field = Yes. The rest of this plan is still the draft list in [BUILD-PLAN.md](BUILD-PLAN.md) Stage 8. Stage 7 writes those tests here. Do not drop the convention below when that happens.
 
 `npm test` does not create these records. It uses fake properties in `src/tests/smoke/`.
 
@@ -12,13 +12,25 @@ CentralReach has no sandbox. A create in a round writes a real employee or clien
 
 On every record:
 
-- `sandbox_test_field` = true. That puts the record in list 1463 (Deals), 1464 (BCBAs), or 1465 (BT/RBTs).
+- **Sandbox Test Field = Yes on every record, set when the record is created** (`sandbox_test_field` = true; the HubSpot checkbox shows Yes). No exceptions: the Case, the BT/RBT and the BCBA in every round. That puts the record in list 1463 (Deals), 1464 (BCBAs), or 1465 (BT/RBTs). A record without it is skipped by the record gate and by the webhook workflows, so it tests nothing. Do not create the record first and tick the box later: the create webhook would fire before the record is in the list.
 - `test_record` stays blank. The integration skips `test_record` = true.
 - Each name contains the words Azure Test and the round number. A small variation is allowed. The standard names below are the ones to use.
 
 Before round 1, every property name below is checked against the finished mappers (BUILD-PLAN step 7.1). Stage 5 changes the employee state, address and apartment properties.
 
 `N` is the round number as digits, with no leading zero. Round 1 is `1`. `NN` is the same number in two digits. Round 1 is `01`. This phone pattern fits rounds 1 through 99.
+
+### State by round
+
+The state changes each round so New York, Colorado and New Jersey are all tested, one state per round. The Case, the BT/RBT and the BCBA in one round share that round's state.
+
+| Round | State |
+| --- | --- |
+| 1, 4, 7, ... | New York |
+| 2, 5, 8, ... | Colorado |
+| 3, 6, 9, ... | New Jersey |
+
+"The round's state" below means this value. Pick the HubSpot option with the full state name. Round 1 stays New York, so nothing already agreed for round 1 changes. A full pass of the Stage 8 tests needs at least three rounds, one per state; each round leaves three contacts in production CentralReach.
 
 ### Case (HubSpot Deal)
 
@@ -37,7 +49,7 @@ The code sends `phi_first_name__cloned_` and `phi_last_name` to CentralReach. `d
 | `phone` | 212-555-NN01 |
 | `phone_number__second_` | 212-555-NN02 |
 | `home_apt` | NE |
-| `location` | New York. This gives the client the NY Client label. |
+| `location` | The round's state. It decides the client's state label (New York gives NY Client). |
 
 Production CentralReach shows this client as Zeke Swanson Azure Test #N.
 
@@ -58,7 +70,7 @@ The code sends `first_name`, `last_name`, and `email`. `bt_name` is the HubSpot 
 | `home_apt` | NE |
 | `workday_id` | See "Workday ID" below. |
 | `bt_rbt_type` | BT |
-| State | New York, in `location_home` (what the Stage 1 code reads) and in `location` and `state_home` (what Stage 5 reads). |
+| State | The round's state, in `location_home` (what the Stage 1 code reads) and in `location` and `state_home` (what Stage 5 reads). |
 
 Production CentralReach shows this employee as Jane Swanson Azure Test #N.
 
@@ -77,7 +89,7 @@ The code sends `first_name`, `last_name`, and `ucaba_email_address`. `bcba_name`
 | `employee_phone` | 212-555-NN04 |
 | `home_apt` | NE |
 | `workday_id` | See "Workday ID" below. |
-| State | New York, in `home_state` (what the Stage 1 code reads) and in `location` and `state_home` (what Stage 5 reads). |
+| State | The round's state, in `home_state` (what the Stage 1 code reads) and in `location` and `state_home` (what Stage 5 reads). |
 
 `ucaba_email_address` is the required primary email. `email` is the personal email. Set the associated Contact `email` to the same personal address when the Contact route is in use.
 
@@ -103,6 +115,8 @@ The integration never deactivates anyone in CentralReach, and the API cannot del
 Not tested yet: whether CentralReach accepts `#` in a name. If a create is rejected for the name, drop the `#` (for example "Swanson Azure Test 1") and note it here.
 
 ### Round 1 example
+
+Round 1 is New York. Round 2 uses the same pattern with Colorado, round 3 with New Jersey.
 
 | Record | Name in CentralReach | Phone | Apartment |
 | --- | --- | --- | --- |

@@ -1,4 +1,4 @@
-import { getConfig } from "../lib/config.mjs";
+import { getConfig, hubspotPortalSettings } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
 import { createHubSpotClient, getDealById, listAssociations, updateDealProperties } from "../lib/hubspotClient.mjs";
@@ -6,6 +6,7 @@ import {
   createCentralReachClient,
   createOrUpdateClient,
   findClientByExternalSystemId,
+  lookupWithoutContactId,
   updateClientMetadata
 } from "../lib/centralReachClient.mjs";
 import { acquireLease, createStateClient, getState, putState, releaseLease } from "../lib/cosmosState.mjs";
@@ -19,16 +20,30 @@ import {
   isStateClientUnavailable,
   metadataClearFieldIds
 } from "../lib/mappedState.mjs";
+import { hashesForContact, saveLinkRecord } from "../lib/linkRecord.mjs";
+import {
+  FAILURE_KINDS,
+  classifyFailure,
+  metadataWriteFailedError,
+  permanentFailureReason
+} from "../lib/retry.mjs";
 import { filterWritebackProperties } from "../lib/writebackAllowlist.mjs";
 import { associationsForComparison } from "../constants/staffingAssociations.mjs";
 import { buildClientPayload } from "../mappings/client/buildClientPayload.mjs";
 import { buildClientMetadata } from "../mappings/client/buildClientMetadata.mjs";
 import { validateClientPayload } from "../mappings/client/validateClientPayload.mjs";
 import { STATE_TYPES } from "../constants/state.mjs";
-import { CASE_CLIENT_ID_MISMATCH, unreadableDate } from "../constants/syncReasons.mjs";
+import {
+  CASE_CLIENT_ID_MISMATCH,
+  RETRIES_USED_UP,
+  unreadableDate
+} from "../constants/syncReasons.mjs";
 import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
 
-const CLIENT_STATE_PK = "sync:client";
+// The link record never expires. Attempt details (last error, invocation) are a second record
+// that may expire. Both ids start with the portal ID.
+const CLIENT_LINK_PK = "sync:client";
+const CLIENT_ATTEMPT_PK = "sync-attempt:client";
 const FALLBACK_CR_CONTACT_ID_PROPERTY = "client_id_number";
 
 const REQUIRED_DEAL_PROPERTIES = [
@@ -165,8 +180,9 @@ function linkProperties(crContactIdProperty, contactId) {
   };
 }
 
+// lastAttempt is set by the queue worker when this message has used its five retries.
 export async function runClientSyncWorkflow(
-  { dealId, hsLastModifiedDate, source, context },
+  { dealId, hsLastModifiedDate, source, context, lastAttempt = false },
   dependencies = {}
 ) {
   const getRuntimeConfig = dependencies.getConfig || getConfig;
@@ -192,6 +208,8 @@ export async function runClientSyncWorkflow(
 
   const normalizedDealId = ensureDealId(dealId);
   const config = getRuntimeConfig();
+  // Any portal that is not in the table is invalid configuration: nothing is read or written.
+  const portal = hubspotPortalSettings(config.hubspot?.hubspotPortalId);
   const crContactIdProperty =
     config.hubspot.crContactIdProperty || FALLBACK_CR_CONTACT_ID_PROPERTY;
 
@@ -199,22 +217,46 @@ export async function runClientSyncWorkflow(
   initCentralReach(config);
   initState(config);
 
-  let lockHeld = false;
+  const stateId = `${portal.portalId}:${normalizedDealId}`;
+  const readLink = () => readPriorSyncState(readState, CLIENT_LINK_PK, stateId);
+  // Every link record write merges into what is stored (src/lib/linkRecord.mjs).
+  const saveLinkFields = (changes) =>
+    saveLinkRecord({ readState: readLink, saveState, pk: CLIENT_LINK_PK, id: stateId, changes });
+  const saveAttempt = (type, data) =>
+    saveState({
+      pk: CLIENT_ATTEMPT_PK,
+      id: stateId,
+      type,
+      ttlSeconds:
+        type === STATE_TYPES.SUCCESS ? config.ttl.successTtlSeconds : config.ttl.failTtlSeconds,
+      data: {
+        workflow: "clientSync",
+        ...data,
+        hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
+        invocationId: context?.invocationId || null,
+        updatedAt: new Date().toISOString()
+      }
+    });
+
+  // The record lease. Its etag is the owner token: only this run can release it.
+  let lease = null;
   // Known CR id. A failure must keep it (Requirement 9: retries never duplicate a create).
   let knownContactId = null;
   let hubspotHasContactId = false;
+  // Rule 5.1: a record the gate would skip gets no HubSpot writeback. Until the gate has been
+  // checked and passed, a failure writes nothing to HubSpot; the dead-letter alert reports it.
+  let gatePassed = false;
   try {
-    const locked = await claimRecordLock(claimLock, {
+    lease = await claimRecordLock(claimLock, {
       pk: "sync-lock:client",
-      id: normalizedDealId,
-      ttlSeconds: config.ttl?.leaseTtlSeconds || 120
+      id: stateId,
+      ttlSeconds: config.ttl.leaseTtlSeconds
     });
-    if (!locked) {
+    if (!lease) {
       const busy = new Error("SyncInProgress");
       busy.code = "SYNC_IN_PROGRESS";
       throw busy;
     }
-    lockHeld = true;
 
     const recordGateProperty = config.sync?.recordGateProperty || null;
     const propertyList = [...REQUIRED_DEAL_PROPERTIES, crContactIdProperty];
@@ -236,10 +278,9 @@ export async function runClientSyncWorkflow(
       throw error;
     }
 
-    const prior = await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId);
+    const prior = (await readLink())?.data || {};
     const hubspotContactId = String(deal?.properties?.[crContactIdProperty] || "").trim();
-    const existingContactId =
-      hubspotContactId || String(prior?.data?.crContactId || "").trim() || null;
+    const existingContactId = hubspotContactId || String(prior.crContactId || "").trim() || null;
     knownContactId = existingContactId;
     hubspotHasContactId = Boolean(hubspotContactId);
 
@@ -266,10 +307,13 @@ export async function runClientSyncWorkflow(
         reason: eligibility.reason
       };
     }
+    gatePassed = true;
 
-    const savedFieldHashes = prior?.data?.fieldHashes || null;
-    // An error decided on purpose: write the status and finish. The fail record keeps the CR id
-    // and the last good field hashes, and then lives as long as a success record.
+    // Row 2.2: the saved hashes count only for the CR id they were synced to. For any other CR
+    // id every field is treated as changed.
+    const savedFieldHashes = hashesForContact(prior, existingContactId);
+    // An error decided on purpose: write the status and finish. The link record is not touched,
+    // so the CR id and the last good field hashes stay as they are.
     const decidedError = async (reason) => {
       await pushWriteback(
         normalizedDealId,
@@ -284,23 +328,7 @@ export async function runClientSyncWorkflow(
           { kind: "client", idProperty: crContactIdProperty }
         )
       );
-      await saveState({
-        pk: CLIENT_STATE_PK,
-        id: normalizedDealId,
-        type: STATE_TYPES.FAIL,
-        ttlSeconds:
-          existingContactId || savedFieldHashes
-            ? config.ttl.successTtlSeconds
-            : config.ttl.failTtlSeconds,
-        data: {
-          workflow: "clientSync",
-          status: "error",
-          errorMessage: reason,
-          crContactId: existingContactId,
-          fieldHashes: savedFieldHashes,
-          updatedAt: new Date().toISOString()
-        }
-      });
+      await saveAttempt(STATE_TYPES.FAIL, { status: "error", errorMessage: reason });
       return {
         ok: true,
         dealId: normalizedDealId,
@@ -316,7 +344,7 @@ export async function runClientSyncWorkflow(
     }
     const payload = centralReachPayload(mappedPayload);
 
-    const metadata = mapMetadata({ deal });
+    const metadata = mapMetadata({ deal, portalId: portal.portalId });
     let includeRelationships = false;
     let relationships = [];
     const bcbaType = config.hubspot.bcbaObjectTypeId;
@@ -335,10 +363,10 @@ export async function runClientSyncWorkflow(
             toObjectType: btType
           })
         ]);
-        relationships = associationsForComparison([
-          ...(bcbaAssociations || []),
-          ...(btAssociations || [])
-        ]);
+        relationships = associationsForComparison(
+          [...(bcbaAssociations || []), ...(btAssociations || [])],
+          portal.excludedStaffingAssociationTypeIds
+        );
         includeRelationships = true;
       } catch (error) {
         if (!String(error?.message || "").includes("not initialized")) {
@@ -364,8 +392,13 @@ export async function runClientSyncWorkflow(
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
     const existingHash = deal?.properties?.last_sync_hash || null;
 
+    // Row 2.4: "nothing changed" needs a clean last run and matching hashes in Cosmos. A matching
+    // last_sync_hash in HubSpot alone is not enough: a run that failed halfway leaves it behind.
+    const cosmosSaysUnchanged =
+      prior.clean === true && Boolean(previousFieldHashes) && changedFields.length === 0;
+
     let syncResult;
-    if (existingHash && existingHash === payloadHash && existingContactId) {
+    if (existingHash && existingHash === payloadHash && existingContactId && cosmosSaysUnchanged) {
       syncResult = {
         operation: "noop",
         crContactId: String(existingContactId)
@@ -375,14 +408,14 @@ export async function runClientSyncWorkflow(
         const lookup = await findClient(normalizedDealId);
         const lookedUpId = lookup?.found ? String(lookup.crContactId || "").trim() : "";
         if (lookup?.found && !lookedUpId) {
-          const unknown = new Error("CentralReach client lookup returned no contactId");
-          unknown.code = "CR_LOOKUP_UNKNOWN";
-          throw unknown;
+          throw lookupWithoutContactId("client", { status: null, data: null });
         }
         if (lookup?.found && lookedUpId !== String(existingContactId)) {
           return decidedError(CASE_CLIENT_ID_MISMATCH);
         }
       }
+      // Row 2.4: in progress before the first CentralReach write of this run.
+      await saveLinkFields({ workflow: "clientSync", portalId: portal.portalId, clean: false });
       syncResult = await upsertClient({
         payload,
         existingContactId
@@ -394,18 +427,7 @@ export async function runClientSyncWorkflow(
         syncResult?.crContactId
       ) {
         knownContactId = String(syncResult.crContactId);
-        await saveState({
-          pk: CLIENT_STATE_PK,
-          id: normalizedDealId,
-          type: "pending_link",
-          ttlSeconds: config.ttl.successTtlSeconds,
-          data: {
-            workflow: "clientSync",
-            crContactId: knownContactId,
-            fieldHashes: previousFieldHashes,
-            updatedAt: new Date().toISOString()
-          }
-        });
+        await saveLinkFields({ crContactId: knownContactId });
         if (!hubspotContactId) {
           try {
             await pushWriteback(
@@ -441,10 +463,7 @@ export async function runClientSyncWorkflow(
         { labelIds: metadata.labelIds, clearFieldIds }
       );
       if ((metadataSyncSummary?.failedCount || 0) > 0) {
-        const failed = new Error("MetadataWriteFailed");
-        failed.code = "METADATA_WRITE_FAILED";
-        failed.failedFieldIds = metadataSyncSummary.failedFieldIds || [];
-        throw failed;
+        throw metadataWriteFailedError(metadataSyncSummary);
       }
     }
 
@@ -459,7 +478,7 @@ export async function runClientSyncWorkflow(
       throw error;
     }
     const confirmedPayload = centralReachPayload(mapPayload({ deal: confirmedDeal, config }));
-    const confirmedMetadata = mapMetadata({ deal: confirmedDeal });
+    const confirmedMetadata = mapMetadata({ deal: confirmedDeal, portalId: portal.portalId });
     const confirmedHash = digestPayload(
       buildComparableState({
         core: confirmedPayload,
@@ -502,26 +521,27 @@ export async function runClientSyncWorkflow(
       )
     );
 
-    await saveState({
-      pk: CLIENT_STATE_PK,
-      id: normalizedDealId,
-      type: STATE_TYPES.SUCCESS,
-      ttlSeconds: config.ttl.successTtlSeconds,
-      data: {
+    // Every CentralReach write of this run succeeded, so the run is clean and its hashes are
+    // saved. A no-op changed nothing, so the link record is left as it is.
+    if (syncResult.operation !== "noop") {
+      await saveLinkFields({
         workflow: "clientSync",
-        status,
-        operation: syncResult.operation,
+        portalId: portal.portalId,
         crContactId: syncResult.crContactId || null,
+        externalSystemId: normalizedDealId,
         payloadHash,
         fieldHashes: nextFieldHashes,
+        hashesContactId: syncResult.crContactId || null,
         mappingVersion: MAPPING_VERSION,
-        changedFieldNames: changedFields,
-        hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
-        invocationId: context?.invocationId || null,
-        metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
-        metadataFailedCount: metadataSyncSummary?.failedCount ?? null,
-        updatedAt: new Date().toISOString()
-      }
+        clean: true
+      });
+    }
+    await saveAttempt(STATE_TYPES.SUCCESS, {
+      status,
+      operation: syncResult.operation,
+      changedFieldNames: changedFields,
+      metadataUpdatedCount: metadataSyncSummary?.updatedCount ?? null,
+      metadataFailedCount: metadataSyncSummary?.failedCount ?? null
     });
 
     return {
@@ -535,15 +555,13 @@ export async function runClientSyncWorkflow(
       metadataFailedCount: metadataSyncSummary?.failedCount ?? 0
     };
   } catch (error) {
-    if (
-      error?.code === "SYNC_IN_PROGRESS" ||
-      error?.code === "SYNC_STALE" ||
-      error?.code === "CR_LOOKUP_UNKNOWN"
-    ) {
-      throw error;
-    }
+    // Row 2.7: one classifier sorts the failure. Permanent: `error` on the record, no retry, the
+    // message completes. Temporary or unknown create: thrown, so the queue worker schedules the
+    // retry. HubSpot keeps its last status until the last attempt (decision 1).
+    const failureKind = classifyFailure(error);
+    const permanent = failureKind === FAILURE_KINDS.PERMANENT;
     logger(
-      "error",
+      permanent || lastAttempt ? "error" : "warn",
       "Client sync workflow failed.",
       buildError({
         workflow: "clientSync",
@@ -551,88 +569,100 @@ export async function runClientSyncWorkflow(
         error,
         recordId: normalizedDealId,
         extra: {
+          failureKind,
+          lastAttempt: Boolean(lastAttempt),
           invocationId: context?.invocationId || null,
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
         }
       })
     );
+    if (error?.answerShape) {
+      // Decision 4: field names and types only, never a value.
+      logger("error", "CentralReach answer could not be read.", error.answerShape);
+    }
 
-    try {
-      await pushWriteback(
-        normalizedDealId,
-        filterWritebackProperties(
-          {
+    // The CR id goes to HubSpot when HubSpot does not hold it yet, with or without a status.
+    const errorPatch = {
+      ...(permanent || lastAttempt
+        ? {
             last_sync_at: new Date().toISOString(),
             last_sync_status: "error",
-            last_sync_error: String(error?.message || "Client sync failed").slice(0, 500),
+            last_sync_error: permanent ? permanentFailureReason(error) : RETRIES_USED_UP,
             integration_last_write: new Date().toISOString(),
-            updated_by_integration: true,
-            ...(Array.isArray(error?.failedFieldIds) && error.failedFieldIds.length
-              ? { last_sync_error: `MetadataWriteFailed fields: ${error.failedFieldIds.join(",")}`.slice(0, 500) }
-              : {}),
-            // The CR id goes with the error when HubSpot does not hold it yet.
-            ...(knownContactId && !hubspotHasContactId
-              ? linkProperties(crContactIdProperty, knownContactId)
-              : {})
-          },
-          { kind: "client", idProperty: crContactIdProperty }
-        )
-      );
-    } catch (writebackError) {
-      logger(
-        "error",
-        "Client sync error writeback failed.",
-        buildError({
-          workflow: "clientSync",
-          stage: "writeErrorWriteback",
-          error: writebackError,
-          recordId: normalizedDealId
-        })
-      );
-    }
-
-    // The fail state keeps the CR id and the last good field hashes. A state that carries either
-    // lives as long as a success state, so a failure never shortens the life of the link.
-    try {
-      const stored = (await readPriorSyncState(readState, CLIENT_STATE_PK, normalizedDealId))?.data;
-      const keptContactId = stored?.crContactId || knownContactId || null;
-      const keptFieldHashes = stored?.fieldHashes || null;
-      await saveState({
-        pk: CLIENT_STATE_PK,
-        id: normalizedDealId,
-        type: STATE_TYPES.FAIL,
-        ttlSeconds:
-          keptContactId || keptFieldHashes ? config.ttl.successTtlSeconds : config.ttl.failTtlSeconds,
-        data: {
-          workflow: "clientSync",
-          status: "error",
-          errorMessage: String(error?.message || "Client sync failed").slice(0, 500),
-          failedFieldIds: error?.failedFieldIds || [],
-          crContactId: keptContactId,
-          fieldHashes: keptFieldHashes,
-          hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null,
-          invocationId: context?.invocationId || null,
-          updatedAt: new Date().toISOString()
-        }
-      });
-    } catch (stateError) {
-      logger(
-        "error",
-        "Client sync fail-state write failed.",
-        buildError({
-          workflow: "clientSync",
-          stage: "putFailState",
-          error: stateError,
-          recordId: normalizedDealId
-        })
-      );
-    }
-
-    throw error;
-  } finally {
-    if (lockHeld) {
+            updated_by_integration: true
+          }
+        : {}),
+      ...(knownContactId && !hubspotHasContactId
+        ? linkProperties(crContactIdProperty, knownContactId)
+        : {})
+    };
+    let writebackError = null;
+    if (gatePassed && Object.keys(errorPatch).length > 0) {
       try {
-        await unlock({ pk: "sync-lock:client", id: normalizedDealId });
+        await pushWriteback(
+          normalizedDealId,
+          filterWritebackProperties(errorPatch, { kind: "client", idProperty: crContactIdProperty })
+        );
+      } catch (failed) {
+        writebackError = failed;
+        logger(
+          "error",
+          "Client sync error writeback failed.",
+          buildError({
+            workflow: "clientSync",
+            stage: "writeErrorWriteback",
+            error: failed,
+            recordId: normalizedDealId
+          })
+        );
+      }
+    }
+
+    // A run that does not hold the record lease writes no state. Otherwise the merge keeps the
+    // CR id and the last good hashes; only the attempt record says what failed.
+    if (lease) {
+      try {
+        if (knownContactId) {
+          await saveLinkFields({ crContactId: knownContactId });
+        }
+        await saveAttempt(STATE_TYPES.FAIL, {
+          status: "error",
+          failureKind,
+          errorCode: String(error?.code ?? ""),
+          errorMessage: String(error?.message || "Client sync failed").slice(0, 500),
+          failedFieldIds: error?.failedFieldIds || []
+        });
+      } catch (stateError) {
+        logger(
+          "error",
+          "Client sync fail-state write failed.",
+          buildError({
+            workflow: "clientSync",
+            stage: "putFailState",
+            error: stateError,
+            recordId: normalizedDealId
+          })
+        );
+      }
+    }
+
+    if (!permanent) {
+      throw error;
+    }
+    // The status could not be written and HubSpot may take it later: retry the message.
+    if (writebackError && classifyFailure(writebackError) !== FAILURE_KINDS.PERMANENT) {
+      throw writebackError;
+    }
+    return {
+      ok: true,
+      dealId: normalizedDealId,
+      status: "error",
+      crContactId: knownContactId
+    };
+  } finally {
+    if (lease) {
+      try {
+        await unlock({ pk: "sync-lock:client", id: stateId, etag: lease.etag });
       } catch (releaseError) {
         if (!isStateClientUnavailable(releaseError)) {
           logger(

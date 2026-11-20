@@ -10,7 +10,7 @@ function buildDeps(overrides = {}) {
 
   const deps = {
     getConfig: () => ({
-      hubspot: { crContactIdProperty: "client_id_number" },
+      hubspot: { crContactIdProperty: "client_id_number", hubspotPortalId: "52311591" },
       ttl: { successTtlSeconds: 100, failTtlSeconds: 50 },
       centralReach: {}
     }),
@@ -57,12 +57,39 @@ test("runClientSyncWorkflow writes success state and safe summary", async () => 
   assert.equal(result.status, "success");
   assert.equal(result.crContactId, "2001");
   assert.equal(calls.writebacks.length, 1);
-  assert.equal(calls.stateWrites[0].type, "success");
+  // Stage 2 (rows 2.1, 2.4): the link record is marked in progress first and saved clean with no
+  // expiry; the attempt record is written last.
+  assert.equal(calls.stateWrites[0].type, "link");
+  assert.equal(calls.stateWrites[0].data.clean, false);
+  const link = calls.stateWrites.filter((item) => item.type === "link").at(-1);
+  assert.equal(link.ttlSeconds, -1);
+  assert.equal(link.data.clean, true);
+  assert.equal(calls.stateWrites.at(-1).type, "success");
 });
 
 test("runClientSyncWorkflow performs noop when hash unchanged", async () => {
-  const { deps, calls } = buildDeps({
+  // Stage 2 (row 2.4): a no-op also needs a clean Cosmos record with matching hashes, so a first
+  // run saves one.
+  const store = new Map();
+  const stateful = {
     hashPayload: () => "same-hash",
+    getState: async ({ pk, id }) => store.get(`${pk}|${id}`) || null
+  };
+  const first = buildDeps({
+    ...stateful,
+    getDealById: async () => ({
+      id: "deal-1",
+      properties: { hs_object_id: "deal-1", last_sync_hash: "old-hash", client_id_number: "333" }
+    }),
+    createOrUpdateClient: async () => ({ operation: "update", crContactId: "333" }),
+    putState: async (input) => {
+      store.set(`${input.pk}|${input.id}`, { data: input.data });
+    }
+  });
+  await runClientSyncWorkflow({ dealId: "deal-1", context: {} }, first.deps);
+
+  const { deps, calls } = buildDeps({
+    ...stateful,
     getDealById: async () => ({
       id: "deal-1",
       properties: { hs_object_id: "deal-1", last_sync_hash: "same-hash", client_id_number: "333" }

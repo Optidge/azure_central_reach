@@ -14,7 +14,8 @@ function buildDeps(overrides = {}) {
       hubspot: {
         btRbtObjectTypeId: "2-btrbt",
         bcbaObjectTypeId: "2-bcba",
-        employeeIdProperty: "employee_id"
+        employeeIdProperty: "employee_id",
+        hubspotPortalId: "52311591"
       },
       features: { allowEmployeeCreate: false, putOnlyMode: false },
       ttl: { successTtlSeconds: 120, failTtlSeconds: 60 },
@@ -85,11 +86,31 @@ test("workflow writes success state on successful update", async () => {
   assert.equal(result.status, "success");
   assert.equal(calls.writebacks.length, 1);
   assert.equal(calls.writebacks[0].properties.central_reach_link_to_rt_rbt, "https://members.centralreach.com/#contacts/details/?id=100");
-  assert.equal(calls.stateWrites[0].type, "success");
+  // Stage 2 (rows 2.1, 2.4): the link record is marked in progress first and saved clean with no
+  // expiry; the attempt record is written last.
+  assert.equal(calls.stateWrites[0].type, "link");
+  assert.equal(calls.stateWrites[0].data.clean, false);
+  const link = calls.stateWrites.filter((item) => item.type === "link").at(-1);
+  assert.equal(link.ttlSeconds, -1);
+  assert.equal(link.data.clean, true);
+  assert.equal(calls.stateWrites.at(-1).type, "success");
 });
 
 test("workflow returns noop when hash is unchanged", async () => {
+  // Stage 2 (row 2.4): a no-op also needs a clean Cosmos record with matching hashes, so a first
+  // run saves one.
+  const store = new Map();
+  const getState = async ({ pk, id }) => store.get(`${pk}|${id}`) || null;
+  const first = buildDeps({
+    getState,
+    putState: async (input) => {
+      store.set(`${input.pk}|${input.id}`, { data: input.data });
+    }
+  });
+  await runEmployeeSyncWorkflow({ recordId: "1", employeeType: "bt_rbt" }, first.deps);
+
   const { deps, calls } = buildDeps({
+    getState,
     getBtRbtRecordById: async () => ({
       id: "1",
       properties: {
@@ -292,7 +313,8 @@ test("workflow logs warning when metadata write reports failed fields", async ()
   assert.equal(Boolean(metadataWarning), true);
   assert.equal(metadataWarning.meta.failedFieldIds.includes(138703), true);
   assert.equal(calls.writebacks.some((item) => item.properties.last_sync_hash), false);
-  assert.equal(calls.writebacks[0].properties.last_sync_status, "error");
+  // Stage 2 (decision 1): a failure that will be retried leaves HubSpot's status as it was.
+  assert.equal(calls.writebacks.length, 0);
 });
 
 test("workflow writes fail state when validation decides an error", async () => {

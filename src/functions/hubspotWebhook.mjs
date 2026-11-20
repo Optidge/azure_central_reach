@@ -132,6 +132,12 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
     return jsonError(400, "INVALID_WEBHOOK_BODY", parsed.message);
   }
 
+  // Without a valid portal the object types are unknown and the message could not say which
+  // portal it is for, so nothing is queued and the notice is not accepted.
+  if (!settings.portalReady) {
+    return jsonError(503, "INVALID_PORTAL_CONFIG", "HubSpot portal is not configured");
+  }
+
   const resolved = resolveWebhookTarget({
     objectTypeId: parsed.objectTypeId,
     recordId: parsed.recordId,
@@ -177,6 +183,7 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
       const send = dependencies.sendClientSyncMessage || sendClientSyncMessage;
       await send({
         dealId: resolved.dealId,
+        portalId: settings.portalId,
         source: "hubspotWorkflow",
         workflow: "clientSync",
         enqueuedAt
@@ -186,6 +193,7 @@ export async function hubspotWebhook(request, context, dependencies = {}) {
       await send({
         recordId: resolved.recordId,
         employeeType: resolved.employeeType,
+        portalId: settings.portalId,
         source: "hubspotWorkflow",
         workflow: "employeeSync",
         enqueuedAt

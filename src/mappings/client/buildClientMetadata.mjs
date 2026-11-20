@@ -2,7 +2,6 @@ import {
   CENTRAL_REACH_CLIENT_LABELS,
   CENTRAL_REACH_CLIENT_METADATA_FIELDS
 } from "../../constants/centralReach.mjs";
-import { hubspotPortalId } from "../../lib/config.mjs";
 
 function toTrimmedOrNull(value) {
   if (value === undefined || value === null) {
@@ -138,17 +137,17 @@ function requiredClientLabelIdsForState(stateValue) {
   return labelIds;
 }
 
-function buildHubspotDealUrl(hsObjectId) {
+// portalId is the worker's configured portal, passed in by the workflow.
+function buildHubspotDealUrl(hsObjectId, portalId) {
   const dealId = String(hsObjectId || "").trim();
-  if (!dealId) {
+  if (!dealId || !String(portalId || "").trim()) {
     return null;
   }
-  const portalId = process.env.HUBSPOT_PORTAL_ID_TEST || hubspotPortalId();
   const dealObjectTypeId = process.env.HUBSPOT_DEAL_OBJECT_TYPE_ID || "0-3";
   return `https://app.hubspot.com/contacts/${portalId}/record/${dealObjectTypeId}/${dealId}`;
 }
 
-export function buildClientMetadata({ deal }) {
+export function buildClientMetadata({ deal, portalId }) {
   const dealProps = deal?.properties || {};
 
   const metadataValues = {
@@ -202,7 +201,8 @@ export function buildClientMetadata({ deal }) {
       getCurrentInsuranceMetaValue(dealProps),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.INSURANCE_ID]: getInsuranceIdForMetaField(dealProps, 1),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.HUBSPOT_LINK_TO_CASE_RECORD]: buildHubspotDealUrl(
-      dealProps.hs_object_id
+      dealProps.hs_object_id,
+      portalId
     )
   };
 

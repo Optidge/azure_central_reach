@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { processClientQueue } from "../../functions/processClientQueue.mjs";
 
+// Stage 2 (row 2.6): a message carries its portal ID and the worker runs only its own portal's.
+const PORTAL_ID = "52311591";
+
 const baseContext = {
   functionName: "processClientQueue",
   invocationId: "inv-1",
@@ -24,17 +27,19 @@ test("valid message calls workflow with dealId and hsLastModifiedDate", async ()
       hsLastModifiedDate: "1700000000000",
       workflow: "clientSync",
       source: "intakePoller",
+      portalId: PORTAL_ID,
       enqueuedAt: "2026-05-06T00:00:00.000Z"
     },
     baseContext,
-    { runWorkflow }
+    { runWorkflow, portalId: PORTAL_ID }
   );
 
   assert.deepEqual(calledWith, {
     dealId: "123",
     hsLastModifiedDate: "1700000000000",
     source: "intakePoller",
-    context: baseContext
+    context: baseContext,
+    lastAttempt: false
   });
 });
 
@@ -83,10 +88,11 @@ test("missing source is allowed and treated as unknown", async () => {
   await processClientQueue(
     {
       dealId: "123",
-      workflow: "clientSync"
+      workflow: "clientSync",
+      portalId: PORTAL_ID
     },
     baseContext,
-    { runWorkflow }
+    { runWorkflow, portalId: PORTAL_ID }
   );
 
   assert.equal(calledWith.dealId, "123");
@@ -107,22 +113,56 @@ test("source outside allowlist throws", async () => {
   );
 });
 
-test("workflow failure is rethrown for retry/dead-letter behavior", async () => {
+// Stage 2 (row 2.8): a failed run is no longer rethrown at once. The worker schedules the retry
+// and completes the message; it throws only when the retry cannot be scheduled or the retries
+// are used up.
+test("workflow failure schedules a retry, and is rethrown when the retry cannot be scheduled", async () => {
   const error = new Error("workflow failed");
+  const message = {
+    dealId: "123",
+    hsLastModifiedDate: "1700000000000",
+    workflow: "clientSync",
+    source: "intakePoller",
+    portalId: PORTAL_ID
+  };
+  const scheduled = [];
+
+  await processClientQueue(message, baseContext, {
+    portalId: PORTAL_ID,
+    runWorkflow: async () => {
+      throw error;
+    },
+    scheduleRetry: async (retry) => {
+      scheduled.push(retry);
+    }
+  });
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].body.attempt, 1);
 
   await assert.rejects(
-    processClientQueue(
-      {
-        dealId: "123",
-        hsLastModifiedDate: "1700000000000",
-        workflow: "clientSync",
-        source: "intakePoller"
-      },
-      baseContext,
-      { runWorkflow: async () => {
+    processClientQueue(message, baseContext, {
+      portalId: PORTAL_ID,
+      runWorkflow: async () => {
         throw error;
-      } }
-    ),
+      },
+      scheduleRetry: async () => {
+        throw new Error("schedule failed");
+      }
+    }),
+    /schedule failed/
+  );
+
+  await assert.rejects(
+    processClientQueue({ ...message, attempt: 5 }, baseContext, {
+      portalId: PORTAL_ID,
+      runWorkflow: async () => {
+        throw error;
+      },
+      scheduleRetry: async (retry) => {
+        scheduled.push(retry);
+      }
+    }),
     /workflow failed/
   );
+  assert.equal(scheduled.length, 1);
 });

@@ -18,8 +18,19 @@ export function createServiceBusClient(config) {
   return serviceBusClient;
 }
 
+// Every queue message says which HubSpot portal it is for. A worker completes a message for
+// another portal, or with no portal ID, without acting.
+function requirePortalId(portalId) {
+  const normalized = String(portalId ?? "").trim();
+  if (!normalized) {
+    throw new Error("Queue message: portalId is required");
+  }
+  return normalized;
+}
+
 export function buildClientSyncMessage({
   dealId,
+  portalId,
   hsLastModifiedDate,
   source = "intakePoller",
   workflow = "clientSync",
@@ -29,6 +40,7 @@ export function buildClientSyncMessage({
   const body = {
     workflow,
     source,
+    portalId: requirePortalId(portalId),
     dealId: String(dealId),
     enqueuedAt
   };
@@ -48,6 +60,7 @@ export async function sendClientSyncMessage(message) {
 
   const outboundMessage = buildClientSyncMessage({
     dealId: String(message.dealId),
+    portalId: message.portalId,
     hsLastModifiedDate: message.hsLastModifiedDate
       ? String(message.hsLastModifiedDate)
       : undefined,
@@ -66,6 +79,7 @@ export async function sendEmployeeSyncMessage(message) {
 
   const outboundMessage = buildEmployeeSyncMessage({
     recordId: message.recordId,
+    portalId: message.portalId,
     employeeType: message.employeeType,
     hsLastModifiedDate: message.hsLastModifiedDate,
     workflow: message.workflow,
@@ -78,6 +92,7 @@ export async function sendEmployeeSyncMessage(message) {
 
 export function buildEmployeeSyncMessage({
   recordId,
+  portalId,
   employeeType,
   hsLastModifiedDate,
   workflow = "employeeSync",
@@ -92,6 +107,7 @@ export function buildEmployeeSyncMessage({
     employeeType: normalizedType,
     workflow,
     source,
+    portalId: requirePortalId(portalId),
     enqueuedAt
   };
   if (hsLastModifiedDate) {
@@ -101,4 +117,40 @@ export function buildEmployeeSyncMessage({
     body,
     messageId: sha256(`${normalizedType}:${normalizedRecordId}:${stamp}`)
   };
+}
+
+// A retry is a new scheduled message. Its body is the failed message's body (so source and the
+// portal ID are kept) plus the attempt number. Its ID is the first message's ID plus the attempt
+// number: unique per attempt, and the same if the same retry is scheduled twice.
+export function buildRetryMessage({ body, originalMessageId, attempt, delaySeconds, now = Date.now() }) {
+  return {
+    body: { ...body, attempt, originalMessageId },
+    messageId: `${originalMessageId}:retry-${attempt}`,
+    scheduledEnqueueTimeUtc: new Date(now + delaySeconds * 1000)
+  };
+}
+
+// The queue workers send retries, so they create the Service Bus client from the app settings
+// the first time one is needed.
+function ensureServiceBusClient() {
+  if (serviceBusClient) {
+    return;
+  }
+  createServiceBusClient({
+    serviceBus: {
+      connectionString: process.env.SERVICE_BUS_CONNECTION_STRING,
+      clientSyncQueueName: process.env.CLIENT_SYNC_QUEUE_NAME || "client-sync-queue",
+      employeeSyncQueueName: process.env.EMPLOYEE_SYNC_QUEUE_NAME || "employee-sync-queue"
+    }
+  });
+}
+
+export async function scheduleClientRetry(retryMessage) {
+  ensureServiceBusClient();
+  await clientSyncSender.sendMessages(retryMessage);
+}
+
+export async function scheduleEmployeeRetry(retryMessage) {
+  ensureServiceBusClient();
+  await employeeSyncSender.sendMessages(retryMessage);
 }
