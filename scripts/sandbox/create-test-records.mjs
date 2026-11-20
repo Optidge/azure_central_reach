@@ -164,6 +164,9 @@ const deal = {
   pipeline: "default",
   // dealstage: the pipeline's first stage, set in main() (Zeke: "let it be default").
   hubspot_owner_id: OWNER_ID,
+  // C10 (decision 39): Care Coordinator is read from care_coordinator_name, which the sandbox's
+  // Care Coordinator Change workflow writes on an owner change. Set here so the create holds it.
+  care_coordinator_name: "Zeke Swanson",
   phi_first_name__cloned_: "Zeke",
   phi_last_name: `Swanson Azure Test R${N}`,
   phi_date_of_birth: pick("2016-01-15", "2017-02-16", "2018-03-17"),
@@ -199,7 +202,6 @@ const deal = {
   btrbt_work_schedule_2_details: `AzT ${N} Sched 2 Sat 10-1`,
   finalized_client_service_hours_post_assessment: `AzT ${N} weekdays after 3pm`,
   client_service_hours_total: pick("20", "15", "25"),
-  total_hours_bt1bt2_work_schedule: pick("18", "12", "24"),
   initial_auth_tracks: pick("Prior Authorization Required", "No Prior Authorization Required", ""),
   n97153_approved_assessment_hours_auth_req: "8",
   ia_hours_from_the_ia: "6",
@@ -224,9 +226,16 @@ const deal = {
   // R3 leaves the whole secondary insurance blank (C30 blank case).
   insurance_2__other__summary: pick(`AzT ${N} other carrier 2`, `AzT ${N} other carrier 2`, ""),
   insurance_id_2: pick(`AZT-${N}-INS2`, `AZT-${N}-INS2`, ""),
-  // C20: total_hours_bt1bt2_work_schedule is calculated; these are its inputs.
+  // C20 (decision 40): CR gets total_hours_btrbt_12 = hours_bt_work_schedule_1 +
+  // bt_rbt_2_work_schedule, calculated, blank unless both are filled. bt_rbt_2_work_schedule is
+  // set lower than hours_bt_work_schedule_2 so the expected total (16 / 11) differs from the
+  // excluded total_hours_bt_12_work_schedule (18 / 12). R3 leaves it blank: C20 must be blank.
   hours_bt_work_schedule_1: pick("10", "7", "14"),
   hours_bt_work_schedule_2: pick("8", "5", "10"),
+  bt_rbt_2_work_schedule: pick("6", "4", ""),
+  // Calculated in the sandbox (2026-11-20 plan run), so never sent; listed so the read-back
+  // reports it if it stays blank.
+  total_hours_btrbt_12: pick("16", "11", ""),
   referral_source: pick("Google", "School", "Other"),
   sandbox_test_field: "true"
 };
@@ -237,7 +246,7 @@ const deal = {
 // The date is far in the future on purpose: a workflow moves the upcoming-auth `_f` dates into
 // the live auth period once their start date arrives, which would overwrite the C23 values.
 const DECOYS = {
-  deal: ["n2_what_type_of_insurance", "total_hours_bt_12_work_schedule", "total_hours_btrbt_12",
+  deal: ["n2_what_type_of_insurance", "total_hours_bt_12_work_schedule",
     "ongoing_auth_period_start_date_f", "ongoing_auth_period_end_date_f"],
   bcba: ["credentialed_insurances__ny", "co_insurance_labels", "nj_insurance_labels", "external_system_id"],
   bt: ["bt_to_rbt_path", "external_system_id"]

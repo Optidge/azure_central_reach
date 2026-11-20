@@ -1,0 +1,27 @@
+// The first check after the deploy (no CentralReach write): did each HubSpot change reach the
+// webhook, the queue and a worker? One row per record with the count of each step, plus BR3/BR14
+// duplicate signals (two webhooks for one change → two runs, one CR write).
+// Read-only:
+//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/pipe-check.kql -o json
+let since = 6h;
+traces
+| where timestamp > ago(since)
+| extend record = extract(@"recordId:\s*'?(\d+)", 1, message)
+| where isnotempty(record)
+| extend step = case(
+    message startswith "HubSpot webhook accepted.", "webhook",
+    message has "queue message accepted.", "queued",
+    message has "skipped by eligibility gate.", "gateSkip",
+    message startswith "Sync run summary.", "run",
+    message has "A retry is scheduled", "retry",
+    message has "Change found by the poller or the daily sweep", "poller",
+    "other")
+| extend outcome = iif(step == "run", extract(@"outcome:\s*'([a-z]+)'", 1, message), ""),
+    crWrite = step == "run" and extract(@"operation:\s*'([a-z]+)'", 1, message) in ("create", "update")
+| summarize first = min(timestamp), last = max(timestamp),
+    webhooks = countif(step == "webhook"), queued = countif(step == "queued"),
+    runs = countif(step == "run"), crWrites = countif(crWrite), gateSkips = countif(step == "gateSkip"),
+    retries = countif(step == "retry"), pollerFinds = countif(step == "poller"),
+    outcomes = make_list_if(outcome, step == "run")
+    by record
+| order by last desc

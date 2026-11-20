@@ -71,7 +71,7 @@ Created by `create-test-records.mjs --round 1 --write`; the IDs are in `sandbox-
 - BT/RBT 1 `date_of_birth`, `gender`, address, `state_home`, phone and `email` filled from its Contact.
 
 Three items do not match the matrix:
-- `total_hours_bt1bt2_work_schedule` = 2 (C20, blocked).
+- C20 and C10 changed source after the create (decisions 39 and 40). On 2026-11-20 the Case had `care_coordinator_name`, `bt_rbt_2_work_schedule` and `total_hours_btrbt_12` blank; the script now sets the first two, so round 1 is re-run with `--write` before the Case push.
 - `referral_source` is blank (C36).
 - BCBA `email` is blank: the sandbox does not mirror it from the Contact (production does, 92/98). After row 6.4 the integration reads the Contact email directly, so B9 is unaffected.
 
@@ -110,7 +110,7 @@ Production 2026-11-20. Each mirror was compared with every Contact property on t
 | `guardian_last_name` | `lastname` | 99/99 |
 
 Two other read-only Case properties:
-- `total_hours_bt1bt2_work_schedule` is calculated, so the script sets its inputs.
+- `total_hours_btrbt_12` (C20) is calculated, so the script sets its inputs.
 - `referral_source` has no Contact source (C36).
 
 Not mirrors (set on the record): BCBA `gender_new`, `date_of_birth` (sandbox only; production has none, O-10), `ucaba_email_address`; BT/RBT `home_apt`, `first_name`, `last_name`, `location`, `bt_rbt_type`.
@@ -127,6 +127,7 @@ Findings for the plan:
 | BR1 | A create happens only when Entered in CentralReach is Yes and the record is not linked. Case: `enter_in_central_reach` contains `Yes`. Employees: `entered_in_centralreach` = `Yes`. | R1: no push before Yes; the push sets Yes | GET (none before, one after); HS | |
 | BR2 | Blank `workday_id` → created with the HubSpot record ID as External System ID, status `waiting` | R1, R2, R3 employee pushes | GET `ExternalSystemId` = HubSpot ID; HS `waiting` | |
 | BR3 | No second create: a second run links, and an unclear lookup never creates | R1: run the BT/RBT twice (Entered toggled, or a re-queue) | GET: one employee; Log `operation` | |
+| BR3, BR14 (duplicate signals) | The entry workflow and the linked-record refresh workflow both send a webhook for one change on a linked BT/RBT (guide lines 434 and 1160) | R1-U1: change `entered_in_centralreach` on the linked BT/RBT 1 | Log: two messages, one CR write, the second run a no-op; GET: latest state | |
 | BR4 | Record gate: a record without `sandbox_test_field` never syncs | R1: one extra BT/RBT with Entered = Yes and the gate blank | Log `skipped`; no CR contact | |
 | BR5 | A change to a listed field reaches the linked CR record, whatever Entered in CentralReach holds | R1-U1: one update with Case `enter_in_central_reach` blank, and one with BCBA `entered_in_centralreach` = No | GET: both updates arrive | |
 | BR6 | A Case in any of the four excluded stages is skipped, for an update and for a create | R2: move the Case to each of `1383894301`, `1383894303`, `1383894302` and `1332962645` in turn, changing one field each time. Also a new Case (by hand) created in `1383894301` with Entered = Yes | Log `skipped` each time; GET unchanged; no CR client for the new Case | |
@@ -164,7 +165,7 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 | C7 | `guardian_first_name`, `guardian_last_name` (from Guardian Contact `firstname`, `lastname`) | Don Azure Test RN / Swanson | same | same | via K1 | `GuardianFirstName`, `GuardianLastName` | GET | |
 | C8 | `street_address`, `home_apt`, `location_city`, `stateregion`, `postal_code` on the Case; `phone` from Guardian Contact `phone` | N01 Azure Test St, Apt NA, New York, NY, 10001, 212-555-NN01 | …, Denver, CO, 80201, 303-555-NN01 | …, Newark, NJ, 07101, 973-555-NN01 | street + " U1"; phone via K1 | address 1, 2, city, state, zip, cell phone | GET | |
 | C9 | `phone_number__second_` | — | — | — | — | **not built** (decision 36): `PhoneHome` never sent | Log: not in the payload | |
-| C10 | `hubspot_owner_id` | Zeke Swanson (161391908) | same | same | Akiera Conner (167266469) | Meta `138851` = the owner's name | GET | |
+| C10 | `care_coordinator_name` (decision 39, Zeke 2026-11-20; replaces the owners API in guide lines 352, 474, 501). The sandbox Care Coordinator Change workflow writes it on an owner change | Zeke Swanson (set by the script; owner 161391908) | same | same | owner → Akiera Conner (167266469); the workflow writes the name (set it by hand if the workflow does not run) | Meta `138851` = `care_coordinator_name`. `care_coordinator_email` is not sent (O-17) | GET; Log `changedFieldNames` | |
 | C11 | Case → BCBA IA (223) to the BCBA, RE (229) to BCBA 2 | the round's BCBAs | same | same | RE removed | Meta `131314` = "Zeke Swanson BCBA Azure Test RN"; `144602` = "Zara Swanson BCBA2 Azure Test RN"; `144602` blank after the removal | GET | |
 | C12 | `ongoing_central_reach_provider_supplier` | Azure Test Supervising N | same | same | + " U1" | Meta `131308` (typed text) | GET | |
 | C13 | Supervising (247) + `lba_licensure__ny` = Grad Permit | association made | — | — | — | **open** (O-15): nothing sent to `136052` | GET: `136052` unchanged | |
@@ -174,7 +175,7 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 | C17 | `work_schedule_details`, `btrbt_work_schedule_2_details` | AzT N Sched 1 Mon-Fri 9-12 / AzT N Sched 2 Sat 10-1 | same | same | + " U1" | Meta `132304`, `138093` | GET | |
 | C18 | `work_schedule_*_details__for_location_2_other` | — | — | — | — | **open** (O-14): no CR field | — | |
 | C19 | `finalized_client_service_hours_post_assessment`, `client_service_hours_total` | AzT N weekdays after 3pm / 20 | / 15 | / 25 | / 22 | Meta `126209` = "text, hours" (assumed format, O-28) | GET | |
-| C20 | `total_hours_bt1bt2_work_schedule` (calculated; the script sets its inputs `hours_bt_work_schedule_1` and `_2`) | 10 + 8 | 7 + 5 | 14 + 10 | BT 1 hours → 11 | Meta `134331` = the BT 1 + BT 2 total (18 / 12 / 24 / 19). **Blocked: the HubSpot formula is `1 + 1`** (production and sandbox, 2026-11-20). Every production Case holds 2 (2,876 of 2,876, the 234 with BT hours included), and R1 shows 2 for 10 + 8. As built, CR would get "2" for every client. Zeke fixes the formula in the sandbox during testing (decided, below); production before go-live | GET | R1 HubSpot: 2 (fail at source; waiting on the formula fix) |
+| C20 | `total_hours_btrbt_12` (decision 40, Zeke 2026-11-20; replaces `total_hours_bt1bt2_work_schedule` in guide lines 361 and 509). Calculated: `hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, blank unless both are filled. The script sets the inputs, and also `hours_bt_work_schedule_2` higher, so the excluded `total_hours_bt_12_work_schedule` holds a different total | 10 + 6 (`_2` = 8) | 7 + 4 (`_2` = 5) | 14 + blank (`_2` = 10) | `hours_bt_work_schedule_1` → 11 | Meta `134331` = 16 / 11 / blank / 17. Never 18, 12 or 24 (`total_hours_bt_12_work_schedule`) or 2 (`total_hours_bt1bt2_work_schedule`, formula `1 + 1`) | GET; HS read-back | R1 needs the script re-run with `--write` (2026-11-20: `bt_rbt_2_work_schedule` blank, so the total is blank) |
 | C21 | `hours_bt_work_schedule_1/2` | — | — | — | — | **open** (O-18) | — | |
 | C22 | `initial_auth_tracks` + `n97153_approved_assessment_hours_auth_req` (8) + `ia_hours_from_the_ia` (6) | Prior Authorization Required | No Prior Authorization Required | blank | R1 → No Prior | Meta `132431`: R1 "8", R2 "6", R3 blank, U1 "6" | GET | |
 | C23 | `ongoing_auth_period_start_date`, `ongoing_autrh_period_end_date` | 2026-11-01 / 2027-04-30 | 2026-12-01 / 2027-05-31 | 2027-01-01 / 2027-06-30 | start date cleared | Meta `134672` = "11/01/2026 - 04/30/2027"; U1: "04/30/2027" | GET | |
@@ -184,7 +185,7 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 | C27 | `maladaptive_behaviors__parentguardian`, `does_your_child_have_any_other_comorbid_diagnoses_` = "AzT N comorbid" (every round) | Aggression | Elopement | Mouthing Non Food Itemsth (the stored spelling) | R1 → Other | Meta `126207` = stored value; `132303` = text | GET | |
 | C28 | `severity_level_clinical`, `important_information` | Level 2 / AzT N parent note | Level 1 | Level 3 | Level 3 | Meta `133826`, `138378` | GET | |
 | C29 | `insurance_primary` (+ `insurance_1__other__summary`), `insurance_id_1` | Medicaid FFS / AZT-N-INS1 | Other + "AzT N other carrier" | Aetna | R1 → UHC | Meta `126210` = carrier or the Other summary; `131316` = ID | GET | |
-| C30 | `insurance_2` (+ `insurance_2__other__summary` = "AzT N other carrier 2"), `insurance_id_2` | Cigna / AZT-N-INS2 | Other + summary | blank (carrier, summary and ID) | R1 → Beacon-Carelon | Meta `144600`, `144601`; never `n2_what_type_of_insurance`. Guide lines 369 and 370: the summary is used only when the carrier is Other. With a blank carrier, `144600` must be blank. **Today's mapper sends the summary when the carrier is blank** (`carrier \|\| otherSummary`, for C29 and C30). That is a defect against the guide and goes to the build chat | GET | |
+| C30 | `insurance_2` (+ `insurance_2__other__summary` = "AzT N other carrier 2"), `insurance_id_2` | Cigna / AZT-N-INS2 | Other + summary | blank (carrier, summary and ID) | R1 → Beacon-Carelon | Meta `144600`, `144601`; never `n2_what_type_of_insurance`. Guide lines 369 and 370: the summary is used only when the carrier is Other. With a blank carrier, `144600` must be blank. The mapper fallback to the summary was fixed in `cd68c50` (C29 and C30) | GET | |
 | C31 | `n1_what_type_of_insurance` + the Medicaid pair (Dr AzT N Medicaid, 100000000N) or the commercial pair (Dr AzT N Commercial, 200000000N) | Medicaid FFS | Medicaid FFS - CO | Medicaid FFS - NJ | Commercial Enrolled; later Commercial OON; then Unsure | Meta `131151`: Medicaid pair for the three Medicaid types, commercial pair for both commercial types, blank for Unsure | GET | |
 | C32 | `referring_provider_medicaid_id` | AZTMCD00N | same | same | + "U1" | Meta `141233` | GET | |
 | C33 | `phi_diagnosis` + `diagnosis_other` | Yes / AzT N dx note | Other | Yes- Down's Syndrome | R1 → Unsure | Meta `144793`: the option text (stored `Yes` shows as "Yes-F84.0"), then `diagnosis_other`. R1 "Yes-F84.0, AzT 1 dx note"; R2 "Other, AzT 2 dx note"; R3 "Yes- Down's Syndrome, AzT 3 dx note" (O-28) | GET | |
@@ -265,12 +266,13 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 
 After the create, the script sets a decoy value on each of these properties. An enumeration gets its first stored option, text gets "AzT decoy N", and a date gets 2030-01-01. The date is far in the future because a workflow moves the upcoming-auth `_f` dates into the live auth period once their start date arrives. A property it cannot find or set is skipped and reported by name.
 
-Plan run of 2026-11-20 (sandbox): every decoy can be set except `total_hours_bt_12_work_schedule` and `total_hours_btrbt_12`, which are calculated. Those two can only be checked by the read: C20 must equal `total_hours_bt1bt2_work_schedule`, never either old total.
+Plan run of 2026-11-20 (sandbox): every decoy can be set except the calculated totals. After decision 40, C20 reads `total_hours_btrbt_12`, and the excluded totals are `total_hours_bt_12_work_schedule` (R1 holds 18) and `total_hours_bt1bt2_work_schedule` (formula `1 + 1`, always 2). They can only be checked by the read: `134331` must never hold either.
 
 | Excluded property | Guide or plan | Expected |
 |---|---|---|
 | Case `n2_what_type_of_insurance` | plan C30 | Secondary insurance `144600` is unchanged |
-| Case `total_hours_bt_12_work_schedule`, `total_hours_btrbt_12` | guide line 361 | Total Assigned Hours `134331` is unchanged |
+| Case `total_hours_bt_12_work_schedule`, `total_hours_bt1bt2_work_schedule` | guide line 361; decision 40 | Total Assigned Hours `134331` never holds their value |
+| Case `hubspot_owner_id`, `care_coordinator_email` | decision 39; O-17 | Care Coordinator `138851` = `care_coordinator_name`; no email sent |
 | Case `ongoing_auth_period_start_date_f`, `ongoing_auth_period_end_date_f` | guide line 363 | Auth Period `134672` is unchanged |
 | BCBA `credentialed_insurances__ny` | B13 | Field `134444` is not sent |
 | BCBA `co_insurance_labels`, `nj_insurance_labels` | BL6 | No label |
@@ -334,10 +336,11 @@ Rule (Zeke, 2026-11-20): every open question is checked against the Google Drive
 
 1. C36: the guide says `referral_source` is read-only and is to be read, but not where its value comes from. Do you know how a Case gets a Referral Source (a form, an import, a sync)? If a test Case can be given one that way, C36 gets a real value; otherwise it is tested as blank.
 
-**Decided: C20 (Zeke, 2026-11-20).** "While testing I'll fix the hours_bt_work_schedule_1 + hours_bt_work_schedule_2 and note for an agent once it's done."
-- Zeke corrects the sandbox formula to `hours_bt_work_schedule_1 + hours_bt_work_schedule_2` during testing and tells the agent.
-- The agent then reads round 1 back (expected 18) and records C20.
-- No code change. Production gets the same fix by Zeke before go-live.
+**Decided: C20 and C10 (Zeke, 2026-11-20, in the build chat).**
+- Decision 40: C20 reads `total_hours_btrbt_12` (`hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, only when both are filled). No formula edit; the earlier plan to fix `total_hours_bt1bt2_work_schedule` (`1 + 1`) is dropped.
+- Decision 39: C10 reads `care_coordinator_name`, not the owners API.
+- Both differ from the guide (lines 352, 361, 474, 501, 509). The guide is not edited without Zeke's word.
+- Checked in sandbox 52311591 (2026-11-20): `care_coordinator_name`, `care_coordinator_email`, `total_hours_btrbt_12`, `bt_rbt_2_work_schedule`, and `test_record` on the Case, BT/RBT, BCBA and Contact all exist (row 4.18: a missing requested property fails every run).
 
 Settled from the guide: C30. The guide uses the summary only when the carrier is Other (lines 369, 370, 519, 528), so the mapper's fallback to the summary is a defect for the build chat.
 

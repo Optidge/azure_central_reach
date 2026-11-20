@@ -1,0 +1,20 @@
+// Everything the app logged for one record, in order: webhook accepted, queue message accepted,
+// gate skips, mapper warnings, the run summary, retries, failures, and the exceptions.
+// Read-only. Set recordId first (required), then run:
+//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/record-timeline.kql -o json
+// Lines are matched by the record ID in the message text, then every line of the same
+// operation_Id (one function invocation) is pulled in, so lines that do not repeat the ID show too.
+let recordId = "REPLACE_WITH_HUBSPOT_RECORD_ID";
+let since = 6h;
+let ops = union traces, exceptions
+    | where timestamp > ago(since)
+    | where tostring(message) has recordId or tostring(outerMessage) has recordId
+    | distinct operation_Id;
+union traces, exceptions
+| where timestamp > ago(since)
+| where operation_Id in (ops)
+| extend line = coalesce(tostring(message), tostring(outerMessage)),
+    fn = tostring(customDimensions["Category"]),
+    hostInvocation = tostring(customDimensions["InvocationId"])
+| project timestamp, itemType, severityLevel, operation_Name, fn, line, problemId, hostInvocation, operation_Id
+| order by timestamp asc

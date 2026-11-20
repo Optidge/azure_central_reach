@@ -1,0 +1,33 @@
+// Row 3.20: one `Sync run summary.` line per worker run (src/lib/syncRunSummary.mjs).
+// Read-only. Run from the repo root (one plain az command, so it runs outside the Bash sandbox):
+//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/run-summary.kql -o json
+// Set recordId to one HubSpot record ID to narrow the result; leave it "" for every run.
+// safeLog writes console[level](message, meta), so the keys are inside the message text
+// (util.format), not in customDimensions. Each key is pulled out by name; values are IDs,
+// codes and counts only (BR21).
+let recordId = "";
+let since = 6h;
+traces
+| where timestamp > ago(since)
+| where message startswith "Sync run summary."
+| extend
+    workflow       = extract(@"workflow:\s*'([^']*)'", 1, message),
+    record         = extract(@"recordId:\s*'?(\d+)", 1, message),
+    portal         = extract(@"portalId:\s*'?(\d+)", 1, message),
+    source         = extract(@"source:\s*'([^']*)'", 1, message),
+    runInvocation  = extract(@"invocationId:\s*'([^']*)'", 1, message),
+    attempt        = extract(@"attempt:\s*'?(\d+)", 1, message),
+    outcome        = extract(@"outcome:\s*'([a-z]+)'", 1, message),
+    reasonCode     = extract(@"reasonCode:\s*'([^']*)'", 1, message),
+    operation      = extract(@"operation:\s*'([a-z]+)'", 1, message),
+    changedFields  = extract(@"changedFieldNames:\s*'(\[[^']*\])'", 1, message),
+    crCalls        = extract(@"crCalls:\s*'(\[[^']*\])'", 1, message),
+    labels         = extract(@"labels:\s*'(\{[^']*\}|null)'", 1, message),
+    writeback      = extract(@"writeback:\s*'(\{[^']*\})'", 1, message),
+    queued         = extract(@"queuedMessages:\s*'(\{[^']*\})'", 1, message),
+    hostInvocation = tostring(customDimensions["InvocationId"])
+| where isempty(recordId) or record == recordId
+| project timestamp, severityLevel, workflow, record, portal, source, attempt, outcome, reasonCode,
+    operation, changedFields, crCalls, labels, writeback, queued, runInvocation, hostInvocation,
+    operation_Id, raw = message
+| order by timestamp asc

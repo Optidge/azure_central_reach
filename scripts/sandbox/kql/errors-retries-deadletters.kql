@@ -1,0 +1,26 @@
+// Failures across the app (BR14, BR15): warning and error lines, retries scheduled, retries used
+// up (the message goes on to the dead-letter queue), and exceptions.
+// Read-only:
+//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/errors-retries-deadletters.kql -o json
+// The dead-letter queue count itself is read from Service Bus:
+//   az servicebus queue show -g centralreachintegration --namespace-name ucr-hs-cr-sb-prod --name client-sync-queue --query countDetails -o json
+//   az servicebus queue show -g centralreachintegration --namespace-name ucr-hs-cr-sb-prod --name employee-sync-queue --query countDetails -o json
+let since = 6h;
+union traces, exceptions
+| where timestamp > ago(since)
+| extend line = coalesce(tostring(message), tostring(outerMessage))
+| where itemType == "exception"
+    or severityLevel >= 2
+    or line has "A retry is scheduled"
+    or line has "RETRIES_USED_UP"
+    or line has "dead-letter"
+| extend kind = case(
+    line has "RETRIES_USED_UP" or line has "dead-letter", "dead-letter",
+    line has "A retry is scheduled", "retry",
+    itemType == "exception", "exception",
+    "warn/error"),
+    record = extract(@"recordId:\s*'?(\d+)", 1, line),
+    nextAttempt = extract(@"nextAttempt:\s*'?(\d+)", 1, line),
+    delaySeconds = extract(@"delaySeconds:\s*'?(\d+)", 1, line)
+| project timestamp, kind, severityLevel, operation_Name, record, nextAttempt, delaySeconds, line, operation_Id
+| order by timestamp asc

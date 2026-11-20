@@ -38,11 +38,7 @@ Testing agents never edit BUILD-PLAN or `src/`. They send the build chat the exa
 
 ## Open items
 
-- **C20, total hours: the HubSpot formula is `1 + 1`.**
-  - Every production Case holds 2 (2,876 of 2,876), and round 1 shows 2 for 10 + 8.
-  - **Zeke, 2026-11-20:** "While testing I'll fix the hours_bt_work_schedule_1 + hours_bt_work_schedule_2 and note for an agent once it's done." He corrects the formula in the sandbox himself during testing and tells the agent when it is done.
-  - Then the agent reads round 1 back (expected 18) and records C20.
-  - Production gets the same fix by Zeke before go-live, after Danny or United Care confirm the formula was not on purpose. No code change.
+- **C20 and C10: closed by decisions 40 and 39 (Zeke, 2026-11-20, build chat).** C20 reads `total_hours_btrbt_12` (`hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, blank unless both are filled); C10 reads `care_coordinator_name`. The script sets both inputs now. Round 1 must be re-run with `--write` before the Case push (expected C20 = 16).
 - **C30 / C29 defect (guide-confirmed).** The mapper sends the "Other" summary when the carrier is blank (`carrier || otherSummary` in `buildClientMetadata.mjs`). The guide (lines 369, 370, 519, 528) uses the summary only when the carrier is Other. **Sent to the build chat on 2026-11-20 on Zeke's "Yes, send it"** (rule: blank carrier → blank, whatever the summary holds). The fix and its `[C29]`/`[C30]` tests are built there.
 - **C36.** `referral_source` is read-only on the Case and its source is unknown. The question is with Zeke.
 - **A-22.** Zeke has to confirm the BR11 reading before the final review.
