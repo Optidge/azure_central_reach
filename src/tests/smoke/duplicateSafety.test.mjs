@@ -21,6 +21,7 @@ import {
 import { updateEmployeeWritebackWithFallback } from "../../lib/hubspotClient.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+import { answersLikeHubSpot } from "./stage2Fakes.mjs";
 
 function httpError(status, data = {}) {
   const error = new Error(`Request failed with status code ${status}`);
@@ -247,8 +248,12 @@ function employeeDeps(overrides = {}) {
     },
     safeLog: () => {},
     buildErrorLog: () => ({}),
+    // Row 6.4 (lane E): the BCBA's Contact. No Contact is linked.
+    listAssociations: async () => [],
     ...overrides.deps
   };
+  // Row 4.18 (lane E): HubSpot answers every requested property, a blank one as a null key.
+  deps.getBcbaRecordById = answersLikeHubSpot(deps.getBcbaRecordById);
   return { deps, calls };
 }
 

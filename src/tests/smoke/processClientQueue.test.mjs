@@ -39,7 +39,9 @@ test("valid message calls workflow with dealId and hsLastModifiedDate", async ()
     hsLastModifiedDate: "1700000000000",
     source: "intakePoller",
     context: baseContext,
-    lastAttempt: false
+    lastAttempt: false,
+    // Row 3.20 (lane E): the delivery attempt, for the run summary line.
+    attempt: 0
   });
 });
 

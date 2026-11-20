@@ -9,6 +9,7 @@ import {
   employeeWorkflowDeps,
   fakeCentralReach,
   hubspotRecord,
+  hubspotAnswer,
   memoryContainer
 } from "./stage2Fakes.mjs";
 
@@ -209,9 +210,9 @@ export function countingClientDeps({ record, logs = [], associations }) {
 export function countingEmployeeDeps({ record, logs = [] }) {
   const counts = { recordReads: 0, stateReads: 0 };
   const base = employeeWorkflowDeps({ record, logs });
-  const read = async () => {
+  const read = async (id, type, names) => {
     counts.recordReads += 1;
-    return record.read();
+    return hubspotAnswer(record.read(), names);
   };
   return {
     counts,

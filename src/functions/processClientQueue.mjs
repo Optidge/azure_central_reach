@@ -3,9 +3,13 @@ import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
 import { hubspotPortalId } from "../lib/config.mjs";
 import { processSyncMessage, readAttempt } from "../lib/queueRetry.mjs";
-import { scheduleClientRetry } from "../lib/serviceBusClient.mjs";
+import { CONTACT_CHANGE_WORKFLOW, scheduleClientRetry } from "../lib/serviceBusClient.mjs";
 import { QUEUE_WORKFLOWS } from "../constants/queues.mjs";
 import { runClientSyncWorkflow } from "../workflows/clientSyncWorkflow.mjs";
+import {
+  CONTACT_FAN_OUT_SOURCE,
+  runContactFanOutWorkflow
+} from "../workflows/contactFanOutWorkflow.mjs";
 
 const ALLOWED_SOURCES = new Set([
   "intakePoller",
@@ -13,6 +17,8 @@ const ALLOWED_SOURCES = new Set([
   "clientSyncHttpTest",
   "manualClientSyncTest",
   "hubspotWorkflow",
+  // Row 6.2: a Case queued by the Contact fan-out.
+  CONTACT_FAN_OUT_SOURCE,
   // No sender uses this name since Stage 3 (row 3.2). It stays so that a message queued or
   // scheduled for a retry by an older build still completes.
   "linkedRecheck"
@@ -47,6 +53,7 @@ function buildQueueMeta({
   context,
   message,
   dealId,
+  contactId,
   hsLastModifiedDate,
   workflow,
   source,
@@ -57,6 +64,7 @@ function buildQueueMeta({
     functionName: context?.functionName,
     invocationId: context?.invocationId,
     dealId,
+    ...(contactId ? { contactId } : {}),
     hsLastModifiedDate,
     workflow,
     source,
@@ -71,24 +79,51 @@ function buildQueueMeta({
   };
 }
 
+function validateSource(payload) {
+  const source = asNonEmptyString(payload?.source) || "unknown";
+  if (source !== "unknown" && !ALLOWED_SOURCES.has(source)) {
+    throw new Error("Invalid queue message: source is not allowed");
+  }
+  return source;
+}
+
+// Row 6.1: a contactChange message holds the Contact ID and the portal ID. It is run by the
+// Contact fan-out, which queues the linked Cases and BCBAs.
+function validateContactChangeMessage(payload) {
+  const contactId = asNonEmptyString(payload?.contactId);
+  if (!contactId) {
+    throw new Error("Invalid queue message: contactId is required");
+  }
+  return {
+    contactId,
+    workflow: CONTACT_CHANGE_WORKFLOW,
+    source: validateSource(payload),
+    enqueuedAt: asNonEmptyString(payload?.enqueuedAt) || undefined,
+    attempt: readAttempt(payload?.attempt)
+  };
+}
+
 function validateQueueMessage(payload) {
   const dealId = asNonEmptyString(payload?.dealId);
   const workflow = asNonEmptyString(payload?.workflow);
-  const source = asNonEmptyString(payload?.source) || "unknown";
   const hsLastModifiedDate = asNonEmptyString(payload?.hsLastModifiedDate) || undefined;
   const enqueuedAt = asNonEmptyString(payload?.enqueuedAt) || undefined;
+
+  if (workflow === CONTACT_CHANGE_WORKFLOW) {
+    return validateContactChangeMessage(payload);
+  }
 
   if (!dealId) {
     throw new Error("Invalid queue message: dealId is required");
   }
 
   if (workflow && workflow !== QUEUE_WORKFLOWS.CLIENT_SYNC) {
-    throw new Error("Invalid queue message: workflow must be clientSync when provided");
+    throw new Error(
+      "Invalid queue message: workflow must be clientSync or contactChange when provided"
+    );
   }
 
-  if (source !== "unknown" && !ALLOWED_SOURCES.has(source)) {
-    throw new Error("Invalid queue message: source is not allowed");
-  }
+  const source = validateSource(payload);
 
   return {
     dealId,
@@ -102,6 +137,7 @@ function validateQueueMessage(payload) {
 
 export async function processClientQueue(message, context, dependencies = {}) {
   const runWorkflow = dependencies.runWorkflow || runClientSyncWorkflow;
+  const runContactFanOut = dependencies.runContactFanOut || runContactFanOutWorkflow;
   const scheduleRetry = dependencies.scheduleRetry || scheduleClientRetry;
 
   try {
@@ -119,13 +155,22 @@ export async function processClientQueue(message, context, dependencies = {}) {
       queueMeta,
       scheduleRetry,
       run: ({ lastAttempt }) =>
-        runWorkflow({
-          dealId: validated.dealId,
-          hsLastModifiedDate: validated.hsLastModifiedDate,
-          source: validated.source,
-          context,
-          lastAttempt
-        })
+        validated.workflow === CONTACT_CHANGE_WORKFLOW
+          ? runContactFanOut({
+              contactId: validated.contactId,
+              source: validated.source,
+              context,
+              attempt: validated.attempt
+            })
+          : runWorkflow({
+              dealId: validated.dealId,
+              hsLastModifiedDate: validated.hsLastModifiedDate,
+              source: validated.source,
+              context,
+              lastAttempt,
+              // Row 3.20: the delivery attempt, for the run summary line.
+              attempt: validated.attempt
+            })
     });
 
     safeLog("info", "Client queue message processed.", queueMeta);
@@ -140,6 +185,7 @@ export async function processClientQueue(message, context, dependencies = {}) {
 
     const validationMeta = {
       dealId: asNonEmptyString(parsedBody?.dealId) || undefined,
+      contactId: asNonEmptyString(parsedBody?.contactId) || undefined,
       hsLastModifiedDate: asNonEmptyString(parsedBody?.hsLastModifiedDate) || undefined,
       workflow: asNonEmptyString(parsedBody?.workflow) || undefined,
       source: asNonEmptyString(parsedBody?.source) || "unknown"
@@ -152,7 +198,7 @@ export async function processClientQueue(message, context, dependencies = {}) {
         workflow: QUEUE_WORKFLOWS.CLIENT_SYNC,
         stage: "processClientQueue",
         error,
-        recordId: validationMeta.dealId,
+        recordId: validationMeta.dealId || validationMeta.contactId,
         extra: buildQueueMeta({
           context,
           message,

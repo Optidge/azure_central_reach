@@ -84,6 +84,9 @@ export function getOptionalEnv(name, defaultValue = "") {
  * excludedStaffingAssociationTypeIds: Case -> BCBA / BT/RBT association types that must not
  * sync (unlabeled BCBA, unlabeled BT/RBT, Potential IA, Potential Supervising, Potential BT 1,
  * Potential BT 2, Previous IA).
+ *
+ * bcbaContactAssociationTypeId: the BCBA -> Contact association type (BUILD-PLAN row 6.4, B9).
+ * The BCBA's personal email is the email of the Contact linked by this type.
  */
 export const HUBSPOT_PORTALS = Object.freeze({
   // Sandbox
@@ -97,7 +100,8 @@ export const HUBSPOT_PORTALS = Object.freeze({
       reEvaluationBcba: 229,
       primaryBt1: 238,
       primaryBt2: 240
-    })
+    }),
+    bcbaContactAssociationTypeId: 191
   }),
   // Production
   "50317927": Object.freeze({
@@ -110,7 +114,8 @@ export const HUBSPOT_PORTALS = Object.freeze({
       reEvaluationBcba: 145,
       primaryBt1: 76,
       primaryBt2: 143
-    })
+    }),
+    bcbaContactAssociationTypeId: 17
   })
 });
 

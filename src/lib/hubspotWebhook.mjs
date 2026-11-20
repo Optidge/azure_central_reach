@@ -2,6 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { resolveHubSpotPortal } from "./config.mjs";
 
 const DEAL_OBJECT_TYPES = new Set(["0-3", "deal", "deals"]);
+// Row 6.1 (K1, K3): a Contact is a data source for its linked Cases and BCBAs, never its own
+// CentralReach record.
+const CONTACT_OBJECT_TYPES = new Set(["0-1", "contact", "contacts"]);
 const PLACEHOLDER_VALUES = new Set(["", "CHANGE_ME"]);
 
 export function computeHubSpotV2Signature({ clientSecret, method, uri, rawBody }) {
@@ -93,6 +96,10 @@ export function resolveWebhookTarget({
 
   if (DEAL_OBJECT_TYPES.has(type)) {
     return { ok: true, target: "client", dealId: id, objectTypeId: "0-3" };
+  }
+
+  if (CONTACT_OBJECT_TYPES.has(type)) {
+    return { ok: true, target: "contact", contactId: id, objectTypeId: "0-1" };
   }
 
   if (isConfigured(bcbaObjectTypeId) && (type === bcbaObjectTypeId || type === "bcba")) {

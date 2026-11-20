@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+import { answersLikeHubSpot } from "./stage2Fakes.mjs";
 
 function buildDeps(overrides = {}) {
   const calls = {
@@ -58,6 +59,8 @@ function buildDeps(overrides = {}) {
     buildEmployeePayloadForContactId: (payload) => ({ payload }),
     createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "100" }),
     updateClientMetadata: async () => ({}),
+    // Row 6.4 (lane E): the BCBA's Contact. No Contact is linked.
+    listAssociations: async () => [],
     writeEmployeeWriteback: async ({ objectTypeId, recordId, properties }) => {
       calls.writebacks.push({ objectTypeId, recordId, properties });
       return { fallbackUsed: false, removedProperties: [] };
@@ -73,7 +76,11 @@ function buildDeps(overrides = {}) {
     buildErrorLog: () => ({})
   };
 
-  return { deps: { ...deps, ...overrides }, calls };
+  // Row 4.18 (lane E): HubSpot answers every requested property, a blank one as a null key.
+  const merged = { ...deps, ...overrides };
+  merged.getBtRbtRecordById = answersLikeHubSpot(merged.getBtRbtRecordById);
+  merged.getBcbaRecordById = answersLikeHubSpot(merged.getBcbaRecordById);
+  return { deps: merged, calls };
 }
 
 test("workflow writes success state on successful update", async () => {

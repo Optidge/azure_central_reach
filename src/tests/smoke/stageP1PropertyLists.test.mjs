@@ -27,6 +27,7 @@ import {
   clientWorkflowDeps,
   employeeWorkflowDeps,
   fakeCentralReach,
+  hubspotAnswer,
   hubspotRecord,
   memoryContainer,
   workflowConfig
@@ -215,7 +216,8 @@ test("[BR5][P.1] the employee worker asks HubSpot for the listed properties plus
         }),
         [reader]: async (recordId, objectTypeId, properties) => {
           requested.push(properties);
-          return record.read();
+          // Row 4.18 (lane E): every requested property is a key, a blank one null.
+          return hubspotAnswer(record.read(), properties);
         }
       }
     );

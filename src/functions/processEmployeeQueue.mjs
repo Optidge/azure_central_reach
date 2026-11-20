@@ -106,7 +106,9 @@ export async function processEmployeeQueue(message, context, dependencies = {}) 
           hsLastModifiedDate: validated.hsLastModifiedDate,
           source: asNonEmptyString(payload?.source) || undefined,
           context,
-          lastAttempt
+          lastAttempt,
+          // Row 3.20: the delivery attempt, for the run summary line.
+          attempt: validated.attempt
         });
       }
     });
