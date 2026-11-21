@@ -161,7 +161,8 @@ function caseCreate(ids, roundFile) {
     C17: [meta(132304, `AzT ${N} Sched 1 Mon-Fri 9-12`), meta(138093, `AzT ${N} Sched 2 Sat 10-1`)],
     C18: skip("open (O-14): no CR field"),
     C19: [meta(126209, `AzT ${N} weekdays after 3pm, ${pick("20", "15", "25")}`)],
-    C20: [meta(134331, pick("16", "11", ""), "hours")],
+    // O-39 option a (Zeke 2026-11-21): the code sums the two hours, a blank counting as 0.
+    C20: [meta(134331, pick("16", "11", "14"), "hours")],
     C21: skip("open (O-18)"),
     C22: [meta(132431, pick("8", "6", ""))],
     C23: [meta(134672, pick("11/01/2026 - 04/30/2027", "12/01/2026 - 05/31/2027", "01/01/2027 - 06/30/2027"))],
@@ -208,6 +209,7 @@ function bcbaCreate(ids) {
       core("stateProvince", S.code, "state"), core("zipPostalCode", `${S.zip}3`),
       core("phoneCell", phoneDigits("04"), "digits")],
     B8: [meta(126216, `AZTNY00${N}`), meta(138112, `AZTNJ00${N}`), meta(138113, `AZTCO00${N}`)],
+    // Source: the BCBA's own `email` (O-40/O-42, Zeke 2026-11-21), not the Contact.
     B9: [meta(138069, `zeke+bcba_azure_test_${N}@optidge.com`, "ci")],
     B10: [labels(pick([1132653], [], [1132653]), [1132653])],
     B11: skip("open (O-17)"),

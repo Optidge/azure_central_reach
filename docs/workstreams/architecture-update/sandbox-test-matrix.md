@@ -73,7 +73,7 @@ Created by `create-test-records.mjs --round 1 --write`; the IDs are in `sandbox-
 Three items do not match the matrix:
 - C20 and C10 changed source after the create (decisions 39 and 40). On 2026-11-20 the Case had `care_coordinator_name`, `bt_rbt_2_work_schedule` and `total_hours_btrbt_12` blank; the script now sets the first two, so round 1 is re-run with `--write` before the Case push.
 - `referral_source` is blank (C36).
-- BCBA `email` is blank: the sandbox does not mirror it from the Contact (production does, 92/98). After row 6.4 the integration reads the Contact email directly, so B9 is unaffected.
+- BCBA `email` is blank: the sandbox does not mirror it from the Contact (production does, 92/98). Row 6.4 now reads the BCBA's own `email` (O-40/O-42, Zeke 2026-11-21), so the script sets it and the round 1 `--write` re-run fills it before the BCBA push.
 
 BT/RBT 1 `active_cases_count` (T7) was blank 60 seconds after the create; it is read again before the push.
 
@@ -89,7 +89,7 @@ Production 2026-11-20. Each mirror was compared with every Contact property on t
 | BCBA | `state_home` | `state_dropdown` (select; stores the full state name) | 96/96 |
 | BCBA | `postal_code_home` | `zip` | 97/97 |
 | BCBA | `employee_phone` | `phone` | 99/99 |
-| BCBA | `email` (personal; B9 reads the Contact directly after row 6.4) | `email` | 92/98 |
+| BCBA | `email` (personal; B9 reads it here, O-40/O-42) | `email` | 92/98 |
 | BT/RBT | `street_home` | `address` | 96/96 |
 | BT/RBT | `location_city` | `city` | 77/77 |
 | BT/RBT | `state_home` | `state_dropdown` | 19/19 |
@@ -175,7 +175,7 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 | C17 | `work_schedule_details`, `btrbt_work_schedule_2_details` | AzT N Sched 1 Mon-Fri 9-12 / AzT N Sched 2 Sat 10-1 | same | same | + " U1" | Meta `132304`, `138093` | GET | |
 | C18 | `work_schedule_*_details__for_location_2_other` | — | — | — | — | **open** (O-14): no CR field | — | |
 | C19 | `finalized_client_service_hours_post_assessment`, `client_service_hours_total` | AzT N weekdays after 3pm / 20 | / 15 | / 25 | / 22 | Meta `126209` = "text, hours" (assumed format, O-28) | GET | |
-| C20 | `total_hours_btrbt_12` (decision 40, Zeke 2026-11-20; replaces `total_hours_bt1bt2_work_schedule` in guide lines 361 and 509). Calculated: `hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, blank unless both are filled. The script sets the inputs, and also `hours_bt_work_schedule_2` higher, so the excluded `total_hours_bt_12_work_schedule` holds a different total | 10 + 6 (`_2` = 8) | 7 + 4 (`_2` = 5) | 14 + blank (`_2` = 10) | `hours_bt_work_schedule_1` → 11 | Meta `134331` = 16 / 11 / blank / 17. Never 18, 12 or 24 (`total_hours_bt_12_work_schedule`) or 2 (`total_hours_bt1bt2_work_schedule`, formula `1 + 1`) | GET; HS read-back | R1 needs the script re-run with `--write` (2026-11-20: `bt_rbt_2_work_schedule` blank, so the total is blank) |
+| C20 | `total_hours_btrbt_12` (decision 40, Zeke 2026-11-20; replaces `total_hours_bt1bt2_work_schedule` in guide lines 361 and 509). Calculated: `hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, blank unless both are filled. O-39 option a (Zeke 2026-11-21): the code sums the two inputs itself, a blank counting as 0, so a Case with one BT's hours still sends a total. The script sets the inputs, and also `hours_bt_work_schedule_2` higher, so the excluded `total_hours_bt_12_work_schedule` holds a different total | 10 + 6 (`_2` = 8) | 7 + 4 (`_2` = 5) | 14 + blank (`_2` = 10) | `hours_bt_work_schedule_1` → 11 | Meta `134331` = 16 / 11 / 14 / 17 (R3: HubSpot's `total_hours_btrbt_12` stays blank, CR gets 14). Never 18, 12 or 24 (`total_hours_bt_12_work_schedule`) or 2 (`total_hours_bt1bt2_work_schedule`, formula `1 + 1`) | GET; HS read-back | R1 needs the script re-run with `--write` (2026-11-20: `bt_rbt_2_work_schedule` blank, so the total is blank) |
 | C21 | `hours_bt_work_schedule_1/2` | — | — | — | — | **open** (O-18) | — | |
 | C22 | `initial_auth_tracks` + `n97153_approved_assessment_hours_auth_req` (8) + `ia_hours_from_the_ia` (6) | Prior Authorization Required | No Prior Authorization Required | blank | R1 → No Prior | Meta `132431`: R1 "8", R2 "6", R3 blank, U1 "6" | GET | |
 | C23 | `ongoing_auth_period_start_date`, `ongoing_autrh_period_end_date` | 2026-11-01 / 2027-04-30 | 2026-12-01 / 2027-05-31 | 2027-01-01 / 2027-06-30 | start date cleared | Meta `134672` = "11/01/2026 - 04/30/2027"; U1: "04/30/2027" | GET | |
@@ -221,7 +221,7 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 | B6 | `gender_new` | Male | Female | Male | Female | gender | GET | |
 | B7 | Contact `address`, `apartment`, `city`, `state_dropdown`, `zip`, `phone` | N04 Azure BCBA St, Apt NB, New York, New York, 10003, 212-555-NN04 | Denver, Colorado, 80203, 303-… | Newark, New Jersey, 07103, 973-… | street + " U1" (on the Contact) | address 1, 2, city, state, zip, cell phone | GET | |
 | B8 | `medicaid_id__ny/nj/co` | AZTNY00N / AZTNJ00N / AZTCO00N | same | same | NY → blank | Meta `126216`, `138112`, `138113` | GET | |
-| B9 | Contact `email` (BCBA → Contact 191) | zeke+bcba_azure_test_N@optidge.com | same | same | changed on the Contact (K3) | Meta `138069` | GET | |
+| B9 | BCBA `email` (the BCBA's own; O-40/O-42, Zeke 2026-11-21, replaces the Contact read) | zeke+bcba_azure_test_N@optidge.com | same | same | changed on the BCBA (K3) | Meta `138069` | GET | |
 | B10 | `work_status` | Salaried | Hourly | Salaried | R1 → Hourly | label Salaried `1132653` in R1 and R3; removed in U1 (O-27) | GET labels | |
 | B11 | `hubspot_owner_id` | — | — | — | — | **open** (O-17) | — | |
 | B12 | record ID | — | — | — | — | Meta `138703` = the BCBA record link | GET | |
@@ -258,7 +258,7 @@ R1, R2 and R3 are the create values. U1 is the R1-U1 change. U2 is the blank rou
 |---|---|---|---|---|---|
 | K1 | Guardian Contact, one change at a time: `phone` → 212-555-NN21; `email` → zeke+swanson_azure_test_N_u1@optidge.com; `firstname` → Ron Azure Test RN; `lastname` → Swanson U1 | R1-U1 | The Case's sync properties follow, and the client gets an update each time (C6, C7, C8 cell phone) | GET; Log (fan-out queued 1 Case) | |
 | K2 | (the same run) | R1-U1 | The Case reads the Guardian values from its own sync properties | Log `changedFieldNames` | |
-| K3 | BCBA Contact `email` | R1-U1 | Meta `138069` updates | GET | |
+| K3 | BCBA `email` (on the BCBA record, O-40/O-42) | R1-U1 | Meta `138069` updates | GET | |
 | K4 | A Contact with `test_record` = true is changed | R1-U1 | The fan-out queues nothing | Log | |
 | K5 | BT/RBT Contact `address` | R1-U1 | **open** (O-26): does the BT/RBT workflow fire? The daily sweep is the fallback | Log; GET | |
 
@@ -337,6 +337,8 @@ Rule (Zeke, 2026-11-20): every open question is checked against the Google Drive
 1. C36: the guide says `referral_source` is read-only and is to be read, but not where its value comes from. Do you know how a Case gets a Referral Source (a form, an import, a sync)? If a test Case can be given one that way, C36 gets a real value; otherwise it is tested as blank.
 
 **Decided: C20 and C10 (Zeke, 2026-11-20, in the build chat).**
+- O-39 (Zeke, 2026-11-21): option a. The code sums `hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, a blank as 0 (production: 215 of 234 Cases with BT 1 hours have no BT 2 hours, so the HubSpot formula would send blank). **Open note, to confirm with Zeke/UCA: when to use HubSpot's `total_hours_btrbt_12` instead of the code sum** (for example if UCA changes the formula to treat a blank as 0).
+- O-40/O-42 (Zeke, 2026-11-21): B9 reads the BCBA's own `email`. The 16 production BCBAs whose email differs from their Contact's need no check for now.
 - Decision 40: C20 reads `total_hours_btrbt_12` (`hours_bt_work_schedule_1` + `bt_rbt_2_work_schedule`, only when both are filled). No formula edit; the earlier plan to fix `total_hours_bt1bt2_work_schedule` (`1 + 1`) is dropped.
 - Decision 39: C10 reads `care_coordinator_name`, not the owners API.
 - Both differ from the guide (lines 352, 361, 474, 501, 509). The guide is not edited without Zeke's word.

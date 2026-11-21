@@ -127,6 +127,9 @@ const bcba = {
   ny_insurance_labels: pick("MCD FFS-NY", "Aetna-NY", ""),
   work_status: pick("Salaried", "Hourly", "Salaried"),
   cr_billing_hold_label: pick("Yes", "No", ""),
+  // B9 (O-40/O-42, Zeke 2026-11-21): row 6.4 reads the BCBA's own `email`, not the Contact's.
+  // The sandbox does not mirror it from the Contact, so it is set here with the same value.
+  email: `zeke+bcba_azure_test_${N}@optidge.com`,
   sandbox_test_field: "true"
 };
 
@@ -226,10 +229,12 @@ const deal = {
   // R3 leaves the whole secondary insurance blank (C30 blank case).
   insurance_2__other__summary: pick(`AzT ${N} other carrier 2`, `AzT ${N} other carrier 2`, ""),
   insurance_id_2: pick(`AZT-${N}-INS2`, `AZT-${N}-INS2`, ""),
-  // C20 (decision 40): CR gets total_hours_btrbt_12 = hours_bt_work_schedule_1 +
-  // bt_rbt_2_work_schedule, calculated, blank unless both are filled. bt_rbt_2_work_schedule is
-  // set lower than hours_bt_work_schedule_2 so the expected total (16 / 11) differs from the
-  // excluded total_hours_bt_12_work_schedule (18 / 12). R3 leaves it blank: C20 must be blank.
+  // C20 (decision 40; O-39 option a, Zeke 2026-11-21): CR gets hours_bt_work_schedule_1 +
+  // bt_rbt_2_work_schedule, summed by the code with a blank as 0. HubSpot's own
+  // total_hours_btrbt_12 stays blank unless both are filled, so for R3 (14 + blank) CR gets 14
+  // while HubSpot shows blank. bt_rbt_2_work_schedule is set lower than hours_bt_work_schedule_2
+  // so the expected total (16 / 11) differs from the excluded total_hours_bt_12_work_schedule
+  // (18 / 12).
   hours_bt_work_schedule_1: pick("10", "7", "14"),
   hours_bt_work_schedule_2: pick("8", "5", "10"),
   bt_rbt_2_work_schedule: pick("6", "4", ""),

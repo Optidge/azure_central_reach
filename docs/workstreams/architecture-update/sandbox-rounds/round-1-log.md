@@ -22,8 +22,8 @@ One entry per push or change, in order. Each entry is filled from the tools, nev
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` present (name only) | |
 | Sampling off: `AzureFunctionsJobHost__logging__applicationInsights__samplingSettings__isEnabled` = false | |
 | App state Running | |
-| Round 1 re-run with `--write` for decisions 39/40 (`care_coordinator_name`, `bt_rbt_2_work_schedule`) | |
-| Read-back: `total_hours_btrbt_12` = 16, `care_coordinator_name` = Zeke Swanson, BT/RBT 1 `active_cases_count` filled (T7) | |
+| Round 1 re-run with `--write` for decisions 39/40 and O-40/O-42 (`care_coordinator_name`, `bt_rbt_2_work_schedule`, BCBA `email`) | |
+| Read-back: `total_hours_btrbt_12` = 16, `care_coordinator_name` = Zeke Swanson, BCBA `email` filled (B9), BT/RBT 1 `active_cases_count` filled (T7) | |
 
 ## Entry template
 
