@@ -6,6 +6,7 @@
 // - fakeQueues: the two Service Bus senders, so serviceBusClient.mjs builds the real messages.
 // - The Cosmos container is the shared in-memory one, so cosmosState.mjs runs for real.
 import { createHubSpotClient } from "../../lib/hubspotClient.mjs";
+import { answeringPortalCheck, portalCheckedHubSpotConfig } from "./hubspotPortalCheckFake.mjs";
 import { useStateContainer } from "../../lib/cosmosState.mjs";
 import { useServiceBusSenders } from "../../lib/serviceBusClient.mjs";
 import { runIntakePollerWorkflow } from "../../workflows/intakePollerWorkflow.mjs";
@@ -84,10 +85,8 @@ export function fakeHubSpotSearch() {
     requestsFor: (objectTypeId) => requests.filter((item) => item.objectTypeId === objectTypeId)
   };
 
-  const client = createHubSpotClient({
-    hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
-  });
-  client.defaults.adapter = async (requestConfig) => {
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
+  client.defaults.adapter = answeringPortalCheck(async (requestConfig) => {
     const match = /^\/crm\/v3\/objects\/([^/]+)\/search$/.exec(String(requestConfig.url || ""));
     if (String(requestConfig.method).toLowerCase() !== "post" || !match) {
       throw new Error(`A poller test made an unexpected HubSpot call: ${requestConfig.url}`);
@@ -143,7 +142,7 @@ export function fakeHubSpotSearch() {
         ...(more ? { paging: { next: { after: String(offset + limit) } } } : {})
       }
     };
-  };
+  });
   return hubspot;
 }
 

@@ -14,6 +14,7 @@ import {
   CONTACT_TRIGGER_PROPERTIES,
   checkTriggers,
   expectedTriggerProperties,
+  formatExpectedList,
   isEntryScript,
   writtenProperties
 } from "../../../scripts/check-triggers.mjs";
@@ -173,4 +174,18 @@ test("[BR13][3.10] started through a symlink the check still runs: it prints its
     assert.equal(passed || failed, true, "the check printed its result");
     assert.equal(run.status, passed ? 0 : 1);
   });
+});
+
+test("[BR18][3.10] --expected prints each object's trigger properties sorted, one per line, with a count", () => {
+  const text = formatExpectedList({ case: ["phone", "email", "phone"], contact: ["lastname"] });
+  assert.equal(text, "Case (2)\nemail\nphone\n\nContact (1)\nlastname\n");
+});
+
+test("[BR18][3.10] started with --expected the script lists all four objects and exits 0 without judging the JSON file", () => {
+  const run = spawnSync(process.execPath, [TRIGGERS_SCRIPT, "--expected"], { encoding: "utf8" });
+  assert.equal(run.status, 0);
+  for (const label of ["Case (", "BCBA (", "BT/RBT (", "Contact ("]) {
+    assert.equal(run.stdout.includes(label), true, label);
+  }
+  assert.equal(run.stdout.includes("check:triggers"), false);
 });

@@ -154,26 +154,47 @@ test("[C19][4.5] Client Availability is blank when both sources are blank, and c
 
 // --- 4.6, C20: Total Assigned Hours ---
 
-test("[C20][4.6] Total Assigned Hours reads total_hours_btrbt_12 (decision 40), never total_hours_bt1bt2_work_schedule, the older total or assigned_hours", () => {
+const hours = (bt1, bt2) => meta({ hours_bt_work_schedule_1: bt1, bt_rbt_2_work_schedule: bt2 })[134331];
+
+test("[C20][4.6] Total Assigned Hours is the sum of hours_bt_work_schedule_1 and bt_rbt_2_work_schedule (9 + 7 = 16)", () => {
+  assert.equal(hours("9", "7"), "16");
+});
+
+test("[C20][4.6] Total Assigned Hours with only one input filled counts the blank one as 0", () => {
+  assert.equal(hours("9", null), "9");
+  assert.equal(hours("", "7"), "7");
+});
+
+test("[C20][4.6] Total Assigned Hours with both inputs blank is a real blank: field 134331 is there with null, not 0", () => {
+  for (const blank of [null, "", undefined]) {
+    const values = meta({ hours_bt_work_schedule_1: blank, bt_rbt_2_work_schedule: blank });
+    assert.equal(has(values, 134331), true);
+    assert.equal(values[134331], null);
+  }
+});
+
+test("[C20][4.6] Total Assigned Hours sums decimals without floating point noise (7.5 + 8.1 = 15.6)", () => {
+  assert.equal(hours("7.5", "8.1"), "15.6");
+  assert.equal(hours("0.1", "0.2"), "0.3");
+});
+
+test("[C20][4.6] Total Assigned Hours ignores total_hours_btrbt_12 and the other totals", () => {
   const values = meta({
-    total_hours_btrbt_12: "22.5",
+    total_hours_btrbt_12: "99",
     total_hours_bt1bt2_work_schedule: "1",
     total_hours_bt_12_work_schedule: "2",
     assigned_hours: "3"
   });
-  assert.equal(values[134331], "22.5");
-  assert.equal(
-    meta({ total_hours_bt1bt2_work_schedule: "1", total_hours_bt_12_work_schedule: "2", assigned_hours: "3" })[134331],
-    null
-  );
+  assert.equal(values[134331], null);
+  assert.equal(hours("9", "7"), "16");
 });
 
-test("[C20][4.6] a blank total_hours_btrbt_12 (HubSpot leaves it blank when only one BT has hours) is a real blank: field 134331 is there with null", () => {
-  for (const blank of [null, ""]) {
-    const values = meta({ total_hours_btrbt_12: blank, hours_bt_work_schedule_1: "16" });
-    assert.equal(has(values, 134331), true);
-    assert.equal(values[134331], null);
-  }
+test("[C20][4.6] a filled hours input that is not a number leaves field 134331 out and is reported, so the worker ends the run as an error", () => {
+  const mapped = mapCase({ hours_bt_work_schedule_1: "abc", bt_rbt_2_work_schedule: "7" });
+  assert.equal(has(mapped.metadataValues, 134331), false);
+  // F-1: an unreadable value, not an unreadable date.
+  assert.deepEqual(mapped.unreadableValueProperties, ["hours_bt_work_schedule_1"]);
+  assert.deepEqual(mapped.unreadableDateProperties, []);
 });
 
 // --- 4.7, C22: Approved Auth Hours ---

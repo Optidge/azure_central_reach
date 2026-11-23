@@ -70,7 +70,8 @@ import {
   RETRIES_USED_UP,
   crIdNotDigits,
   missingPropertiesReason,
-  unreadableDate
+  unreadableDate,
+  unreadableValue
 } from "../constants/syncReasons.mjs";
 import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
 import {
@@ -98,6 +99,7 @@ const DECIDED_CODES = Object.freeze({
   CR_ID_NOT_DIGITS: "CR_ID_NOT_DIGITS",
   VALIDATION_FAILED: "VALIDATION_FAILED",
   UNREADABLE_DATE: "UNREADABLE_DATE",
+  UNREADABLE_VALUE: "UNREADABLE_VALUE",
   CASE_CLIENT_ID_MISMATCH: "CASE_CLIENT_ID_MISMATCH"
 });
 
@@ -158,11 +160,13 @@ function buildCentralReachContactUrl(contactId) {
   return `https://members.centralreach.com/#contacts/details/?id=${id}`;
 }
 
-// dateOfBirthStatus is a note for the validator. It is not a CentralReach field, so it is kept out
-// of the request and out of the hash on every read of the Case.
+// dateOfBirthStatus and unreadableValueProperties are notes for the worker. They are not
+// CentralReach fields, so they are kept out of the request and out of the hash on every read of
+// the Case.
 function centralReachPayload(mapped) {
   const payload = { ...(mapped || {}) };
   delete payload.dateOfBirthStatus;
+  delete payload.unreadableValueProperties;
   return payload;
 }
 
@@ -461,6 +465,14 @@ export async function runClientSyncWorkflow(
         DECIDED_CODES.VALIDATION_FAILED
       );
     }
+    // F-1 (rule 5.8): a filled phone, email, state or gender that cannot be converted to the
+    // CentralReach format. It is never sent as a blank: the run ends as `error`, nothing is sent.
+    if ((mappedPayload.unreadableValueProperties || []).length > 0) {
+      return await decidedError(
+        unreadableValue(mappedPayload.unreadableValueProperties.join(", ")),
+        DECIDED_CODES.UNREADABLE_VALUE
+      );
+    }
     const payload = centralReachPayload(mappedPayload);
 
     // Row 4.14: the staff on the Case are read here and passed to the mapper. A failed association
@@ -543,6 +555,13 @@ export async function runClientSyncWorkflow(
       return await decidedError(
         unreadableDate(metadata.unreadableDateProperties.join(", ")),
         DECIDED_CODES.UNREADABLE_DATE
+      );
+    }
+    // F-1: a filled metadata input that is not a value of its format (C20 hours, row 4.6).
+    if ((metadata.unreadableValueProperties || []).length > 0) {
+      return await decidedError(
+        unreadableValue(metadata.unreadableValueProperties.join(", ")),
+        DECIDED_CODES.UNREADABLE_VALUE
       );
     }
 

@@ -3,104 +3,21 @@ import {
   CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS
 } from "../../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../../constants/hubspot.mjs";
-import { readDate } from "../../lib/dates.mjs";
+import { readDate, readTextDate } from "../../lib/dates.mjs";
+import {
+  createValueReader,
+  readEmail,
+  readGender,
+  readPhone,
+  readStateCode
+} from "../../lib/fieldFormats.mjs";
 
-const US_STATE_NAME_TO_CODE = {
-  ALABAMA: "AL",
-  ALASKA: "AK",
-  ARIZONA: "AZ",
-  ARKANSAS: "AR",
-  CALIFORNIA: "CA",
-  COLORADO: "CO",
-  CONNECTICUT: "CT",
-  DELAWARE: "DE",
-  FLORIDA: "FL",
-  GEORGIA: "GA",
-  HAWAII: "HI",
-  IDAHO: "ID",
-  ILLINOIS: "IL",
-  INDIANA: "IN",
-  IOWA: "IA",
-  KANSAS: "KS",
-  KENTUCKY: "KY",
-  LOUISIANA: "LA",
-  MAINE: "ME",
-  MARYLAND: "MD",
-  MASSACHUSETTS: "MA",
-  MICHIGAN: "MI",
-  MINNESOTA: "MN",
-  MISSISSIPPI: "MS",
-  MISSOURI: "MO",
-  MONTANA: "MT",
-  NEBRASKA: "NE",
-  NEVADA: "NV",
-  "NEW HAMPSHIRE": "NH",
-  "NEW JERSEY": "NJ",
-  "NEW MEXICO": "NM",
-  "NEW YORK": "NY",
-  "NORTH CAROLINA": "NC",
-  "NORTH DAKOTA": "ND",
-  OHIO: "OH",
-  OKLAHOMA: "OK",
-  OREGON: "OR",
-  PENNSYLVANIA: "PA",
-  "RHODE ISLAND": "RI",
-  "SOUTH CAROLINA": "SC",
-  "SOUTH DAKOTA": "SD",
-  TENNESSEE: "TN",
-  TEXAS: "TX",
-  UTAH: "UT",
-  VERMONT: "VT",
-  VIRGINIA: "VA",
-  WASHINGTON: "WA",
-  "WEST VIRGINIA": "WV",
-  WISCONSIN: "WI",
-  WYOMING: "WY",
-  "DISTRICT OF COLUMBIA": "DC"
-};
+// The employee side accepts m / f as well as male / female (kept from before F-1).
+const GENDER_OPTIONS = Object.freeze({ allowInitials: true });
 
 function trimOrNull(value) {
   const stringValue = String(value ?? "").trim();
   return stringValue || null;
-}
-
-function cleanEmail(value) {
-  const email = String(value ?? "").trim().toLowerCase();
-  return email || null;
-}
-
-function normalizePhone(value) {
-  const digits = String(value ?? "").replace(/\D+/g, "");
-  if (digits.length === 11 && digits.startsWith("1")) {
-    return digits.slice(-10);
-  }
-  if (digits.length === 10) {
-    return digits;
-  }
-  return digits || null;
-}
-
-function normalizeStateCode(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) {
-    return null;
-  }
-  if (/^[A-Za-z]{2}$/.test(raw)) {
-    return raw.toUpperCase();
-  }
-  const normalizedName = raw.replace(/\./g, "").replace(/\s+/g, " ").toUpperCase();
-  return US_STATE_NAME_TO_CODE[normalizedName] || null;
-}
-
-function mapGender(value) {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "male" || normalized === "m") {
-    return "Male";
-  }
-  if (normalized === "female" || normalized === "f") {
-    return "Female";
-  }
-  return null;
 }
 
 // Guide [G17]: send workday_id, or the HubSpot record ID when workday_id is blank.
@@ -113,11 +30,29 @@ export function externalSystemIdForCreate(properties, recordId) {
   return String(recordId ?? "").trim();
 }
 
-function employeeDateFields(properties) {
-  if (!Object.prototype.hasOwnProperty.call(properties || {}, "date_of_birth")) {
+// The HubSpot property each employee type reads its date of birth from.
+// BT/RBT `date_of_birth` is a date picker (a property sync from the Contact): `readDate`.
+// BCBA: `dob`, single-line text typed as M/D/YYYY in production (decision 48, 2026-11-21).
+// Pending United Care's confirmation whether the BCBA date of birth lives in `dob` or
+// `date_of_birth` (O-10). Switching back is this one line. `readTextDate` converts the typed
+// forms to YYYY-MM-DD, the format sent to CentralReach `dateOfBirth`.
+export const BT_RBT_DATE_OF_BIRTH_PROPERTY = "date_of_birth";
+export const BCBA_DATE_OF_BIRTH_PROPERTY = "dob";
+
+// B4 (decision 49, 2026-11-21): the BCBA CentralReach primaryEmail is the BCBA record's own
+// `email`, not `ucaba_email_address`.
+export const BCBA_PRIMARY_EMAIL_PROPERTY = "email";
+
+// B9 and T9 (decision 50, 2026-11-23): CentralReach Meta 138069 Personal Email reads
+// `personal_email` (label "Personal Email (backup only, never emailed)") on the BCBA and on the
+// BT/RBT. The primary email stays on `email`.
+export const EMPLOYEE_PERSONAL_EMAIL_PROPERTY = "personal_email";
+
+function employeeDateFields(properties, property, readValue = readDate) {
+  if (!Object.prototype.hasOwnProperty.call(properties || {}, property)) {
     return { dateOfBirth: null, dateOfBirthStatus: "missing" };
   }
-  const read = readDate(properties.date_of_birth);
+  const read = readValue(properties[property]);
   if (read === "blank" || read === "unreadable") {
     return { dateOfBirth: null, dateOfBirthStatus: read };
   }
@@ -263,9 +198,12 @@ function requiredBcbaLabels({ properties, workStates }) {
 function buildBtRbtPayload({ record, config }) {
   const properties = record?.properties || {};
   const recordId = properties.hs_object_id || record?.id;
-  const dateFields = employeeDateFields(properties);
+  const dateFields = employeeDateFields(properties, BT_RBT_DATE_OF_BIRTH_PROPERTY);
+  // F-1: a filled phone, email, state or gender that cannot be converted is named in
+  // unreadableValueProperties and sent as nothing; the worker ends the run as `error`.
+  const { valueOf, unreadableValueProperties } = createValueReader(properties);
   // T4, row 5.9: the mailing state is state_home. The Work States (`location`) drive the labels.
-  const stateCode = normalizeStateCode(properties.state_home);
+  const stateCode = valueOf(readStateCode, "state_home");
   const { workStates, warnings } = readWorkStates(properties);
   const btRbtType = String(properties.bt_rbt_type || "").trim().toUpperCase() || null;
   if (btRbtType && !Object.hasOwn(ROLE_LABELS, btRbtType)) {
@@ -279,16 +217,16 @@ function buildBtRbtPayload({ record, config }) {
     externalSystemId: externalSystemIdForCreate(properties, recordId),
     firstName: trimOrNull(properties.first_name),
     lastName: trimOrNull(properties.last_name),
-    gender: mapGender(properties.gender),
+    gender: valueOf(readGender, "gender", GENDER_OPTIONS),
     dateOfBirth: dateFields.dateOfBirth,
-    primaryEmail: cleanEmail(properties.email),
+    primaryEmail: valueOf(readEmail, "email"),
     addressLine1: trimOrNull(properties.street_home),
     // T5: home_apt stays as line 2 until O-20 is decided.
     addressLine2: trimOrNull(properties.home_apt),
     city: trimOrNull(properties.location_city),
     stateProvince: stateCode,
     zipPostalCode: trimOrNull(properties.postal_code_home),
-    phoneCell: normalizePhone(properties.employee_phone)
+    phoneCell: valueOf(readPhone, "employee_phone")
   };
 
   // T6, row 5.10: "street, apartment, city, state zip".
@@ -313,7 +251,14 @@ function buildBtRbtPayload({ record, config }) {
     recordId: properties.hs_object_id || record?.id
   });
 
-  const metadataValues = {};
+  const metadataValues = {
+    // T9 (decision 50): the personal email, as for the BCBA (B9). Blank sends a blank; a filled
+    // email that fails the format check is unreadable (F-1).
+    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.PERSONAL_EMAIL]: valueOf(
+      readEmail,
+      EMPLOYEE_PERSONAL_EMAIL_PROPERTY
+    )
+  };
   if (workAddress) {
     metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS] = workAddress;
   }
@@ -339,17 +284,20 @@ function buildBtRbtPayload({ record, config }) {
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
     emailField: "email",
-    dateOfBirthStatus: dateFields.dateOfBirthStatus
+    dateOfBirthField: BT_RBT_DATE_OF_BIRTH_PROPERTY,
+    dateOfBirthStatus: dateFields.dateOfBirthStatus,
+    unreadableValueProperties
   };
 }
 
-function buildBcbaPayload({ record, config, contactEmail }) {
+function buildBcbaPayload({ record, config }) {
   const properties = record?.properties || {};
   const recordId = properties.hs_object_id || record?.id;
-  const dateFields = employeeDateFields(properties);
+  const dateFields = employeeDateFields(properties, BCBA_DATE_OF_BIRTH_PROPERTY, readTextDate);
   // B7, row 5.2: the mailing address reads the Contact mirrors. The Work States (`location`) drive
   // the labels.
-  const stateCode = normalizeStateCode(properties.state_home);
+  const { valueOf, unreadableValueProperties } = createValueReader(properties);
+  const stateCode = valueOf(readStateCode, "state_home");
   const { workStates, warnings } = readWorkStates(properties);
 
   const employeePayload = {
@@ -357,15 +305,15 @@ function buildBcbaPayload({ record, config, contactEmail }) {
     firstName: trimOrNull(properties.first_name),
     lastName: trimOrNull(properties.last_name),
     // B6, row 5.1: gender_new, never the archived gender.
-    gender: mapGender(properties.gender_new),
+    gender: valueOf(readGender, "gender_new", GENDER_OPTIONS),
     dateOfBirth: dateFields.dateOfBirth,
-    primaryEmail: cleanEmail(properties.ucaba_email_address),
+    primaryEmail: valueOf(readEmail, BCBA_PRIMARY_EMAIL_PROPERTY),
     addressLine1: trimOrNull(properties.address),
     addressLine2: trimOrNull(properties.apartment__home),
     city: trimOrNull(properties.city_home),
     stateProvince: stateCode,
     zipPostalCode: trimOrNull(properties.postal_code_home),
-    phoneCell: normalizePhone(properties.employee_phone)
+    phoneCell: valueOf(readPhone, "employee_phone")
   };
 
   const hubspotRecordUrl = buildHubspotRecordUrl({
@@ -375,12 +323,13 @@ function buildBcbaPayload({ record, config, contactEmail }) {
   });
 
   const metadataValues = {
-    // B9, row 6.4: the personal email is the email of the BCBA's Contact, which the worker reads
-    // and passes in. Not passed (the Contact could not be read): the key is left out, and the
-    // worker names the field in omitFieldIds (contract P.5 (c) below).
-    ...(contactEmail === undefined
-      ? {}
-      : { [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL]: cleanEmail(contactEmail) }),
+    // B9, row 6.4 (decision 50): the personal email is the BCBA record's own `personal_email`,
+    // not `email` (which feeds primaryEmail only). Blank sends a blank, like the other BCBA
+    // metadata fields. A filled email that fails the format check is unreadable (F-1).
+    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.PERSONAL_EMAIL]: valueOf(
+      readEmail,
+      EMPLOYEE_PERSONAL_EMAIL_PROPERTY
+    ),
     [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY]: trimOrNull(
       properties.medicaid_id__ny
     ),
@@ -408,8 +357,10 @@ function buildBcbaPayload({ record, config, contactEmail }) {
     workStates,
     stateCode,
     employeeFamily: HUBSPOT_EMPLOYEE_TYPES.BCBA,
-    emailField: "ucaba_email_address",
-    dateOfBirthStatus: dateFields.dateOfBirthStatus
+    emailField: BCBA_PRIMARY_EMAIL_PROPERTY,
+    dateOfBirthField: BCBA_DATE_OF_BIRTH_PROPERTY,
+    dateOfBirthStatus: dateFields.dateOfBirthStatus,
+    unreadableValueProperties
   };
 }
 
@@ -444,17 +395,12 @@ function buildBcbaPayload({ record, config, contactEmail }) {
 // field is then not sent and not cleared. Row 3.18: the worker also keeps the field's saved hash
 // in the link record and leaves the field out of the changed fields, so a later blank in HubSpot
 // still sends the clear.
-//   contactEmail  (BCBA only, row 6.4) the `email` of the Contact linked by BCBA -> Contact, as
-//                 read by the worker: a text, or null when no Contact is linked or its email is
-//                 blank (Meta 138069 is then blank). Left undefined when the Contact could not be
-//                 read or more than one is linked: the mapper leaves 138069 out and the worker
-//                 names it in omitFieldIds. Both mappings of one run get the same value.
-export function buildEmployeePayload({ record, employeeType, config, contactEmail }) {
+export function buildEmployeePayload({ record, employeeType, config }) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return buildBtRbtPayload({ record, config });
   }
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BCBA) {
-    return buildBcbaPayload({ record, config, contactEmail });
+    return buildBcbaPayload({ record, config });
   }
   throw new Error("Unsupported employeeType");
 }

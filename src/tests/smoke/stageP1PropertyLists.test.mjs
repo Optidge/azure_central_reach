@@ -142,8 +142,8 @@ test("[P.1] workday_id is mapped on both employee objects, so the trigger check 
   assert.equal(BCBA_PROPERTIES.mapped.includes("workday_id"), true);
 });
 
-test("[B13][P.1] knownMetadataFieldIds: the BT/RBT fields are unchanged, and the BCBA fields no longer hold 134444 (row 5.3)", () => {
-  assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [133819, 147882, 138703]);
+test("[B13][P.1] knownMetadataFieldIds: the BT/RBT fields add 138069 (T9, decision 50), and the BCBA fields no longer hold 134444 (row 5.3)", () => {
+  assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [138069, 133819, 147882, 138703]);
   assert.deepEqual(
     knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BCBA),
     [138069, 126216, 138112, 138113, 138703]
@@ -195,8 +195,8 @@ test("[BR5][P.1] the employee worker asks HubSpot for the listed properties plus
         employee_id: "",
         first_name: "Sam",
         last_name: "Lee",
-        ucaba_email_address: "sam@example.com",
-        date_of_birth: "1988-02-03",
+        email: "sam@example.com",
+        dob: "2/3/1988",
         workday_id: "WD2",
         sandbox_test_field: "true"
       }),

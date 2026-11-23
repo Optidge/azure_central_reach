@@ -508,7 +508,12 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
   if (keepExistingExternalSystemId) {
     nextPayload.externalSystemId = existingExternalSystemId;
   }
-  if (existingPrimaryEmail) {
+  // Row 1.10 (owner's decision 2026-11-21): a filled HubSpot primary email is sent like any other
+  // mapped field. A blank one never clears CentralReach's primary email: the stored email is sent
+  // back, so the "written before, now blank" clear of row 3.13 does not apply to this field.
+  const keepExistingPrimaryEmail =
+    Boolean(existingPrimaryEmail) && String(nextPayload.primaryEmail ?? "").trim() === "";
+  if (keepExistingPrimaryEmail) {
     nextPayload.primaryEmail = existingPrimaryEmail;
   }
 
@@ -516,7 +521,7 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
     payload: nextPayload,
     preservedExternalSystemId: keepExistingExternalSystemId,
     externalSystemIdMismatch,
-    preservedPrimaryEmail: Boolean(existingPrimaryEmail),
+    preservedPrimaryEmail: keepExistingPrimaryEmail,
     crExternalSystemId: existingExternalSystemId
   };
 }

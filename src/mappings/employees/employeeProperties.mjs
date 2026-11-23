@@ -20,15 +20,23 @@ import {
   HUBSPOT_EMPLOYEE_TYPES,
   TEST_RECORD_PROPERTY
 } from "../../constants/hubspot.mjs";
+import {
+  BCBA_DATE_OF_BIRTH_PROPERTY,
+  BCBA_PRIMARY_EMAIL_PROPERTY,
+  BT_RBT_DATE_OF_BIRTH_PROPERTY,
+  EMPLOYEE_PERSONAL_EMAIL_PROPERTY
+} from "./buildEmployeePayload.mjs";
 
 export const BT_RBT_PROPERTIES = Object.freeze({
   mapped: Object.freeze([
     "workday_id",
     "first_name",
     "last_name",
-    "date_of_birth",
+    BT_RBT_DATE_OF_BIRTH_PROPERTY,
     "gender",
     "email",
+    // Personal email, Meta 138069 (T9, decision 50)
+    EMPLOYEE_PERSONAL_EMAIL_PROPERTY,
     // Mailing address and phone (T4, T5)
     "street_home",
     "home_apt",
@@ -69,11 +77,13 @@ export const BCBA_PROPERTIES = Object.freeze({
     "workday_id",
     "first_name",
     "last_name",
-    "date_of_birth",
+    // Date of birth (B5): BCBA_DATE_OF_BIRTH_PROPERTY, `dob` until United Care confirms (O-10).
+    BCBA_DATE_OF_BIRTH_PROPERTY,
     "gender_new",
-    // The personal email (B9) is not a BCBA property: row 6.4 reads the email of the BCBA's
-    // Contact (BCBA -> Contact) in src/workflows/employeeSyncWorkflow.mjs.
-    "ucaba_email_address",
+    // primaryEmail (B4, decision 49) reads `email`; personal email, Meta 138069 (B9, row 6.4,
+    // decision 50) reads `personal_email`. Both are the BCBA record's own, not its Contact's.
+    BCBA_PRIMARY_EMAIL_PROPERTY,
+    EMPLOYEE_PERSONAL_EMAIL_PROPERTY,
     // Mailing address and phone: read-only Contact mirrors (B7)
     "address",
     "apartment__home",
@@ -132,13 +142,14 @@ export function employeeRequestProperties(employeeType) {
 export function knownMetadataFieldIds(employeeType) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return [
+      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.PERSONAL_EMAIL,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.ACTIVE_CASE_COUNT,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD
     ];
   }
   return [
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.PERSONAL_EMAIL,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NJ,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO,

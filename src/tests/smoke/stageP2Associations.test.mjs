@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { hubspotPortalSettings } from "../../lib/config.mjs";
 import { useStateContainer } from "../../lib/cosmosState.mjs";
 import { createHubSpotClient, listAssociations } from "../../lib/hubspotClient.mjs";
+import { answeringPortalCheck, portalCheckedHubSpotConfig } from "./hubspotPortalCheckFake.mjs";
 import { FAILURE_KINDS, classifyFailure } from "../../lib/retry.mjs";
 import { associationsForComparison } from "../../constants/staffingAssociations.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
@@ -32,16 +33,14 @@ const UNLABELED_BT = 187;
 // the response body.
 function fakeHubSpotAssociations(answer) {
   const calls = [];
-  const client = createHubSpotClient({
-    hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
-  });
-  client.defaults.adapter = async (requestConfig) => {
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
+  client.defaults.adapter = answeringPortalCheck(async (requestConfig) => {
     const url = String(requestConfig.url || "");
     const after = requestConfig.params?.after ?? null;
     const body = typeof requestConfig.data === "string" ? JSON.parse(requestConfig.data) : null;
     calls.push({ url, after });
     return { data: answer({ url, after, body }), status: 200, headers: {}, config: requestConfig };
-  };
+  });
   return calls;
 }
 
@@ -143,12 +142,10 @@ test("[P.2] listAssociations reads an empty results list as no associations, and
 });
 
 test("[P.2] a refused association read (403) is still a failed read", async () => {
-  const client = createHubSpotClient({
-    hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
-  });
-  client.defaults.adapter = async () => {
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
+  client.defaults.adapter = answeringPortalCheck(async () => {
     throw httpError(403);
-  };
+  });
   await assert.rejects(read(), assertFailedRead);
 });
 

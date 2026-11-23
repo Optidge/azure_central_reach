@@ -1,8 +1,89 @@
 import axios from "axios";
+import { sha256 } from "./hash.mjs";
 import { withRetry } from "./retry.mjs";
 import { HubSpotReadError } from "./mappedState.mjs";
 
 let hubSpotHttpClient = null;
+
+// Finding F-3: the token must belong to the configured portal (HUBSPOT_PORTAL_ID). Every function
+// below that calls HubSpot waits for readyHubSpotClient() first, so no CRM read or write is sent
+// with a token for another portal. One GET /account-info/v3/details per process: a match is kept
+// for the life of the process; a mismatch or a failed call is not kept, so the next call checks
+// again. The check is keyed by base URL, token hash and configured portal, so new settings are
+// checked again. The token itself is not kept here.
+const ACCOUNT_DETAILS_PATH = "/account-info/v3/details";
+export const HUBSPOT_PORTAL_MISMATCH = "HUBSPOT_PORTAL_MISMATCH";
+let portalCheck = null;
+
+// Invalid configuration: the token answers for another portal. Portal IDs are not secrets, so the
+// message names both. Sorted like the other configuration failures (src/lib/retry.mjs).
+export function hubspotPortalMismatchError(configuredPortalId, tokenPortalId) {
+  const error = new Error(
+    `HubSpot token belongs to portal ${tokenPortalId}, but HUBSPOT_PORTAL_ID is ${configuredPortalId}. No HubSpot CRM call was made.`
+  );
+  error.name = "HubSpotPortalMismatchError";
+  error.code = HUBSPOT_PORTAL_MISMATCH;
+  error.configuredPortalId = configuredPortalId;
+  error.tokenPortalId = tokenPortalId;
+  return error;
+}
+
+// A failed details call is a failed HubSpot read: temporary, retried like the other reads. The
+// status and Retry-After are kept for the retry schedule; the answer body is not.
+function accountDetailsReadError(error, status) {
+  const readError = new HubSpotReadError("account-info", status);
+  if (error?.response) {
+    readError.response = { status: error.response.status, headers: error.response.headers };
+  }
+  return readError;
+}
+
+async function verifyTokenPortal(client, configuredPortalId) {
+  if (!configuredPortalId) {
+    throw new Error("Invalid configuration: HUBSPOT_PORTAL_ID");
+  }
+  let response;
+  try {
+    response = await withRetry(() => client.get(ACCOUNT_DETAILS_PATH), {
+      maxAttempts: 3,
+      baseDelayMs: 400,
+      maxDelayMs: 5000
+    });
+  } catch (error) {
+    if (error?.response) {
+      throw accountDetailsReadError(error, error.response.status);
+    }
+    throw error;
+  }
+  const tokenPortalId = String(response?.data?.portalId ?? "").trim();
+  if (!tokenPortalId) {
+    throw accountDetailsReadError(null, response?.status);
+  }
+  if (tokenPortalId !== configuredPortalId) {
+    throw hubspotPortalMismatchError(configuredPortalId, tokenPortalId);
+  }
+}
+
+async function readyHubSpotClient() {
+  if (!hubSpotHttpClient) {
+    throw new Error("HubSpot client is not initialized");
+  }
+  const check = portalCheck;
+  if (check.verified) {
+    return;
+  }
+  // Calls that start together share one details call.
+  if (!check.pending) {
+    check.pending = verifyTokenPortal(hubSpotHttpClient, check.configuredPortalId)
+      .then(() => {
+        check.verified = true;
+      })
+      .finally(() => {
+        check.pending = null;
+      });
+  }
+  await check.pending;
+}
 
 function extractHubspotErrorBlob(error) {
   const data = error?.response?.data || {};
@@ -39,9 +120,7 @@ function extractHubspotErrorBlob(error) {
 }
 
 async function runSearch(objectPath, payload) {
-  if (!hubSpotHttpClient) {
-    throw new Error("HubSpot client is not initialized");
-  }
+  await readyHubSpotClient();
 
   const response = await withRetry(
     () => hubSpotHttpClient.post(objectPath, payload),
@@ -56,6 +135,13 @@ async function runSearch(objectPath, payload) {
 }
 
 export function createHubSpotClient(config) {
+  const configuredPortalId = String(config?.hubspot?.hubspotPortalId ?? "").trim();
+  const checkKey = sha256(
+    JSON.stringify([config?.hubspot?.baseUrl, config?.hubspot?.privateAppToken, configuredPortalId])
+  );
+  if (portalCheck?.key !== checkKey) {
+    portalCheck = { key: checkKey, configuredPortalId, verified: false, pending: null };
+  }
   hubSpotHttpClient = axios.create({
     baseURL: config.hubspot.baseUrl,
     headers: {
@@ -103,9 +189,7 @@ export async function searchObjectPage({ objectTypeId, filterGroups, sorts, prop
 }
 
 export async function getDealById(dealId, properties = []) {
-  if (!hubSpotHttpClient) {
-    throw new Error("HubSpot client is not initialized");
-  }
+  await readyHubSpotClient();
 
   const id = String(dealId || "").trim();
   if (!id) {
@@ -179,9 +263,7 @@ export async function updateEmployeeWritebackWithFallback({
 }
 
 export async function getObjectById(objectTypeId, objectId, properties = []) {
-  if (!hubSpotHttpClient) {
-    throw new Error("HubSpot client is not initialized");
-  }
+  await readyHubSpotClient();
 
   const normalizedTypeId = String(objectTypeId || "").trim();
   const id = String(objectId || "").trim();
@@ -211,9 +293,7 @@ export async function getObjectById(objectTypeId, objectId, properties = []) {
 }
 
 export async function updateDealProperties(dealId, properties) {
-  if (!hubSpotHttpClient) {
-    throw new Error("HubSpot client is not initialized");
-  }
+  await readyHubSpotClient();
 
   const id = String(dealId || "").trim();
   if (!id) {
@@ -237,9 +317,7 @@ export async function updateDealProperties(dealId, properties) {
 }
 
 export async function updateObjectProperties(objectTypeId, objectId, properties) {
-  if (!hubSpotHttpClient) {
-    throw new Error("HubSpot client is not initialized");
-  }
+  await readyHubSpotClient();
 
   const normalizedTypeId = String(objectTypeId || "").trim();
   const id = String(objectId || "").trim();
@@ -274,12 +352,6 @@ export async function getBcbaRecordById(recordId, objectTypeId, properties = [])
   return getObjectById(objectTypeId, recordId, properties);
 }
 
-function assertHubSpotReady() {
-  if (!hubSpotHttpClient) {
-    throw new Error("HubSpot client is not initialized");
-  }
-}
-
 export async function findHubSpotRecordsByEmployeeId({
   bcbaObjectTypeId,
   btRbtObjectTypeId,
@@ -287,7 +359,7 @@ export async function findHubSpotRecordsByEmployeeId({
   excludeRecordId,
   employeeIdProperty = "employee_id"
 }) {
-  assertHubSpotReady();
+  await readyHubSpotClient();
   const wanted = String(employeeId ?? "").trim();
   const excluded = String(excludeRecordId ?? "").trim();
   if (!wanted) {
@@ -325,7 +397,7 @@ export async function findHubSpotRecordsByEmployeeId({
 
 // Returns one row per associated record: { toObjectId, types: [{ typeId, category }] }.
 export async function listAssociations({ fromObjectType, fromId, toObjectType, maxPages = 20 }) {
-  assertHubSpotReady();
+  await readyHubSpotClient();
   const fromType = String(fromObjectType || "").trim();
   const recordId = String(fromId || "").trim();
   const toType = String(toObjectType || "").trim();
@@ -391,7 +463,7 @@ export async function listAssociations({ fromObjectType, fromId, toObjectType, m
 const BATCH_READ_LIMIT = 100;
 
 export async function readObjectsBatch({ objectTypeId, ids, properties }) {
-  assertHubSpotReady();
+  await readyHubSpotClient();
   const typeId = String(objectTypeId || "").trim();
   if (!typeId) {
     throw new Error("HubSpot objectTypeId is required for a batch read");

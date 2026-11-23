@@ -45,7 +45,8 @@ const CASE_MAPPED = [
   "btrbt_work_schedule_2_details",
   "finalized_client_service_hours_post_assessment",
   "client_service_hours_total",
-  "total_hours_btrbt_12",
+  "hours_bt_work_schedule_1",
+  "bt_rbt_2_work_schedule",
   "initial_auth_tracks",
   "n97153_approved_assessment_hours_auth_req",
   "ia_hours_from_the_ia",
@@ -141,15 +142,16 @@ test("[C18][4.4] the Location #2 schedule variants are not requested while C18 i
   assert.equal(requested.includes("work_schedule_2_details__for_location_2_other"), false);
 });
 
-test("[C20][4.6] Total Assigned Hours is requested from total_hours_btrbt_12; total_hours_bt1bt2_work_schedule is not requested (decision 40)", () => {
+test("[C20][4.6] Total Assigned Hours requests the two hours; total_hours_btrbt_12 and total_hours_bt1bt2_work_schedule are not requested", () => {
   const requested = caseRequestProperties();
-  assert.equal(CASE_PROPERTIES.mapped.includes("total_hours_btrbt_12"), true);
+  assert.equal(CASE_PROPERTIES.mapped.includes("hours_bt_work_schedule_1"), true);
+  assert.equal(CASE_PROPERTIES.mapped.includes("bt_rbt_2_work_schedule"), true);
+  assert.equal(requested.includes("total_hours_btrbt_12"), false);
   assert.equal(requested.includes("total_hours_bt1bt2_work_schedule"), false);
 });
 
-test("[C21][4.6] the per-BT hours are not requested while C21 is open", () => {
+test("[C21][4.6] hours_bt_work_schedule_2 is not requested while C21 is open", () => {
   const requested = caseRequestProperties();
-  assert.equal(requested.includes("hours_bt_work_schedule_1"), false);
   assert.equal(requested.includes("hours_bt_work_schedule_2"), false);
 });
 
@@ -204,6 +206,8 @@ const BT_RBT_MAPPED = [
   "last_name",
   "date_of_birth",
   "email",
+  // T9 (6.4, decision 50): Meta 138069
+  "personal_email",
   // T3
   "gender",
   // T4, T5 (5.9)
@@ -250,8 +254,8 @@ const BCBA_MAPPED = [
   "workday_id",
   "first_name",
   "last_name",
-  "date_of_birth",
-  "ucaba_email_address",
+  // B5 (decision 48): dob, pending United Care's confirmation (O-10)
+  "dob",
   // B6 (5.1)
   "gender_new",
   // B7 (5.2)
@@ -265,7 +269,10 @@ const BCBA_MAPPED = [
   "medicaid_id__ny",
   "medicaid_id__nj",
   "medicaid_id__co",
-  // B9: not a BCBA property since row 6.4 (lane E): the email of the BCBA's Contact
+  // B4 (decision 49) primaryEmail
+  "email",
+  // B9 (row 6.4, decision 50) Meta 138069
+  "personal_email",
   // BL2 (5.4), BL4 (5.5), BL5 (5.6), B10 (5.7), BL7 (5.8)
   "location",
   "assign_states",
@@ -293,12 +300,21 @@ test("[B13][5.3] credentialed_insurances__ny, work_email and bcba_name are no lo
   }
 });
 
+test("[B4][1.3] ucaba_email_address and date_of_birth are no longer requested for a BCBA (decisions 49 and 48)", () => {
+  const requested = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BCBA);
+  for (const property of ["ucaba_email_address", "date_of_birth"]) {
+    assert.equal(requested.includes(property), false, `${property} is not requested`);
+  }
+  assert.equal(requested.includes("dob"), true);
+  assert.equal(requested.includes("email"), true);
+});
+
 test("[B13][5.3] field 134444 is not a known BCBA metadata field, so no clear is sent for it", () => {
   assert.deepEqual(
     knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BCBA),
     [138069, 126216, 138112, 138113, 138703]
   );
-  assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [133819, 147882, 138703]);
+  assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [138069, 133819, 147882, 138703]);
 });
 
 test("[B6][5.1] the archived BCBA gender property is not requested; gender_new is", () => {

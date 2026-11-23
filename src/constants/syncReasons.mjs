@@ -8,6 +8,12 @@ export function unreadableDate(fieldName) {
   return `Unreadable date: ${fieldName}`;
 }
 
+// F-1: a filled value that cannot be converted to the CentralReach format (phone, email, state,
+// gender, hours). Names the properties, never the value (BR21).
+export function unreadableValue(fieldName) {
+  return `Unreadable value: ${fieldName}`;
+}
+
 // Row 4.18 (rule 5.8): requested properties that are not keys of the HubSpot answer, for the Case
 // and the employee workers. Property names only, never a value: the first ten, then "and N more".
 const MISSING_PROPERTIES_LISTED = 10;

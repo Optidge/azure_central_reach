@@ -20,12 +20,10 @@ import {
 import {
   sendClientSyncMessage,
   sendContactChangeMessage,
-  sendEmployeeSyncMessage,
   useServiceBusSenders
 } from "../../lib/serviceBusClient.mjs";
 import { hubspotWebhook } from "../../functions/hubspotWebhook.mjs";
 import { processClientQueue } from "../../functions/processClientQueue.mjs";
-import { processEmployeeQueue } from "../../functions/processEmployeeQueue.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runContactFanOutWorkflow } from "../../workflows/contactFanOutWorkflow.mjs";
 import {
@@ -90,8 +88,8 @@ const webhookSettings = {
   serviceBusReady: true
 };
 
-// One HubSpot Contact with its linked Cases and BCBAs.
-function hubspotContact({ testRecord = null, cases = [], bcbas = [] } = {}) {
+// One HubSpot Contact with its linked Cases.
+function hubspotContact({ testRecord = null, cases = [] } = {}) {
   const state = { reads: [], associationReads: [], associationError: null, contactError: null };
   const rows = (ids, typeId) =>
     ids.map((id) => ({ toObjectId: id, types: [{ typeId, category: "HUBSPOT_DEFINED" }] }));
@@ -110,7 +108,7 @@ function hubspotContact({ testRecord = null, cases = [], bcbas = [] } = {}) {
         if (state.associationError) {
           throw state.associationError;
         }
-        return input.toObjectType === "0-3" ? rows(cases, 4) : rows(bcbas, 192);
+        return rows(cases, 4);
       }
     }
   };
@@ -156,7 +154,7 @@ test("[K1][6.1] a Contact notice (object type 0-1) is accepted with 202 and queu
   assert.equal(typeof sent.client[0].messageId, "string");
 });
 
-test("[K3][6.1] a Contact is never its own sync target: it routes to the contactChange message only", () => {
+test("[K1][6.1] a Contact is never its own sync target: it routes to the contactChange message only", () => {
   const target = resolveWebhookTarget({
     objectTypeId: "0-1",
     recordId: "701",
@@ -206,22 +204,21 @@ test("[K1][6.1] a contactChange message without a Contact ID is invalid and reac
 
 // --- Row 6.2 ---
 
-test("[K1, K3][6.2] one Contact with two Cases and one BCBA queues three ordinary sync messages", async () => {
+test("[K1][6.2] one Contact with two Cases queues two ordinary sync messages and no BCBA message", async () => {
   const sent = fakeSenders();
-  const contact = hubspotContact({ cases: ["9001", "9002"], bcbas: ["HS2"] });
+  const contact = hubspotContact({ cases: ["9001", "9002"] });
   const logs = [];
 
   const result = await runContactFanOutWorkflow(
     { contactId: "701", source: "hubspotWorkflow" },
     {
       ...fanOutDeps(contact, { logs }),
-      sendClientSyncMessage,
-      sendEmployeeSyncMessage
+      sendClientSyncMessage
     }
   );
 
   assert.equal(result.status, "queued");
-  assert.deepEqual(result.queued, { case: 2, bcba: 1 });
+  assert.deepEqual(result.queued, { case: 2 });
   assert.deepEqual(
     sent.client.map((message) => [message.body.workflow, message.body.dealId, message.body.portalId]),
     [
@@ -229,34 +226,25 @@ test("[K1, K3][6.2] one Contact with two Cases and one BCBA queues three ordinar
       ["clientSync", "9002", SANDBOX_PORTAL]
     ]
   );
-  assert.deepEqual(
-    sent.employee.map((message) => [
-      message.body.workflow,
-      message.body.employeeType,
-      message.body.recordId,
-      message.body.portalId
-    ]),
-    [["employeeSync", "bcba", "HS2", SANDBOX_PORTAL]]
-  );
-  for (const message of [...sent.client, ...sent.employee]) {
+  assert.deepEqual(sent.employee, []);
+  for (const message of sent.client) {
     assert.equal(message.body.source, "contactFanOut");
   }
-  // The Contact is read for test_record only; its Cases and BCBAs are read from the Contact.
+  // The Contact is read for test_record only; its Cases are read from the Contact.
   assert.deepEqual(contact.state.reads, [{ contactId: "701", properties: ["test_record"] }]);
   assert.deepEqual(contact.state.associationReads, [
-    { fromObjectType: "0-1", fromId: "701", toObjectType: "0-3" },
-    { fromObjectType: "0-1", fromId: "701", toObjectType: SANDBOX_BCBA_TYPE }
+    { fromObjectType: "0-1", fromId: "701", toObjectType: "0-3" }
   ]);
   const summary = logs.find((entry) => entry.message === "Sync run summary.");
-  assert.deepEqual(summary.meta.queuedMessages, { case: 2, bcba: 1 });
+  assert.deepEqual(summary.meta.queuedMessages, { case: 2 });
 });
 
-test("[K1, K3][6.2] the messages the fan-out queues are accepted by the client and employee queue workers", async () => {
+test("[K1][6.2] the messages the fan-out queues are accepted by the client queue worker", async () => {
   const sent = fakeSenders();
-  const contact = hubspotContact({ cases: ["9001"], bcbas: ["HS2"] });
+  const contact = hubspotContact({ cases: ["9001"] });
   await runContactFanOutWorkflow(
     { contactId: "701" },
-    { ...fanOutDeps(contact), sendClientSyncMessage, sendEmployeeSyncMessage }
+    { ...fanOutDeps(contact), sendClientSyncMessage }
   );
 
   const caseRuns = [];
@@ -264,32 +252,21 @@ test("[K1, K3][6.2] the messages the fan-out queues are accepted by the client a
     portalId: SANDBOX_PORTAL,
     runWorkflow: async (input) => caseRuns.push(input)
   });
-  const bcbaRuns = [];
-  await processEmployeeQueue(sent.employee[0].body, context, {
-    portalId: SANDBOX_PORTAL,
-    runWorkflow: async (input) => bcbaRuns.push(input)
-  });
-
   assert.deepEqual(
     caseRuns.map((run) => [run.dealId, run.source]),
     [["9001", "contactFanOut"]]
-  );
-  assert.deepEqual(
-    bcbaRuns.map((run) => [run.recordId, run.employeeType, run.source]),
-    [["HS2", "bcba", "contactFanOut"]]
   );
 });
 
 for (const testRecord of [true, "true"]) {
   test(`[K4][6.2] a Contact with test_record = ${JSON.stringify(testRecord)} queues nothing`, async () => {
-    const contact = hubspotContact({ testRecord, cases: ["9001", "9002"], bcbas: ["HS2"] });
+    const contact = hubspotContact({ testRecord, cases: ["9001", "9002"] });
     const sends = [];
     const result = await runContactFanOutWorkflow(
       { contactId: "701" },
       {
         ...fanOutDeps(contact),
-        sendClientSyncMessage: async (message) => sends.push(message),
-        sendEmployeeSyncMessage: async (message) => sends.push(message)
+        sendClientSyncMessage: async (message) => sends.push(message)
       }
     );
 
@@ -301,14 +278,13 @@ for (const testRecord of [true, "true"]) {
 }
 
 test("[BR7][6.2] INCLUDE_TEST_RECORDS = true routes a test Contact in a deliberate end-to-end run", async () => {
-  const contact = hubspotContact({ testRecord: "true", cases: ["9001"], bcbas: [] });
+  const contact = hubspotContact({ testRecord: "true", cases: ["9001"] });
   const sends = [];
   const result = await runContactFanOutWorkflow(
     { contactId: "701" },
     {
       ...fanOutDeps(contact, { sync: { includeTestRecords: true } }),
-      sendClientSyncMessage: async (message) => sends.push(message),
-      sendEmployeeSyncMessage: async (message) => sends.push(message)
+      sendClientSyncMessage: async (message) => sends.push(message)
     }
   );
 
@@ -327,14 +303,13 @@ for (const [name, breakRead] of [
   ]
 ]) {
   test(`[K1][6.2] ${name} queues nothing, and the message is retried`, async () => {
-    const contact = hubspotContact({ cases: ["9001", "9002"], bcbas: ["HS2"] });
+    const contact = hubspotContact({ cases: ["9001", "9002"] });
     breakRead(contact);
     const sends = [];
     const retries = [];
     const deps = {
       ...fanOutDeps(contact),
-      sendClientSyncMessage: async (message) => sends.push(message),
-      sendEmployeeSyncMessage: async (message) => sends.push(message)
+      sendClientSyncMessage: async (message) => sends.push(message)
     };
     const message = {
       workflow: "contactChange",
@@ -358,55 +333,31 @@ for (const [name, breakRead] of [
   });
 }
 
-test("[K1][6.2] a failed BCBA association read after a good Case read still queues nothing", async () => {
-  const contact = hubspotContact({ cases: ["9001"], bcbas: ["HS2"] });
-  const read = contact.deps.listAssociations;
-  contact.deps.listAssociations = async (input) => {
-    if (input.toObjectType === SANDBOX_BCBA_TYPE) {
-      throw httpError(500);
-    }
-    return read(input);
-  };
-  const sends = [];
-  await assert.rejects(
-    runContactFanOutWorkflow(
-      { contactId: "701" },
-      {
-        ...fanOutDeps(contact),
-        sendClientSyncMessage: async (message) => sends.push(message),
-        sendEmployeeSyncMessage: async (message) => sends.push(message)
-      }
-    )
-  );
-  assert.deepEqual(sends, []);
-});
-
 test("[K4][6.2] the fan-out never calls CentralReach: no standalone CentralReach contact for a Contact", async () => {
   const { cr } = setup();
   fakeSenders();
-  const contact = hubspotContact({ cases: ["9001"], bcbas: ["HS2"] });
+  const contact = hubspotContact({ cases: ["9001"] });
   const result = await runContactFanOutWorkflow(
     { contactId: "701" },
-    { ...fanOutDeps(contact), sendClientSyncMessage, sendEmployeeSyncMessage }
+    { ...fanOutDeps(contact), sendClientSyncMessage }
   );
 
   assert.equal(result.status, "queued");
   assert.deepEqual(cr.calls, []);
 });
 
-test("[K4][6.2] a Contact with no linked Case or BCBA queues nothing and still finishes", async () => {
+test("[K4][6.2] a Contact with no linked Case queues nothing and still finishes", async () => {
   const contact = hubspotContact();
   const sends = [];
   const result = await runContactFanOutWorkflow(
     { contactId: "701" },
     {
       ...fanOutDeps(contact),
-      sendClientSyncMessage: async (message) => sends.push(message),
-      sendEmployeeSyncMessage: async (message) => sends.push(message)
+      sendClientSyncMessage: async (message) => sends.push(message)
     }
   );
   assert.equal(result.status, "queued");
-  assert.deepEqual(result.queued, { case: 0, bcba: 0 });
+  assert.deepEqual(result.queued, { case: 0 });
   assert.deepEqual(sends, []);
 });
 

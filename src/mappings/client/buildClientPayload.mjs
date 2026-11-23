@@ -1,38 +1,11 @@
 import { readDate } from "../../lib/dates.mjs";
-
-function cleanEmail(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized || null;
-}
-
-function isValidEmail(value) {
-  if (!value) {
-    return false;
-  }
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function normalizePhone(value) {
-  const digits = String(value || "").replace(/\D+/g, "");
-  if (digits.length === 11 && digits.startsWith("1")) {
-    return digits.slice(1);
-  }
-  if (digits.length === 10) {
-    return digits;
-  }
-  return null;
-}
-
-function mapGender(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "male") {
-    return "Male";
-  }
-  if (normalized === "female") {
-    return "Female";
-  }
-  return null;
-}
+import {
+  createValueReader,
+  readEmail,
+  readGender,
+  readPhone,
+  readStateCode
+} from "../../lib/fieldFormats.mjs";
 
 function clientDateOfBirth(properties) {
   if (!Object.prototype.hasOwnProperty.call(properties || {}, "phi_date_of_birth")) {
@@ -48,79 +21,13 @@ function clientDateOfBirth(properties) {
   return { DateOfBirth: `${read}T00:00:00.000Z`, dateOfBirthStatus: "date" };
 }
 
-const US_STATE_NAME_TO_CODE = {
-  ALABAMA: "AL",
-  ALASKA: "AK",
-  ARIZONA: "AZ",
-  ARKANSAS: "AR",
-  CALIFORNIA: "CA",
-  COLORADO: "CO",
-  CONNECTICUT: "CT",
-  DELAWARE: "DE",
-  FLORIDA: "FL",
-  GEORGIA: "GA",
-  HAWAII: "HI",
-  IDAHO: "ID",
-  ILLINOIS: "IL",
-  INDIANA: "IN",
-  IOWA: "IA",
-  KANSAS: "KS",
-  KENTUCKY: "KY",
-  LOUISIANA: "LA",
-  MAINE: "ME",
-  MARYLAND: "MD",
-  MASSACHUSETTS: "MA",
-  MICHIGAN: "MI",
-  MINNESOTA: "MN",
-  MISSISSIPPI: "MS",
-  MISSOURI: "MO",
-  MONTANA: "MT",
-  NEBRASKA: "NE",
-  NEVADA: "NV",
-  "NEW HAMPSHIRE": "NH",
-  "NEW JERSEY": "NJ",
-  "NEW MEXICO": "NM",
-  "NEW YORK": "NY",
-  "NORTH CAROLINA": "NC",
-  "NORTH DAKOTA": "ND",
-  OHIO: "OH",
-  OKLAHOMA: "OK",
-  OREGON: "OR",
-  PENNSYLVANIA: "PA",
-  "RHODE ISLAND": "RI",
-  "SOUTH CAROLINA": "SC",
-  "SOUTH DAKOTA": "SD",
-  TENNESSEE: "TN",
-  TEXAS: "TX",
-  UTAH: "UT",
-  VERMONT: "VT",
-  VIRGINIA: "VA",
-  WASHINGTON: "WA",
-  "WEST VIRGINIA": "WV",
-  WISCONSIN: "WI",
-  WYOMING: "WY",
-  "DISTRICT OF COLUMBIA": "DC"
-};
-
-function normalizeStateProvince(value) {
-  const stateValue = String(value || "").trim();
-  if (!stateValue) {
-    return null;
-  }
-
-  if (/^[A-Za-z]{2}$/.test(stateValue)) {
-    return stateValue.toUpperCase();
-  }
-
-  const normalizedName = stateValue.replace(/\./g, "").replace(/\s+/g, " ").toUpperCase();
-  return US_STATE_NAME_TO_CODE[normalizedName] || null;
-}
-
 export function buildClientPayload({ deal, config }) {
   void config;
 
   const props = deal?.properties || {};
-  const email = cleanEmail(props.email);
+  // F-1: a filled phone, email, state or gender that cannot be converted is named in
+  // unreadableValueProperties (a note for the worker, like dateOfBirthStatus) and sent as nothing.
+  const { valueOf, unreadableValueProperties } = createValueReader(props);
   const dateOfBirth = clientDateOfBirth(props);
   const trimmed = (value) => {
     const text = String(value ?? "").trim();
@@ -134,17 +41,18 @@ export function buildClientPayload({ deal, config }) {
     LastName: trimmed(props.phi_last_name),
     ...(dateOfBirth.DateOfBirth ? { DateOfBirth: dateOfBirth.DateOfBirth } : {}),
     dateOfBirthStatus: dateOfBirth.dateOfBirthStatus,
-    Gender: mapGender(props.phi_gender),
-    PrimaryEmail: isValidEmail(email) ? email : null,
+    Gender: valueOf(readGender, "phi_gender"),
+    PrimaryEmail: valueOf(readEmail, "email"),
     // Decision 36: no second phone. phone_number__second_ is not read and PhoneHome is not sent.
-    PhoneCell: normalizePhone(props.phone),
+    PhoneCell: valueOf(readPhone, "phone"),
     // C8, row 4.1: the Case mailing address. Line 1 is street_address only; the state is stateregion.
     AddressLine1: props.street_address || null,
     AddressLine2: props.home_apt || null,
     City: props.location_city || null,
-    StateProvince: normalizeStateProvince(props.stateregion),
+    StateProvince: valueOf(readStateCode, "stateregion"),
     ZipPostalCode: props.postal_code || null,
     GuardianFirstName: props.guardian_first_name || null,
-    GuardianLastName: props.guardian_last_name || null
+    GuardianLastName: props.guardian_last_name || null,
+    unreadableValueProperties
   };
 }

@@ -75,7 +75,8 @@ export function stage3Bcba(properties = {}) {
     employee_id: "5002",
     first_name: "Pat",
     last_name: "Morgan",
-    date_of_birth: "1985-03-02",
+    // B5 (decision 48): the BCBA date of birth is `dob`, single-line text typed as M/D/YYYY.
+    dob: "3/2/1985",
     workday_id: "WD2",
     medicaid_id__ny: "",
     medicaid_id__nj: "",

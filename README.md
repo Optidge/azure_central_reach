@@ -79,12 +79,19 @@ Partners Enterprise API auth is only:
 - `CR_BASE_URL`
 - `CR_TOKEN_URL`
 
+### Portal and record gate settings (required)
+
+Both are in `REQUIRED_ENV_NAMES` in `src/lib/config.mjs`. The app does not start a run without them.
+
+- `HUBSPOT_PORTAL_ID` — required. The HubSpot portal this app serves: sandbox `52311591` or production `50317927`. Any other value is invalid configuration. It builds the HubSpot record links, and every queue message must carry the same portal ID. The HubSpot token must belong to this portal. Before any HubSpot call the app reads `GET /account-info/v3/details` once (the answer is cached) and compares the portal ID. If they differ, the run ends with the error code `HUBSPOT_PORTAL_MISMATCH`, which names both portal IDs; no CRM call is made, and the message is retried and then dead-lettered like any configuration failure. The private app needs access to the account-info endpoint.
+- `SYNC_RECORD_GATE_PROPERTY` — required. The HubSpot checkbox property a record must have set to true before it syncs. The sandbox value is `sandbox_test_field`. The value `none` turns the gate off.
+
 ### Optional settings this repo reads (not in required lists)
 
 These are used in code but are not required by `config.mjs` validation:
 
-- `HUBSPOT_PORTAL_ID` — employee HubSpot record link writeback (`buildEmployeePayload.mjs`)
-- `HUBSPOT_PORTAL_ID_TEST`, `HUBSPOT_DEAL_OBJECT_TYPE_ID` — client metadata HubSpot links (`buildClientMetadata.mjs`)
+- `INCLUDE_TEST_RECORDS` — `true` lets records with `test_record` = true sync, for a deliberate end-to-end test run only. Anything else, or not set, skips them.
+- `HS_BCBA_OBJECT_TYPE_ID`, `HS_BT_RBT_OBJECT_TYPE_ID` — may be left out. The object type IDs come from the portal table in `config.mjs`; a value that differs from the table is invalid configuration.
 - `HUBSPOT_EMPLOYEE_ID_PROPERTY`, `ALLOW_EMPLOYEE_CREATE`, `PUT_ONLY_MODE` — employee sync behavior (`config.mjs` runtime flags)
 - `INTAKE_POLLER_SCHEDULE`: optional six-field NCRONTAB schedule for the intake poller; hourly (`0 0 * * * *`) when not set
 - `CR_CLIENT_CONTACT_FORM` — client payload ContactForm default
@@ -110,11 +117,13 @@ If your `local.settings.json` was copied from another project or tooling, these 
 
 ## HubSpot workflow webhook
 
-`POST /api/hubspot-webhook` accepts an ID-only workflow webhook and enqueues the existing client or employee sync. The timer poller is unchanged and remains the backup.
+`POST /api/hubspot-webhook` accepts an ID-only workflow webhook. A Case, BCBA or BT/RBT notice queues the client or employee sync. A Contact notice queues a `contactChange` message, and the worker fans it out to the Cases linked to that Contact (one ordinary Case sync each; it never queues a BCBA). The hourly checkpointed poller and the daily sweep of linked records are the backup path.
 
 - Auth on the function is anonymous. The legacy private-app **v2** signature is the check (`X-HubSpot-Signature`, `X-HubSpot-Signature-Version: v2`).
-- Body is `objectTypeId` plus `recordId`. Case is `0-3`. BCBA and BT/RBT must match `HS_BCBA_OBJECT_TYPE_ID` and `HS_BT_RBT_OBJECT_TYPE_ID`.
-- Sandbox object ids currently in use: Case `0-3`, BCBA `2-55656302`, BT/RBT `2-55656309`, portal `50850427`.
+- Body is `objectTypeId` plus `recordId`. Case is `0-3` and Contact is `0-1`. BCBA and BT/RBT must match the object type IDs of the configured portal (`HUBSPOT_PORTAL_ID`).
+- Object type IDs (BUILD-PLAN section 3). Sandbox `52311591`: Case `0-3`, BCBA `2-72890322`, BT/RBT `2-72890325`, Contact `0-1`. Production `50317927`: Case `0-3`, BCBA `2-48354212`, BT/RBT `2-48354559`, Contact `0-1`. The retired sandbox portal `50850427` is not valid.
+- `webhook-triggers.json` stays empty until each HubSpot workflow's trigger properties are exported into it; it is never pre-filled from the code, because `npm run check:triggers` compares it with what the code expects. `node scripts/check-triggers.mjs --expected` prints the expected trigger properties per object (no network), for setting up the workflows.
+- Every queued message carries the configured portal ID. A worker completes a message for another portal without acting.
 - Set `HUBSPOT_WEBHOOK_CLIENT_SECRET` before expecting HTTP 202. Until then the route returns 503 `MISSING_WEBHOOK_SECRET`.
 
 ## Client Queue Trigger

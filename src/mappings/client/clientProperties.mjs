@@ -47,8 +47,9 @@ export const CASE_PROPERTIES = Object.freeze({
     "btrbt_work_schedule_2_details",
     "finalized_client_service_hours_post_assessment",
     "client_service_hours_total",
-    // C20, row 4.6 (decision 40): Total Assigned Hours.
-    "total_hours_btrbt_12",
+    // C20, row 4.6 (owner's decision 2026-11-21): Total Assigned Hours is the sum of the two hours.
+    "hours_bt_work_schedule_1",
+    "bt_rbt_2_work_schedule",
     "initial_auth_tracks",
     "n97153_approved_assessment_hours_auth_req",
     "ia_hours_from_the_ia",

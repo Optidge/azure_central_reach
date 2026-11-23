@@ -162,7 +162,9 @@ test("[BR16][3.13] a core field the CentralReach read does not hold is left out 
   assert.equal(Object.prototype.hasOwnProperty.call(lastPutBody(cr), "addressLine2"), false);
 });
 
-test("[BR16][3.13] the External System ID and primary email rules are unchanged: the update sends what CentralReach holds", async () => {
+// Row 1.10 changed on 2026-11-21: a filled HubSpot primary email is sent; the External System ID
+// rule (rule 5.4) is unchanged.
+test("[BR16][3.13] the update sends the External System ID CentralReach holds, and a filled HubSpot primary email", async () => {
   const { cr } = setup();
   seedStoredEmployee(cr, "5001", "WD1");
   const record = stage3Bt({ employee_id: "5001", email: "new-in-hubspot@example.com" });
@@ -170,7 +172,19 @@ test("[BR16][3.13] the External System ID and primary email rules are unchanged:
 
   const body = lastPutBody(cr);
   assert.equal(body.externalSystemId, "WD1");
-  assert.equal(body.primaryEmail, "stored@example.com");
+  assert.equal(body.primaryEmail, "new-in-hubspot@example.com");
+});
+
+test("[BR16][3.13] a primary email the integration wrote and HubSpot then blanked is not cleared: the email CentralReach holds is sent (row 1.10)", async () => {
+  const { container, cr } = setup();
+  seedStoredEmployee(cr, "5001", "WD1");
+  const record = stage3Bt({ employee_id: "5001", email: "written@example.com" });
+  await runBt(record);
+  assert.notEqual(savedHashes(container, BT_LINK)["employee.primaryEmail"], BLANK_HASH);
+
+  record.properties.email = "";
+  await runBt(record);
+  assert.equal(lastPutBody(cr).primaryEmail, "stored@example.com");
 });
 
 test("[BR16][3.13] an employee update is never sent without the CentralReach read of the same run", async () => {

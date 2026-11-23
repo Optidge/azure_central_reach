@@ -48,10 +48,10 @@ describe("employee External System ID", () => {
       workday_id: "",
       first_name: "Pat",
       last_name: "Morgan",
-      ucaba_email_address: "pat@work.test",
-      date_of_birth: "1990-10-20"
+      email: "pat@work.test",
+      dob: "10/20/1990"
     });
-    const result = validateEmployeePayload(payload, { linked: false, emailField: "ucaba_email_address" });
+    const result = validateEmployeePayload(payload, { linked: false, emailField: "email" });
     assert.equal(result.isValid, true);
     assert.equal(payload.externalSystemId, "9001");
   });
@@ -155,12 +155,12 @@ describe("BT/RBT Active Case Count", () => {
   });
 });
 
-// Central Reach requires a date of birth to create an employee. Both employee objects use the
-// HubSpot property date_of_birth (Zeke, 2026-11-16).
+// Central Reach requires a date of birth to create an employee. BT/RBT reads date_of_birth
+// (Zeke, 2026-11-16). BCBA reads dob (decision 48, 2026-11-21; pending United Care, O-10).
 describe("employee date of birth", () => {
-  it("BCBA and BT/RBT read date_of_birth", () => {
+  it("[B5][1.4] BCBA reads dob and BT/RBT reads date_of_birth", () => {
     assert.equal(
-      mapEmployee("bcba", { bcba_name: "Pat Morgan", date_of_birth: "1990-10-20" }).dateOfBirth,
+      mapEmployee("bcba", { bcba_name: "Pat Morgan", dob: "10/20/1990" }).dateOfBirth,
       "1990-10-20"
     );
     assert.equal(
@@ -169,8 +169,11 @@ describe("employee date of birth", () => {
     );
   });
 
-  it("BCBA does not read dob", () => {
-    assert.equal(mapEmployee("bcba", { bcba_name: "Pat Morgan", dob: "1990-10-20" }).dateOfBirth, null);
+  it("[B5][1.4] BCBA does not read date_of_birth", () => {
+    assert.equal(
+      mapEmployee("bcba", { bcba_name: "Pat Morgan", date_of_birth: "1990-10-20" }).dateOfBirth,
+      null
+    );
   });
 });
 

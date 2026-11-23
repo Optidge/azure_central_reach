@@ -4,6 +4,7 @@ import {
   CENTRAL_REACH_CLIENT_STAFFING_LABELS,
   CENTRAL_REACH_REMOVE_ONLY_LABEL_IDS
 } from "../../constants/centralReach.mjs";
+import { HUBSPOT_CASE_OBJECT_TYPE_ID } from "../../constants/hubspot.mjs";
 import { readDate } from "../../lib/dates.mjs";
 
 function toTrimmedOrNull(value) {
@@ -33,6 +34,34 @@ function toMetadataDate(value) {
   }
   const [yyyy, mm, dd] = read.split("-");
   return `${mm}/${dd}/${yyyy}`;
+}
+
+// C20, row 4.6 (owner's decision 2026-11-21): Total Assigned Hours is computed here, not read from
+// the HubSpot formula total_hours_btrbt_12 (blank unless both inputs are filled). A blank input
+// counts as 0; both blank sends a blank. The sum is rounded to 4 decimals (no 7.5 + 8.1 noise)
+// and sent as text like the other Meta values. A filled input that is not a finite number is
+// named in unreadableValueProperties (F-1): the worker ends the run as `error` and sends nothing.
+function sumAssignedHours(dealProps, noteUnreadable) {
+  const parts = ["hours_bt_work_schedule_1", "bt_rbt_2_work_schedule"].map((property) => {
+    const text = toTrimmedOrNull(dealProps[property]);
+    if (text === null) {
+      return null;
+    }
+    const hours = Number(text);
+    if (!Number.isFinite(hours)) {
+      noteUnreadable(property);
+      return UNREADABLE;
+    }
+    return hours;
+  });
+  if (parts.includes(UNREADABLE)) {
+    return UNREADABLE;
+  }
+  if (parts.every((hours) => hours === null)) {
+    return null;
+  }
+  const sum = parts.reduce((total, hours) => total + (hours ?? 0), 0);
+  return String(Number(sum.toFixed(4)));
 }
 
 // The carrier, or the "Other" summary when the carrier is Other (C29 primary, C30 secondary).
@@ -244,8 +273,7 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
   if (!dealId || !String(portalId || "").trim()) {
     return null;
   }
-  const dealObjectTypeId = process.env.HUBSPOT_DEAL_OBJECT_TYPE_ID || "0-3";
-  return `https://app.hubspot.com/contacts/${portalId}/record/${dealObjectTypeId}/${dealId}`;
+  return `https://app.hubspot.com/contacts/${portalId}/record/${HUBSPOT_CASE_OBJECT_TYPE_ID}/${dealId}`;
 }
 
 // CONTRACT P.5 (a): labels. Every mapper returns two lists of CentralReach label IDs (rule 5.6).
@@ -280,6 +308,9 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 //                 sent nor cleared; one unreadable auth date leaves the whole Auth Period out.
 //                 The worker (lane D, wave 2) must end the run as `error` when the list is not
 //                 empty, with a reason that names the properties, and make no CentralReach write.
+//   unreadableValueProperties (in the answer, F-1)  the same for a filled input that is not a
+//                 date and is not a value of its format (the C20 hours inputs). Same handling,
+//                 with the reason "Unreadable value: <property>".
 // What the worker must do for an omitted field (row 3.18): keep the field's saved hash in the
 // link record as it was, and leave the field out of the changed fields. If the saved hash were
 // dropped, a later blank in HubSpot would send no clear and CentralReach would keep the old value.
@@ -295,6 +326,8 @@ export function buildClientMetadata({ deal, portalId, staffNames, omitFieldIds }
   const staff = staffNameFields(staffNames);
   // Rule 5.7: reads one date property and notes it when it is filled and unreadable.
   const unreadableDateProperties = [];
+  // F-1: a filled input that is not a value of its format (C20 hours). Not a date.
+  const unreadableValueProperties = [];
   const dateOf = (property) => {
     const date = toMetadataDate(dealProps[property]);
     if (date === UNREADABLE) {
@@ -323,8 +356,9 @@ export function buildClientMetadata({ deal, portalId, staffNames, omitFieldIds }
       dealProps.finalized_client_service_hours_post_assessment,
       dealProps.client_service_hours_total
     ]),
-    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.TOTAL_ASSIGNED_HOURS]: toTrimmedOrNull(
-      dealProps.total_hours_btrbt_12
+    [CENTRAL_REACH_CLIENT_METADATA_FIELDS.TOTAL_ASSIGNED_HOURS]: sumAssignedHours(
+      dealProps,
+      (property) => unreadableValueProperties.push(property)
     ),
     [CENTRAL_REACH_CLIENT_METADATA_FIELDS.APPROVED_AUTH_HOURS]: getApprovedAuthHours(dealProps),
     // The end-date property name is misspelled in HubSpot; the spelling is real.
@@ -404,6 +438,7 @@ export function buildClientMetadata({ deal, portalId, staffNames, omitFieldIds }
     labelIds: requiredLabelIds,
     metadataValues,
     unreadableDateProperties,
+    unreadableValueProperties,
     warnings: staff.warnings
   };
 }

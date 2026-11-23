@@ -194,11 +194,16 @@ test("[C2][1] the legal name is phi_first_name__cloned_ and phi_last_name, never
   assert.equal(blank.LastName, null);
 });
 
-test("[C4][old] phi_gender male and female map to Male and Female, and any other value sends no gender", () => {
+test("[C4][old] phi_gender male and female map to Male and Female; blank sends no gender and any other value is unreadable (F-1)", () => {
   assert.equal(mapCase({ phi_gender: "male" }).Gender, "Male");
   assert.equal(mapCase({ phi_gender: "female" }).Gender, "Female");
-  for (const other of ["", "unknown", "nonbinary", undefined]) {
+  for (const blank of ["", undefined]) {
+    assert.equal(mapCase({ phi_gender: blank }).Gender, null);
+    assert.deepEqual(mapCase({ phi_gender: blank }).unreadableValueProperties, []);
+  }
+  for (const other of ["unknown", "nonbinary"]) {
     assert.equal(mapCase({ phi_gender: other }).Gender, null);
+    assert.deepEqual(mapCase({ phi_gender: other }).unreadableValueProperties, ["phi_gender"]);
   }
 });
 
@@ -225,10 +230,15 @@ test("[C5][3.14] the External System ID is the Case record ID on a create, and a
   assert.equal(sent, CASE_ID);
 });
 
-test("[C6][old] the primary email is the Case email, trimmed and lower case, and only when it is valid", () => {
+test("[C6][old] the primary email is the Case email, trimmed and lower case, and only when it is valid; a filled invalid one is unreadable (F-1)", () => {
   assert.equal(mapCase({ email: "  Guardian@Example.COM " }).PrimaryEmail, "guardian@example.com");
-  for (const invalid of ["not-an-email", "a@b", "two words@example.com", "", "   ", undefined]) {
+  for (const blank of ["", "   ", undefined]) {
+    assert.equal(mapCase({ email: blank }).PrimaryEmail, null);
+    assert.deepEqual(mapCase({ email: blank }).unreadableValueProperties, []);
+  }
+  for (const invalid of ["not-an-email", "a@b", "two words@example.com"]) {
     assert.equal(mapCase({ email: invalid }).PrimaryEmail, null);
+    assert.deepEqual(mapCase({ email: invalid }).unreadableValueProperties, ["email"]);
   }
 });
 

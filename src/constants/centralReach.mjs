@@ -4,7 +4,8 @@ export const CENTRAL_REACH_EMPLOYEE_TYPES = {
 };
 
 // Central Reach requires a date of birth to create an employee. Placeholder used only on a create
-// when HubSpot date_of_birth is blank (Zeke, 2026-11-16). Temporary: pending a decision with Danny.
+// when the HubSpot date of birth (BT/RBT date_of_birth, BCBA dob) is blank (Zeke, 2026-11-16).
+// Temporary: pending a decision with Danny.
 export const EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH = "2000-01-01";
 
 export const CENTRAL_REACH_EMPLOYEE_LABELS = {
@@ -37,7 +38,8 @@ export const CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS = {
   WORK_ADDRESS: 133819,
   ACTIVE_CASE_COUNT: 147882,
   HUBSPOT_LINK_TO_BT_RBT_RECORD: 138703,
-  BCBA_EMAIL: 138069,
+  // Personal Email, type `input`; sent for both employee types from `personal_email` (B9, T9).
+  PERSONAL_EMAIL: 138069,
   BCBA_MEDICAID_ID_NY: 126216,
   BCBA_MEDICAID_ID_NJ: 138112,
   BCBA_MEDICAID_ID_CO: 138113,

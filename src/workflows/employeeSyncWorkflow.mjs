@@ -6,8 +6,6 @@ import {
   createHubSpotClient,
   getBtRbtRecordById,
   getBcbaRecordById,
-  getObjectById,
-  listAssociations,
   updateEmployeeWritebackWithFallback
 } from "../lib/hubspotClient.mjs";
 import {
@@ -92,6 +90,7 @@ import {
   REPLACE_TEMPORARY_ID,
   RETRIES_USED_UP,
   unreadableDate,
+  unreadableValue,
   WAITING_FOR_WORKDAY_ID,
   WORKDAY_ALREADY_IN_CENTRALREACH,
   WORKDAY_ID_MISMATCH
@@ -110,6 +109,7 @@ const DECIDED_CODES = Object.freeze({
   CR_ID_NOT_DIGITS: "CR_ID_NOT_DIGITS",
   HUBSPOT_PROPERTY_MISSING: "HUBSPOT_PROPERTY_MISSING",
   UNREADABLE_DATE: "UNREADABLE_DATE",
+  UNREADABLE_VALUE: "UNREADABLE_VALUE",
   VALIDATION_FAILED: "VALIDATION_FAILED",
   ANOTHER_HUBSPOT_RECORD_LINKED: "ANOTHER_HUBSPOT_RECORD_LINKED",
   CONFLICTING_EXTERNAL_IDS: "CONFLICTING_EXTERNAL_IDS",
@@ -266,71 +266,6 @@ const EMPLOYEE_GATE_AND_STATUS_PROPERTIES = Object.freeze([
   "last_sync_error"
 ]);
 
-const CONTACT_OBJECT_TYPE_ID = "0-1";
-
-// Row 6.4 (B9, K3): the BCBA's personal email is the email of the Contact linked by BCBA ->
-// Contact (associationTypeId: 191 in the sandbox, 17 in production). Answers one of:
-//   { email }                    one Contact: its email (null when blank); no Contact: null
-//   { omitted: true, reason }    more than one Contact (several_contacts), or a read that failed
-//                                (contact_read_failed), with the error's code and status for the log
-// Never a value in the reason. A failed read never becomes a blank (rule 5.8).
-async function readBcbaContactEmail({
-  recordId,
-  objectTypeId,
-  associationTypeId,
-  readAssociations,
-  readContact
-}) {
-  const failed = (error) => ({
-    omitted: true,
-    reason: "contact_read_failed",
-    errorCode: error?.code ?? null,
-    httpStatus: error?.response?.status ?? error?.httpStatus ?? null
-  });
-  let rows;
-  try {
-    rows = await readAssociations({
-      fromObjectType: objectTypeId,
-      fromId: recordId,
-      toObjectType: CONTACT_OBJECT_TYPE_ID
-    });
-  } catch (error) {
-    return failed(error);
-  }
-  if (!Array.isArray(rows)) {
-    return failed(null);
-  }
-  const contactIds = [
-    ...new Set(
-      rows
-        .filter((row) =>
-          (Array.isArray(row?.types) ? row.types : []).some(
-            (type) => Number(type?.typeId) === Number(associationTypeId)
-          )
-        )
-        .map((row) => String(row?.toObjectId ?? "").trim())
-        .filter(Boolean)
-    )
-  ];
-  if (contactIds.length === 0) {
-    return { email: null };
-  }
-  if (contactIds.length > 1) {
-    return { omitted: true, reason: "several_contacts", contactCount: contactIds.length };
-  }
-  let contact;
-  try {
-    contact = await readContact(contactIds[0], ["email"]);
-  } catch (error) {
-    return failed(error);
-  }
-  const properties = contact?.properties;
-  if (!properties || typeof properties !== "object" || !Object.hasOwn(properties, "email")) {
-    return failed(null);
-  }
-  return { email: properties.email ?? null };
-}
-
 // Row 3.20: the operation of the summary line from the answer of createOrUpdateEmployee. A create
 // that CentralReach rejected was still sent; a create that is turned off was not.
 function operationOf(syncResult) {
@@ -362,11 +297,6 @@ export async function runEmployeeSyncWorkflow(
   const initState = dependencies.createStateClient || createStateClient;
   const fetchBtRbt = dependencies.getBtRbtRecordById || getBtRbtRecordById;
   const fetchBcba = dependencies.getBcbaRecordById || getBcbaRecordById;
-  // Row 6.4: the BCBA's Contact.
-  const readAssociations = dependencies.listAssociations || listAssociations;
-  const readContact =
-    dependencies.getContactById ||
-    ((id, contactProperties) => getObjectById(CONTACT_OBJECT_TYPE_ID, id, contactProperties));
   const upsertEmployee = dependencies.createOrUpdateEmployee || createOrUpdateEmployee;
   const findByExternalId =
     dependencies.findEmployeeByExternalSystemId || findEmployeeByExternalSystemId;
@@ -408,7 +338,7 @@ export async function runEmployeeSyncWorkflow(
 
   // Row 3.20: one `Sync run summary.` line per run, logged in `finally`, also when configuration
   // or a client fails (the portal is set once it is known). Only names, IDs, codes and counts:
-  // never a field value, and never the BCBA Contact's email (row 6.4).
+  // never a field value.
   const summary = createSyncRunSummary({
     workflow: `employeeSync:${normalizedEmployeeType}`,
     recordId: normalizedRecordId,
@@ -424,7 +354,6 @@ export async function runEmployeeSyncWorkflow(
   // `finally` with its summary line. Until they are set, nothing is read or written.
   let config = null;
   let portalId = null;
-  let bcbaContactAssociationTypeId = null;
   let objectTypeId = null;
   let employeeIdProperty = "employee_id";
   let recordGateProperty = null;
@@ -434,9 +363,7 @@ export async function runEmployeeSyncWorkflow(
   const prepareRun = () => {
     config = getRuntimeConfig();
     // Any portal that is not in the table is invalid configuration: nothing is read or written.
-    ({ portalId, bcbaContactAssociationTypeId } = hubspotPortalSettings(
-      config.hubspot?.hubspotPortalId
-    ));
+    ({ portalId } = hubspotPortalSettings(config.hubspot?.hubspotPortalId));
     summary.setPortalId(portalId);
     objectTypeId =
       normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
@@ -685,41 +612,10 @@ export async function runEmployeeSyncWorkflow(
       });
     }
 
-    // Row 6.4 (B9, K3): a BCBA's personal email comes from its Contact. A BT/RBT has none.
-    // undefined means "not read": the mapper leaves field 138069 out and it goes in omitFieldIds.
-    let contactEmail;
-    let personalEmailOmitted = false;
-    if (normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BCBA) {
-      const personalEmail = await readBcbaContactEmail({
-        recordId: normalizedRecordId,
-        objectTypeId,
-        associationTypeId: bcbaContactAssociationTypeId,
-        readAssociations,
-        readContact
-      });
-      if (personalEmail.omitted) {
-        personalEmailOmitted = true;
-        logger("warn", "BCBA personal email not sent: its Contact could not be read, or more than one is linked.", {
-          workflow: "employeeSync",
-          recordId: normalizedRecordId,
-          employeeType: normalizedEmployeeType,
-          fieldId: CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL,
-          reason: personalEmail.reason,
-          contactCount: personalEmail.contactCount ?? null,
-          errorCode: personalEmail.errorCode ?? null,
-          httpStatus: personalEmail.httpStatus ?? null,
-          invocationId: context?.invocationId || null
-        });
-      } else {
-        contactEmail = personalEmail.email;
-      }
-    }
-
     const mapped = mapPayload({
       record: hubspotRecord,
       employeeType: normalizedEmployeeType,
-      config,
-      contactEmail
+      config
     });
     const mappingWarnings = Array.isArray(mapped.warnings) ? mapped.warnings : [];
     if (mappingWarnings.length > 0) {
@@ -747,8 +643,21 @@ export async function runEmployeeSyncWorkflow(
     if (mapped.dateOfBirthStatus === "unreadable") {
       return await decided({
         status: "error",
-        reason: unreadableDate("date_of_birth"),
+        reason: unreadableDate(mapped.dateOfBirthField || "date_of_birth"),
         code: DECIDED_CODES.UNREADABLE_DATE,
+        fail: true
+      });
+    }
+
+    // F-1 (rule 5.8): a filled phone, email, state or gender that cannot be converted to the
+    // CentralReach format is never sent as a blank or as it is: error, no CentralReach write.
+    // Checked before the validator, so a filled bad email on a create is "unreadable", not
+    // "missing"; a blank email on a create is still "missing".
+    if ((mapped.unreadableValueProperties || []).length > 0) {
+      return await decided({
+        status: "error",
+        reason: unreadableValue(mapped.unreadableValueProperties.join(", ")),
+        code: DECIDED_CODES.UNREADABLE_VALUE,
         fail: true
       });
     }
@@ -827,11 +736,9 @@ export async function runEmployeeSyncWorkflow(
     };
 
     // Contract P.5 (c) in src/mappings/employees/buildEmployeePayload.mjs: a field whose input
-    // could not be read is named here, so it is not compared, not sent and not cleared. Row 6.4:
-    // the BCBA's personal email when its Contact could not be read. `dependencies.omitFieldIds`
-    // is a seam for tests (lane B I-1).
+    // could not be read is named here, so it is not compared, not sent and not cleared.
+    // `dependencies.omitFieldIds` is a seam for tests (lane B I-1).
     const omitFieldIds = [
-      ...(personalEmailOmitted ? [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_EMAIL] : []),
       ...(mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
         ? [
             CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
@@ -1335,12 +1242,10 @@ export async function runEmployeeSyncWorkflow(
     if (missingMappedProperties(normalizedEmployeeType, confirmedRecord?.properties).length > 0) {
       throw new HubSpotReadError("employee");
     }
-    // Both mappings of the run get the same inputs: the Contact is not read again.
     const confirmedMapped = mapPayload({
       record: confirmedRecord,
       employeeType: normalizedEmployeeType,
-      config,
-      contactEmail
+      config
     });
     const confirmedHash = digestPayload(
       comparedStateOf(confirmedMapped, confirmedRecord?.properties || {})

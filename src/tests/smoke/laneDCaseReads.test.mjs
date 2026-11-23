@@ -12,6 +12,7 @@ import { buildClientMetadata } from "../../mappings/client/buildClientMetadata.m
 import { CASE_PROPERTIES, caseRequestProperties } from "../../mappings/client/clientProperties.mjs";
 import * as hubspotClient from "../../lib/hubspotClient.mjs";
 import { createHubSpotClient, readObjectsBatch } from "../../lib/hubspotClient.mjs";
+import { answeringPortalCheck, portalCheckedHubSpotConfig } from "./hubspotPortalCheckFake.mjs";
 import { FAILURE_KINDS, classifyFailure } from "../../lib/retry.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import {
@@ -349,11 +350,9 @@ test("[C11][4.14] staffRecordIdsByRole reads the portal's role IDs for a BCBA ro
 
 test("[C11][4.14] readObjectsBatch posts one batch read per 100 IDs, asks for the listed properties, and throws on a 403 or an answer with no results", async () => {
   const requests = [];
-  const client = createHubSpotClient({
-    hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
-  });
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
   let mode = "ok";
-  client.defaults.adapter = async (requestConfig) => {
+  client.defaults.adapter = answeringPortalCheck(async (requestConfig) => {
     const body = JSON.parse(requestConfig.data);
     requests.push({ url: requestConfig.url, method: requestConfig.method, body });
     if (mode === "403") {
@@ -365,7 +364,7 @@ test("[C11][4.14] readObjectsBatch posts one batch read per 100 IDs, asks for th
       headers: {},
       config: requestConfig
     };
-  };
+  });
   const ids = Array.from({ length: 150 }, (_, index) => String(1000 + index));
   const rows = await readObjectsBatch({
     objectTypeId: SANDBOX_BCBA_TYPE,
@@ -488,13 +487,11 @@ test("[C10][4.16] the Case run never calls the owners API (/crm/v3/owners) and r
   const { cr } = setup();
   // Every HubSpot request the worker makes outside the fakes reaches this adapter.
   const hubspotRequests = [];
-  const client = createHubSpotClient({
-    hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
-  });
-  client.defaults.adapter = async (requestConfig) => {
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
+  client.defaults.adapter = answeringPortalCheck(async (requestConfig) => {
     hubspotRequests.push(`${requestConfig.method} ${requestConfig.url}`);
     throw httpError(599);
-  };
+  });
   const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan", hubspot_owner_id: "9001" });
   const requested = [];
   const result = await run(

@@ -65,7 +65,22 @@ export function checkTriggers({ expected, written = {}, triggers = {} }) {
   return { ok, missing, writtenTriggers };
 }
 
+// `--expected`: print, per object, the trigger properties the HubSpot workflows must have. It does
+// not read or judge webhook-triggers.json. Zeke uses it to set up the workflow triggers.
+export function formatExpectedList(expected = expectedTriggerProperties()) {
+  const lines = [];
+  for (const object of Object.keys(expected)) {
+    const names = [...new Set(expected[object])].sort();
+    lines.push(`${LABELS[object] || object} (${names.length})`, ...names, "");
+  }
+  return lines.join("\n");
+}
+
 function main() {
+  if (process.argv.includes("--expected")) {
+    process.stdout.write(formatExpectedList());
+    return;
+  }
   const file = fileURLToPath(
     new URL("../docs/workstreams/architecture-update/webhook-triggers.json", import.meta.url)
   );

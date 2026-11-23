@@ -84,8 +84,9 @@ function employeeRecord(employeeType, properties) {
       first_name: "Alex",
       last_name: "Rivera",
       email: "alex@example.com",
-      ucaba_email_address: "pat@work.test",
       date_of_birth: "1990-10-20",
+      // BCBA date of birth (B5, decision 48).
+      dob: "10/20/1990",
       workday_id: "WD1",
       ...properties
     }
@@ -478,7 +479,8 @@ const EMPLOYEE_CREATE_FIELDS = [
   ["bt_rbt", "email", { email: "" }],
   ["bcba", "first_name", { first_name: "" }],
   ["bcba", "last_name", { last_name: "" }],
-  ["bcba", "ucaba_email_address", { ucaba_email_address: "" }]
+  // B4 (decision 49): the BCBA primary email is the BCBA record's own email.
+  ["bcba", "email", { email: "" }]
 ];
 
 for (const [employeeType, fieldName, override] of EMPLOYEE_CREATE_FIELDS) {
@@ -514,11 +516,11 @@ test("[GER-REQ] a filled employee first_name with a blank last_name names last_n
 test("[GER-REQ] a malformed employee email on create is an error and the reason has no value", async () => {
   const { deps, calls } = employeeHarness({
     employeeType: "bcba",
-    properties: { employee_id: "", ucaba_email_address: "not-an-email" }
+    properties: { employee_id: "", email: "not-an-email" }
   });
   const result = await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bcba" }, deps);
   assert.equal(result.status, "error");
-  assert.match(lastWrite(calls).last_sync_error, /ucaba_email_address/);
+  assert.match(lastWrite(calls).last_sync_error, /email/);
   assert.equal(lastWrite(calls).last_sync_error.includes("not-an-email"), false);
   assert.equal(calls.upserts.length, 0);
 });
@@ -611,10 +613,10 @@ test("[GER-REQ] employee names come from first_name and last_name", () => {
         first_name: "Pat",
         last_name: "Morgan",
         bcba_name: "Wrong Name",
-        ucaba_email_address: "pat@work.test",
+        email: "pat@work.test",
         work_email: "old@work.test",
         workday_id: "WD2",
-        date_of_birth: "1990-10-20"
+        dob: "10/20/1990"
       }
     }
   });
@@ -650,7 +652,7 @@ test("[GER-REQ] a blank employee date of birth on update sends back the date Cen
   // Row 3.13 (rule 5.7, API test of 2026-11-20): a date of birth that is left out of an update
   // is cleared in CentralReach, so the stored date is sent back. It was left out before.
   const { deps, calls } = employeeHarness({
-    properties: { employee_id: "7001", date_of_birth: "" },
+    properties: { employee_id: "7001", dob: "" },
     crEmployee: {
       contact: {
         contactId: "7001",
@@ -667,7 +669,7 @@ test("[GER-REQ] a blank employee date of birth on update sends back the date Cen
 
 test("[GER-REQ] a blank employee date of birth on update is left out when the CentralReach read does not hold the key", async () => {
   const { deps, calls } = employeeHarness({
-    properties: { employee_id: "7001", date_of_birth: "" }
+    properties: { employee_id: "7001", dob: "" }
   });
   await runEmployeeSyncWorkflow({ recordId: "HS1", employeeType: "bcba" }, deps);
   assert.equal(calls.upserts.length, 1);
@@ -754,7 +756,6 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
           first_name: "Alex",
           last_name: "Rivera",
           email: "alex@example.com",
-          ucaba_email_address: "pat@work.test",
           date_of_birth: "1990-10-20"
         }
       }
@@ -775,7 +776,6 @@ for (const employeeType of ["bt_rbt", "bcba"]) {
           first_name: "Alex",
           last_name: "Rivera",
           email: "alex@example.com",
-          ucaba_email_address: "pat@work.test",
           date_of_birth: "1990-10-20"
         }
       }
@@ -1091,12 +1091,26 @@ for (const [label, shape] of [
   ["employee", { employee: { primaryEmail: "stored@example.com" } }],
   ["result", { result: { primaryEmail: "stored@example.com" } }]
 ]) {
-  test(`[G17] a linked update sends the primary email CentralReach holds on the ${label}`, () => {
+  // Row 1.10 (owner's decision 2026-11-21): a filled HubSpot email is sent; a blank one keeps
+  // the email CentralReach holds, read from each answer shape.
+  test(`[B4][1.10] a linked update sends a filled HubSpot primary email, not the one CentralReach holds on the ${label}`, () => {
     const result = buildEmployeePayloadForContactId(
       { primaryEmail: "hubspot@example.com", externalSystemId: "WD1" },
       shape
     );
-    assert.equal(result.payload.primaryEmail, "stored@example.com");
+    assert.equal(result.payload.primaryEmail, "hubspot@example.com");
+    assert.equal(result.preservedPrimaryEmail, false);
+  });
+
+  test(`[B4][1.10] a linked update with a blank HubSpot primary email sends the one CentralReach holds on the ${label}`, () => {
+    for (const blank of [null, "", "  ", undefined]) {
+      const result = buildEmployeePayloadForContactId(
+        { primaryEmail: blank, externalSystemId: "WD1" },
+        shape
+      );
+      assert.equal(result.payload.primaryEmail, "stored@example.com");
+      assert.equal(result.preservedPrimaryEmail, true);
+    }
   });
 }
 

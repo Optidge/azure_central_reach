@@ -54,13 +54,13 @@ const BT_PERSON = {
 const BCBA_PERSON = {
   first_name: "Philippa",
   last_name: "Ravensworth",
-  ucaba_email_address: "p.ravensworth@ucaba.example.com",
+  email: "p.ravensworth@ucaba.example.com",
   employee_phone: "646-555-0123",
   address: "88 Juniper Hollow",
   apartment__home: "Suite 3R",
   city_home: "Tarrytown",
   postal_code_home: "10591",
-  date_of_birth: "1981-11-05",
+  dob: "1981-11-05",
   medicaid_id__ny: "NY77221"
 };
 const CONTACT_EMAIL = "philippa.personal@example.org";
@@ -349,27 +349,9 @@ for (const type of TYPES) {
   });
 }
 
-test("[BR15][3.20] a BCBA whose Contact cannot be read still logs one line, without the Contact's email", async () => {
-  const { cr } = setup();
-  const record = linked(TYPES[1], cr);
-  const logs = [];
-  await run(TYPES[1], record, {
-    logs,
-    extra: {
-      listAssociations: async () => {
-        throw httpError(503);
-      }
-    }
-  });
-
-  const { meta } = onlyLine(logs);
-  assert.equal(meta.outcome, "success");
-  assert.equal(meta.changedFieldNames.includes("metadata.138069"), false);
-});
-
 // --- The Contact fan-out ---
 
-function fanOut({ testRecord = null, cases = [], bcbas = [], logs, breakRead, sends = [] } = {}) {
+function fanOut({ testRecord = null, cases = [], logs, breakRead, sends = [] } = {}) {
   const deps = {
     getConfig: () => workflowConfig(),
     createHubSpotClient: () => {},
@@ -378,12 +360,11 @@ function fanOut({ testRecord = null, cases = [], bcbas = [], logs, breakRead, se
     getContactById: async (contactId, properties) =>
       hubspotAnswer({ id: contactId, properties: { test_record: testRecord } }, properties),
     listAssociations: async ({ toObjectType }) =>
-      (toObjectType === "0-3" ? cases : bcbas).map((id) => ({
+      cases.map((id) => ({
         toObjectId: id,
         types: [{ typeId: 4, category: "HUBSPOT_DEFINED" }]
       })),
-    sendClientSyncMessage: async (message) => sends.push(message),
-    sendEmployeeSyncMessage: async (message) => sends.push(message)
+    sendClientSyncMessage: async (message) => sends.push(message)
   };
   breakRead?.(deps);
   return runContactFanOutWorkflow(
@@ -394,7 +375,7 @@ function fanOut({ testRecord = null, cases = [], bcbas = [], logs, breakRead, se
 
 test("[BR15][3.20] the fan-out logs one line with the messages it queued per object type", async () => {
   const logs = [];
-  await fanOut({ cases: ["9001", "9002"], bcbas: ["HS2"], logs });
+  await fanOut({ cases: ["9001", "9002"], logs });
 
   const lines = summaryLines(logs);
   assert.equal(lines.length, 1);
@@ -412,19 +393,19 @@ test("[BR15][3.20] the fan-out logs one line with the messages it queued per obj
     crCalls: [],
     labels: null,
     writeback: { written: false, status: null },
-    queuedMessages: { case: 2, bcba: 1 }
+    queuedMessages: { case: 2 }
   });
 });
 
 test("[BR15][3.20] the fan-out logs skipped for a test Contact, with nothing queued", async () => {
   const logs = [];
-  await fanOut({ testRecord: "true", cases: ["9001"], bcbas: ["HS2"], logs });
+  await fanOut({ testRecord: "true", cases: ["9001"], logs });
 
   const lines = summaryLines(logs);
   assert.equal(lines.length, 1);
   assert.equal(lines[0].meta.outcome, "skipped");
   assert.equal(lines[0].meta.reasonCode, "test_record");
-  assert.deepEqual(lines[0].meta.queuedMessages, { case: 0, bcba: 0 });
+  assert.deepEqual(lines[0].meta.queuedMessages, { case: 0 });
   assert.deepEqual(lines[0].meta.crCalls, []);
 });
 
@@ -433,7 +414,6 @@ test("[BR15][3.20] the fan-out logs error with the read's code when a read fails
   await assert.rejects(
     fanOut({
       cases: ["9001"],
-      bcbas: ["HS2"],
       logs,
       breakRead: (deps) => {
         deps.listAssociations = async () => {
@@ -450,7 +430,7 @@ test("[BR15][3.20] the fan-out logs error with the read's code when a read fails
   assert.equal(lines[0].level, "warn");
   assert.equal(lines[0].meta.outcome, "error");
   assert.equal(lines[0].meta.reasonCode, "HUBSPOT_HTTP_503");
-  assert.deepEqual(lines[0].meta.queuedMessages, { case: 0, bcba: 0 });
+  assert.deepEqual(lines[0].meta.queuedMessages, { case: 0 });
 });
 
 test("[BR15][3.20] the fan-out counts only the messages sent before a send failed", async () => {
@@ -459,7 +439,6 @@ test("[BR15][3.20] the fan-out counts only the messages sent before a send faile
   await assert.rejects(
     fanOut({
       cases: ["9001", "9002"],
-      bcbas: ["HS2"],
       logs,
       sends,
       breakRead: (deps) => {
@@ -478,7 +457,7 @@ test("[BR15][3.20] the fan-out counts only the messages sent before a send faile
   assert.equal(lines.length, 1);
   assert.equal(lines[0].meta.outcome, "error");
   assert.equal(lines[0].meta.reasonCode, "ServiceTimeout");
-  assert.deepEqual(lines[0].meta.queuedMessages, { case: 1, bcba: 0 });
+  assert.deepEqual(lines[0].meta.queuedMessages, { case: 1 });
   assert.equal(sends.length, 1);
 });
 
@@ -624,7 +603,7 @@ test("[BR15][3.20] the fan-out logs one error line when the portal is unknown", 
   assert.equal(lines.length, 1);
   assert.equal(lines[0].meta.outcome, "error");
   assert.equal(lines[0].meta.portalId, null);
-  assert.deepEqual(lines[0].meta.queuedMessages, { case: 0, bcba: 0 });
+  assert.deepEqual(lines[0].meta.queuedMessages, { case: 0 });
 });
 
 test("[BR15][3.20] the fan-out logs one error line when the HubSpot client factory throws", async () => {

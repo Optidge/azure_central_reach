@@ -5,6 +5,10 @@ export const HUBSPOT_OBJECTS = {
   BCBA: "bcba"
 };
 
+// The HubSpot object type ID of a Case (a Deal). The same in the sandbox and in production
+// (BUILD-PLAN section 3, IDs). Used to build the link to the Case record.
+export const HUBSPOT_CASE_OBJECT_TYPE_ID = "0-3";
+
 export const HUBSPOT_DEAL_PROPERTIES = {
   STAGE: "dealstage",
   PIPELINE: "pipeline"

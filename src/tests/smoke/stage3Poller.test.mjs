@@ -9,6 +9,7 @@ import { app } from "@azure/functions";
 import { acquireLease } from "../../lib/cosmosState.mjs";
 import { getIntakePollerConfig } from "../../lib/config.mjs";
 import { createHubSpotClient, searchObjectPage } from "../../lib/hubspotClient.mjs";
+import { answeringPortalCheck, portalCheckedHubSpotConfig } from "./hubspotPortalCheckFake.mjs";
 import { sha256 } from "../../lib/hash.mjs";
 import { POLL_MAX_PAGES, POLL_PAGE_SIZE } from "../../workflows/intakePollerWorkflow.mjs";
 import { PRODUCTION_PORTAL, SANDBOX_PORTAL, httpError } from "./stage2Fakes.mjs";
@@ -623,8 +624,8 @@ test("[BR16][3.3] a search answer with no results list is a failed read, not an 
   );
 
   // HubSpot answers 200 with no list.
-  const client = createHubSpotClient({ hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" } });
-  client.defaults.adapter = async (requestConfig) => ({ status: 200, headers: {}, config: requestConfig, data: {} });
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
+  client.defaults.adapter = answeringPortalCheck(async (requestConfig) => ({ status: 200, headers: {}, config: requestConfig, data: {} }));
   await assert.rejects(
     searchObjectPage({ objectTypeId: CASE_TYPE, filterGroups: [], sorts: [], properties: ["hs_object_id"], limit: 10 }),
     (error) => error.code === "HUBSPOT_READ_FAILED"

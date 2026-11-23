@@ -12,6 +12,7 @@ import {
   planRetry
 } from "../../lib/retry.mjs";
 import { createHubSpotClient, getDealById } from "../../lib/hubspotClient.mjs";
+import { answeringPortalCheck, portalCheckedHubSpotConfig } from "./hubspotPortalCheckFake.mjs";
 import { processEmployeeQueue } from "../../functions/processEmployeeQueue.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
@@ -299,18 +300,16 @@ test("[5.1] a record that passed the gate still gets Retries used up on the last
 });
 
 test("[2.7 decision 1] the HubSpot client marks its own failures, so 403, 423 and 477 are temporary and 400 is permanent", async () => {
-  const client = createHubSpotClient({
-    hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" }
-  });
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
   for (const [status, kind] of [
     [403, FAILURE_KINDS.TEMPORARY],
     [423, FAILURE_KINDS.TEMPORARY],
     [477, FAILURE_KINDS.TEMPORARY],
     [400, FAILURE_KINDS.PERMANENT]
   ]) {
-    client.defaults.adapter = async () => {
+    client.defaults.adapter = answeringPortalCheck(async () => {
       throw httpError(status);
-    };
+    });
     await assert.rejects(getDealById("1", ["dealname"]), (error) => {
       assert.equal(error.provider, "hubspot");
       assert.equal(classifyFailure(error), kind);

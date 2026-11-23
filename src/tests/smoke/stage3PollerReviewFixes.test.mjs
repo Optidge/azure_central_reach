@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHubSpotClient, findHubSpotRecordsByEmployeeId } from "../../lib/hubspotClient.mjs";
+import { answeringPortalCheck, portalCheckedHubSpotConfig } from "./hubspotPortalCheckFake.mjs";
 import { intakePoller } from "../../functions/intakePoller.mjs";
 import { SANDBOX_PORTAL } from "./stage2Fakes.mjs";
 import {
@@ -248,9 +249,9 @@ test("[BR14][3.3] a run with a failed object makes the timer function throw, aft
 // ---------------------------------------------------------------------------------------------
 
 test("[BR16][3.3] findHubSpotRecordsByEmployeeId throws on an answer with no results list, instead of reading it as \"no other record\"", async () => {
-  const client = createHubSpotClient({ hubspot: { baseUrl: "https://hubspot.invalid", privateAppToken: "test" } });
+  const client = createHubSpotClient(portalCheckedHubSpotConfig());
   const search = (data) => {
-    client.defaults.adapter = async (requestConfig) => ({ status: 200, headers: {}, config: requestConfig, data });
+    client.defaults.adapter = answeringPortalCheck(async (requestConfig) => ({ status: 200, headers: {}, config: requestConfig, data }));
     return findHubSpotRecordsByEmployeeId({
       bcbaObjectTypeId: SANDBOX_BCBA_TYPE,
       btRbtObjectTypeId: SANDBOX_BT_TYPE,

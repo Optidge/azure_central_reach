@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { resolveHubSpotPortal } from "./config.mjs";
 
 const DEAL_OBJECT_TYPES = new Set(["0-3", "deal", "deals"]);
-// Row 6.1 (K1, K3): a Contact is a data source for its linked Cases and BCBAs, never its own
+// Row 6.1 (K1): a Contact is a data source for its linked Cases, never its own
 // CentralReach record.
 const CONTACT_OBJECT_TYPES = new Set(["0-1", "contact", "contacts"]);
 const PLACEHOLDER_VALUES = new Set(["", "CHANGE_ME"]);

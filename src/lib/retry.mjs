@@ -52,6 +52,12 @@ const TEMPORARY_CODES = new Set([
   "SYNC_STALE", // the record changed during the run
   "CR_LOOKUP_UNKNOWN", // a lookup answered something other than 200 or 404
   "HUBSPOT_READ_FAILED", // HubSpot refused a read with 401 or 403, or answered with no list
+  // Finding F-3: the HubSpot token belongs to another portal than HUBSPOT_PORTAL_ID. Invalid
+  // configuration, sorted like the other configuration failures (an error with no code is
+  // temporary): retried on the schedule, then dead-lettered, so the dead-letter alert fires. No
+  // HubSpot CRM call is made with that token (src/lib/hubspotClient.mjs), so nothing is written
+  // to the record.
+  "HUBSPOT_PORTAL_MISMATCH",
   "CR_AUTH_FAILED", // the CentralReach token request failed, with any status
   // Row 3.15: a create was sent less than 15 minutes ago and its lookup answers "not found".
   // No second create is sent; the run is retried.

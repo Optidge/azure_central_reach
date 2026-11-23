@@ -228,7 +228,7 @@ test("[BR1][3.19] the real BUILD-PLAN section 9 is read: every family of IDs, wi
   const count = (prefix) => ids.filter((id) => new RegExp(`^${prefix}\\d+$`).test(id)).length;
   assert.deepEqual(
     { BR: count("BR"), C: count("C"), CL: count("CL"), B: count("B"), BL: count("BL"), T: count("T"), TL: count("TL"), K: count("K") },
-    { BR: 22, C: 38, CL: 6, B: 13, BL: 8, T: 8, TL: 4, K: 5 }
+    { BR: 22, C: 38, CL: 6, B: 13, BL: 8, T: 9, TL: 4, K: 5 }
   );
   const status = (id) => requirements.find((item) => item.id === id).status;
   assert.equal(classifyStatus(status("BR1")).built, true);
