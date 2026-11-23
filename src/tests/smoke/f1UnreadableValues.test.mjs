@@ -314,18 +314,13 @@ test("[B9][6.4] F-1 BCBA personal email (Meta 138069, decision 50): `personal_em
   assert.deepEqual(blank.unreadableValueProperties, []);
 });
 
-test("[T9][6.4] F-1 BT/RBT personal email (Meta 138069, decision 50): `personal_email` is read, never `email`; a filled one that fails the check is unreadable and not sent; blank still sends a blank", () => {
-  const read = bt({ email: "alex@uca.example", personal_email: "Alex@Home.example" });
-  assert.equal(read.metadataValues[PERSONAL_EMAIL], "alex@home.example");
-  assert.equal(read.employeePayload.primaryEmail, "alex@uca.example");
-  assert.equal(bt({ email: "alex@uca.example" }).metadataValues[PERSONAL_EMAIL], null);
+test("[T9][6.4] F-1 BT/RBT personal email is held (2026-11-23): `personal_email` is not read and no Meta 138069 is built", () => {
+  const held = bt({ email: "alex@uca.example", personal_email: "Alex@Home.example" });
+  assert.equal(Object.hasOwn(held.metadataValues, PERSONAL_EMAIL), false);
+  assert.equal(held.employeePayload.primaryEmail, "alex@uca.example");
   const bad = bt({ personal_email: BAD.email });
-  assert.equal(bad.metadataValues[PERSONAL_EMAIL], null);
-  assert.deepEqual(bad.unreadableValueProperties, ["personal_email"]);
-  const blank = bt({ personal_email: "" });
-  assert.equal(Object.hasOwn(blank.metadataValues, PERSONAL_EMAIL), true);
-  assert.equal(blank.metadataValues[PERSONAL_EMAIL], null);
-  assert.deepEqual(blank.unreadableValueProperties, []);
+  assert.equal(Object.hasOwn(bad.metadataValues, PERSONAL_EMAIL), false);
+  assert.deepEqual(bad.unreadableValueProperties, []);
 });
 
 // --- the Case worker ---
@@ -385,8 +380,6 @@ test("[C20][4.6] F-1 a filled hours input that is not a number ends the Case run
 const BT_BAD = [
   ["employee_phone", BAD.phone],
   ["email", BAD.email],
-  // Meta 138069 (T9, decision 50)
-  ["personal_email", BAD.email],
   ["state_home", BAD.state],
   ["gender", BAD.gender]
 ];

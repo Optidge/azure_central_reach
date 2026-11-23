@@ -251,14 +251,8 @@ function buildBtRbtPayload({ record, config }) {
     recordId: properties.hs_object_id || record?.id
   });
 
-  const metadataValues = {
-    // T9 (decision 50): the personal email, as for the BCBA (B9). Blank sends a blank; a filled
-    // email that fails the format check is unreadable (F-1).
-    [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.PERSONAL_EMAIL]: valueOf(
-      readEmail,
-      EMPLOYEE_PERSONAL_EMAIL_PROPERTY
-    )
-  };
+  // T9 held (2026-11-23): BT/RBT personal email is not sent until the field is confirmed with Danny and the client (O-51).
+  const metadataValues = {};
   if (workAddress) {
     metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS] = workAddress;
   }

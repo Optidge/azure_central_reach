@@ -35,8 +35,7 @@ export const BT_RBT_PROPERTIES = Object.freeze({
     BT_RBT_DATE_OF_BIRTH_PROPERTY,
     "gender",
     "email",
-    // Personal email, Meta 138069 (T9, decision 50)
-    EMPLOYEE_PERSONAL_EMAIL_PROPERTY,
+    // T9 held (2026-11-23): no personal_email here until the field is confirmed (O-51).
     // Mailing address and phone (T4, T5)
     "street_home",
     "home_apt",
@@ -142,7 +141,6 @@ export function employeeRequestProperties(employeeType) {
 export function knownMetadataFieldIds(employeeType) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return [
-      CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.PERSONAL_EMAIL,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.WORK_ADDRESS,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.ACTIVE_CASE_COUNT,
       CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD

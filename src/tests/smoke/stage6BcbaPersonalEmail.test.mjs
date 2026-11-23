@@ -1,4 +1,4 @@
-// Row 6.4 (B9, T9, BR16): the employee personal email, CentralReach Meta 138069 (type `input`).
+// Row 6.4 (B9, BR16; T9 held 2026-11-23, see the last tests): the employee personal email, CentralReach Meta 138069 (type `input`).
 // Decision 50 (2026-11-23): on the BCBA and on the BT/RBT it is the record's own HubSpot
 // `personal_email` ("Personal Email (backup only, never emailed)"); `email` stays the primary
 // email only (decision 49). The linked Contact is not read for it (decision 42), and the portal
@@ -80,10 +80,9 @@ function personalEmailCalls(crCalls, name) {
   );
 }
 
-// The two employee types send 138069 the same way (B9 for the BCBA, T9 for the BT/RBT).
+// Only the BCBA sends 138069 (B9). The BT/RBT half (T9) is held, 2026-11-23.
 const SIDES = [
-  { id: "B9", label: "BCBA", linked: linkedBcba, run: runBcba, readerName: "getBcbaRecordById" },
-  { id: "T9", label: "BT/RBT", linked: linkedBt, run: runBt, readerName: "getBtRbtRecordById" }
+  { id: "B9", label: "BCBA", linked: linkedBcba, run: runBcba, readerName: "getBcbaRecordById" }
 ];
 
 for (const side of SIDES) {
@@ -216,23 +215,37 @@ for (const side of SIDES) {
   });
 }
 
-test("[B9][6.4] the BCBA worker requests and maps personal_email and email once each; the BT/RBT does too (T9, T2)", () => {
-  for (const type of [HUBSPOT_EMPLOYEE_TYPES.BCBA, HUBSPOT_EMPLOYEE_TYPES.BT_RBT]) {
-    for (const name of ["email", "personal_email"]) {
-      assert.equal(employeeMappedProperties(type).includes(name), true, `${type} maps ${name}`);
-      assert.equal(
-        employeeRequestProperties(type).filter((requested) => requested === name).length,
-        1,
-        `${type} requests ${name} once`
-      );
-    }
+test("[B9][6.4] the BCBA worker requests and maps personal_email and email once each", () => {
+  const type = HUBSPOT_EMPLOYEE_TYPES.BCBA;
+  for (const name of ["email", "personal_email"]) {
+    assert.equal(employeeMappedProperties(type).includes(name), true, `${type} maps ${name}`);
+    assert.equal(
+      employeeRequestProperties(type).filter((requested) => requested === name).length,
+      1,
+      `${type} requests ${name} once`
+    );
   }
 });
 
-test("[T9][6.4] the expected workflow triggers (check-triggers --expected, row 7.2) list personal_email for the BCBA and the BT/RBT", () => {
+test("[T9][6.4] T9 is held (2026-11-23): the BT/RBT request list has no personal_email and its payload carries no Meta 138069", async () => {
+  const type = HUBSPOT_EMPLOYEE_TYPES.BT_RBT;
+  assert.equal(employeeMappedProperties(type).includes("personal_email"), false);
+  assert.equal(employeeRequestProperties(type).includes("personal_email"), false);
+  const { container, cr } = setup();
+  const record = linkedBt(cr, { email: "work@example.com", personal_email: "pat.personal@example.com" });
+  const count = counters({ container, cr, record });
+  const start = count.mark();
+  const result = await runBt(record);
+  const done = count.since(start);
+  assert.equal(result.status, "success");
+  assert.equal(JSON.stringify(done.crCalls).includes("pat.personal@example.com"), false);
+  assert.equal(personalEmailCalls(done.crCalls, METADATA_PUT).length, 0);
+});
+
+test("[T9][6.4] the expected workflow triggers (check-triggers --expected, row 7.2) list personal_email for the BCBA; the BT/RBT half is held", () => {
   const expected = expectedTriggerProperties();
   assert.equal(expected.bcba.includes("personal_email"), true, "BCBA");
-  assert.equal(expected.btRbt.includes("personal_email"), true, "BT/RBT");
+  assert.equal(expected.btRbt.includes("personal_email"), false, "BT/RBT (T9 held)");
 });
 
 test("[B9][6.4] the portal table holds no BCBA → Contact association type any more", () => {

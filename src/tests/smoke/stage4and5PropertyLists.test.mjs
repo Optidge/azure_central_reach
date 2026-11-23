@@ -206,8 +206,6 @@ const BT_RBT_MAPPED = [
   "last_name",
   "date_of_birth",
   "email",
-  // T9 (6.4, decision 50): Meta 138069
-  "personal_email",
   // T3
   "gender",
   // T4, T5 (5.9)
@@ -314,7 +312,7 @@ test("[B13][5.3] field 134444 is not a known BCBA metadata field, so no clear is
     knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BCBA),
     [138069, 126216, 138112, 138113, 138703]
   );
-  assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [138069, 133819, 147882, 138703]);
+  assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [133819, 147882, 138703]);
 });
 
 test("[B6][5.1] the archived BCBA gender property is not requested; gender_new is", () => {
