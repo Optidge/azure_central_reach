@@ -122,7 +122,7 @@ If your `local.settings.json` was copied from another project or tooling, these 
 - Auth on the function is anonymous. The legacy private-app **v2** signature is the check (`X-HubSpot-Signature`, `X-HubSpot-Signature-Version: v2`).
 - Body is `objectTypeId` plus `recordId`. Case is `0-3` and Contact is `0-1`. BCBA and BT/RBT must match the object type IDs of the configured portal (`HUBSPOT_PORTAL_ID`).
 - Object type IDs (BUILD-PLAN section 3). Sandbox `52311591`: Case `0-3`, BCBA `2-72890322`, BT/RBT `2-72890325`, Contact `0-1`. Production `50317927`: Case `0-3`, BCBA `2-48354212`, BT/RBT `2-48354559`, Contact `0-1`. The retired sandbox portal `50850427` is not valid.
-- `webhook-triggers.json` stays empty until each HubSpot workflow's trigger properties are exported into it; it is never pre-filled from the code, because `npm run check:triggers` compares it with what the code expects. `node scripts/check-triggers.mjs --expected` prints the expected trigger properties per object (no network), for setting up the workflows.
+- The HubSpot workflow re-enrollment triggers are set up and maintained by Zeke in HubSpot (decision 51); no file or check holds them. `node scripts/check-triggers.mjs` (or `npm run check:triggers`) prints the trigger properties the code maps, per object (no network), as a reference when a mapping changes.
 - Every queued message carries the configured portal ID. A worker completes a message for another portal without acting.
 - Set `HUBSPOT_WEBHOOK_CLIENT_SECRET` before expecting HTTP 202. Until then the route returns 503 `MISSING_WEBHOOK_SECRET`.
 
