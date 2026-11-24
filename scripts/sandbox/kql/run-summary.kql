@@ -1,33 +1,71 @@
-// Row 3.20: one `Sync run summary.` line per worker run (src/lib/syncRunSummary.mjs).
-// Read-only. Run from the repo root (one plain az command, so it runs outside the Bash sandbox):
-//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/run-summary.kql -o json
+// Row 3.20: one `Sync run summary.` log call per worker run (src/lib/syncRunSummary.mjs).
+// Read-only. Run from the repo root (one plain az command; --offset must cover `since`):
+//   az monitor app-insights query --app df1c0c8f-12fe-41b7-a022-e3e5f1989f2e --offset 6h --analytics-query @scripts/sandbox/kql/run-summary.kql -o json --query "tables[0].rows"
 // Set recordId to one HubSpot record ID to narrow the result; leave it "" for every run.
-// safeLog writes console[level](message, meta), so the keys are inside the message text
-// (util.format), not in customDimensions. Each key is pulled out by name; values are IDs,
-// codes and counts only (BR21).
+// `source` (hubspotWorkflow | intakePoller (Case) | employeePoller (BCBA, BT/RBT) | dailySweep |
+// contactFanOut) proves the POLLER path only, and only while every webhook workflow of the object
+// is off (review C O2). The webhook path is proven by arrival: record-timeline.kql, pathProof
+// "WEBHOOK ARRIVAL". `gate` is filled on a record_gate skip only (create | update).
+//
+// How the app logs: safeLog calls console[level](message, meta). Node prints the meta over
+// several lines and the Functions host stores EACH LINE as its own `traces` row, Category
+// Host.Function.Console, with no operation_Id and no InvocationId. The lines of one call are
+// consecutive rows of one worker process, so `calls` below orders by process and time: a key line
+// (`name: 'value',`) or the closing `}` continues the call above it, any other line starts a new
+// call. One row per log call comes out: `logMessage` (the header) and `text` (all lines). `kv`
+// reads one key from the text; every value is a quoted string (IDs, codes, counts, JSON; BR21).
+// The run's invocationId (from the text) is matched to the host's own rows for the function name
+// and operation_Id.
 let recordId = "";
-let since = 6h;
-traces
-| where timestamp > ago(since)
-| where message startswith "Sync run summary."
-| extend
-    workflow       = extract(@"workflow:\s*'([^']*)'", 1, message),
-    record         = extract(@"recordId:\s*'?(\d+)", 1, message),
-    portal         = extract(@"portalId:\s*'?(\d+)", 1, message),
-    source         = extract(@"source:\s*'([^']*)'", 1, message),
-    runInvocation  = extract(@"invocationId:\s*'([^']*)'", 1, message),
-    attempt        = extract(@"attempt:\s*'?(\d+)", 1, message),
-    outcome        = extract(@"outcome:\s*'([a-z]+)'", 1, message),
-    reasonCode     = extract(@"reasonCode:\s*'([^']*)'", 1, message),
-    operation      = extract(@"operation:\s*'([a-z]+)'", 1, message),
-    changedFields  = extract(@"changedFieldNames:\s*'(\[[^']*\])'", 1, message),
-    crCalls        = extract(@"crCalls:\s*'(\[[^']*\])'", 1, message),
-    labels         = extract(@"labels:\s*'(\{[^']*\}|null)'", 1, message),
-    writeback      = extract(@"writeback:\s*'(\{[^']*\})'", 1, message),
-    queued         = extract(@"queuedMessages:\s*'(\{[^']*\})'", 1, message),
-    hostInvocation = tostring(customDimensions["InvocationId"])
+let since = 6h; // day-2 checks (retry chain, 08:00 UTC sweep; run sheet S10): 30h, with --offset 30h
+let kv = (t: string, k: string) {
+    coalesce(extract(strcat(@"\b", k, @": '([^']*)'"), 1, t),
+        extract(strcat(@"\b", k, @": ""([^""]*)"""), 1, t))
+};
+let calls = traces
+    | where timestamp > ago(since)
+    | where tostring(customDimensions.Category) == "Host.Function.Console"
+        or tostring(customDimensions.Category) endswith ".User"
+    | extend proc = strcat(cloud_RoleInstance, "/", tostring(customDimensions.ProcessId)),
+        line = trim_start(@"\s+", message)
+    | extend isPart = line == "}" or line matches regex @"^[A-Za-z_$][\w$]*: ['""`]"
+    | order by proc asc, timestamp asc, itemId asc
+    | extend callNo = row_cumsum(iff(isPart and proc == prev(proc), 0, 1))
+    | summarize callTime = min(timestamp), severityLevel = max(severityLevel),
+        header = take_anyif(line, not(isPart)), parts = make_list(line), lineCount = count()
+        by proc, callNo
+    | extend text = strcat_array(parts, "\n"),
+        logMessage = extract(@"(?s)^(.*?)\s*(?:\{.*)?$", 1, header)
+    | extend inv = kv(text, "invocationId"),
+        record = coalesce(kv(text, "recordId"), kv(text, "dealId"), kv(text, "contactId"))
+    | extend record = iff(record matches regex @"^\d+$", record, "");
+let invocations = traces
+    | where timestamp > ago(since)
+    | extend inv = tostring(customDimensions.InvocationId)
+    | where isnotempty(inv)
+    | summarize fn = take_any(operation_Name), operation_Id = take_any(operation_Id) by inv;
+calls
+| where logMessage == "Sync run summary."
 | where isempty(recordId) or record == recordId
-| project timestamp, severityLevel, workflow, record, portal, source, attempt, outcome, reasonCode,
-    operation, changedFields, crCalls, labels, writeback, queued, runInvocation, hostInvocation,
-    operation_Id, raw = message
-| order by timestamp asc
+| extend
+    workflow      = kv(text, "workflow"),
+    portal        = kv(text, "portalId"),
+    source        = kv(text, "source"),
+    attempt       = kv(text, "attempt"),
+    outcome       = kv(text, "outcome"),
+    reasonCode    = kv(text, "reasonCode"),
+    // Item 24 (two-property gate): on a `record_gate` skip only, the path whose gate property was
+    // not true: create | update (src/lib/syncRunSummary.mjs setGate). Blank on every other run.
+    // Rows G-1 to G-9 of the sandbox test matrix read it.
+    gate          = kv(text, "gate"),
+    operation     = kv(text, "operation"),
+    changedFields = kv(text, "changedFieldNames"),
+    crCalls       = kv(text, "crCalls"),
+    labels        = kv(text, "labels"),
+    writeback     = kv(text, "writeback"),
+    queued        = kv(text, "queuedMessages")
+| join kind=leftouter invocations on inv
+| project callTime, severityLevel, workflow, record, portal, source, attempt, outcome, reasonCode,
+    gate, operation, changedFields, crCalls, labels, writeback, queued, invocationId = inv, fn,
+    operation_Id, raw = text
+| order by callTime asc

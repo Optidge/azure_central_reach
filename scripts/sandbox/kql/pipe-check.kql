@@ -1,27 +1,59 @@
 // The first check after the deploy (no CentralReach write): did each HubSpot change reach the
 // webhook, the queue and a worker? One row per record with the count of each step, plus BR3/BR14
 // duplicate signals (two webhooks for one change → two runs, one CR write).
-// Read-only:
-//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/pipe-check.kql -o json
-let since = 6h;
-traces
-| where timestamp > ago(since)
-| extend record = extract(@"recordId:\s*'?(\d+)", 1, message)
+// Read-only. Run from the repo root (one plain az command; --offset must cover `since`):
+//   az monitor app-insights query --app df1c0c8f-12fe-41b7-a022-e3e5f1989f2e --offset 6h --analytics-query @scripts/sandbox/kql/pipe-check.kql -o json --query "tables[0].rows"
+//
+// How the app logs: safeLog calls console[level](message, meta). Node prints the meta over
+// several lines and the Functions host stores EACH LINE as its own `traces` row, Category
+// Host.Function.Console, with no operation_Id and no InvocationId. The lines of one call are
+// consecutive rows of one worker process, so `calls` below orders by process and time: a key line
+// (`name: 'value',`) or the closing `}` continues the call above it, any other line starts a new
+// call. One row per log call comes out: `logMessage` (the header, e.g. "Sync run summary.") and
+// `text` (all lines). `kv` reads one key from the text; every value is a quoted string.
+let since = 6h; // day-2 checks (retry chain, 08:00 UTC sweep; run sheet S10): 30h, with --offset 30h
+let kv = (t: string, k: string) {
+    coalesce(extract(strcat(@"\b", k, @": '([^']*)'"), 1, t),
+        extract(strcat(@"\b", k, @": ""([^""]*)"""), 1, t))
+};
+let calls = traces
+    | where timestamp > ago(since)
+    | where tostring(customDimensions.Category) == "Host.Function.Console"
+        or tostring(customDimensions.Category) endswith ".User"
+    | extend proc = strcat(cloud_RoleInstance, "/", tostring(customDimensions.ProcessId)),
+        line = trim_start(@"\s+", message)
+    | extend isPart = line == "}" or line matches regex @"^[A-Za-z_$][\w$]*: ['""`]"
+    | order by proc asc, timestamp asc, itemId asc
+    | extend callNo = row_cumsum(iff(isPart and proc == prev(proc), 0, 1))
+    | summarize callTime = min(timestamp), severityLevel = max(severityLevel),
+        header = take_anyif(line, not(isPart)), parts = make_list(line), lineCount = count()
+        by proc, callNo
+    | extend text = strcat_array(parts, "\n"),
+        logMessage = extract(@"(?s)^(.*?)\s*(?:\{.*)?$", 1, header)
+    | extend inv = kv(text, "invocationId"),
+        record = coalesce(kv(text, "recordId"), kv(text, "dealId"), kv(text, "contactId"))
+    | extend record = iff(record matches regex @"^\d+$", record, "");
+calls
 | where isnotempty(record)
 | extend step = case(
-    message startswith "HubSpot webhook accepted.", "webhook",
-    message has "queue message accepted.", "queued",
-    message has "skipped by eligibility gate.", "gateSkip",
-    message startswith "Sync run summary.", "run",
-    message has "A retry is scheduled", "retry",
-    message has "Change found by the poller or the daily sweep", "poller",
+    logMessage == "HubSpot webhook accepted.", "webhook",
+    logMessage endswith "queue message accepted.", "queued",
+    logMessage endswith "skipped by eligibility gate.", "gateSkip",
+    logMessage == "Sync run summary.", "run",
+    logMessage == "Sync failed. A retry is scheduled.", "retry",
+    logMessage startswith "Change found by the poller or the daily sweep", "poller",
+    logMessage endswith "failed.", "failed",
     "other")
-| extend outcome = iif(step == "run", extract(@"outcome:\s*'([a-z]+)'", 1, message), ""),
-    crWrite = step == "run" and extract(@"operation:\s*'([a-z]+)'", 1, message) in ("create", "update")
-| summarize first = min(timestamp), last = max(timestamp),
+| extend outcome = iff(step == "run", kv(text, "outcome"), ""),
+    // Item 24: `gate` (create | update) is on a record_gate skip's run summary only (G rows).
+    gate = iff(step == "run", kv(text, "gate"), ""),
+    crWrite = step == "run" and kv(text, "operation") in ("create", "update")
+| summarize firstSeen = min(callTime), lastSeen = max(callTime),
     webhooks = countif(step == "webhook"), queued = countif(step == "queued"),
     runs = countif(step == "run"), crWrites = countif(crWrite), gateSkips = countif(step == "gateSkip"),
     retries = countif(step == "retry"), pollerFinds = countif(step == "poller"),
-    outcomes = make_list_if(outcome, step == "run")
+    failures = countif(step == "failed"),
+    outcomes = make_list_if(outcome, step == "run"),
+    gates = make_list_if(gate, step == "run" and isnotempty(gate))
     by record
-| order by last desc
+| order by lastSeen desc

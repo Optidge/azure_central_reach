@@ -1,0 +1,223 @@
+(node:81640) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental, expect them to change at any time.
+(Use `node --trace-warnings ...` to show where the warning was created)
+ERROR: failed to copy trust settings of system certificate-25291
+ERROR: failed to copy trust settings of system certificate-25291
+ERROR: failed to copy trust settings of system certificate-25291
+ERROR: failed to copy trust settings of system certificate-25291
+N1 / V36 check on CentralReach test records. Mode: WRITE.
+
+==== employee 5338681 ====
+
+A. Read (baseline).
+  [call 1] POST token -> HTTP 200
+  [call 2] GET /contacts/employee/5338681 -> HTTP 200
+  Kind: contact.type names a employee.
+
+  Keys of contact (28)
+    key                   | in subset PUT | result  | shape before -> after
+    addressLine1          | yes           | -       | text(11)
+    addressLine2          | yes           | -       | text(3)
+    chosenName            | no            | -       | text(0)
+    city                  | yes           | -       | text(9)
+    company               | no            | -       | text(0)
+    contactId             | no            | -       | number
+    credentials           | no            | -       | text(0)
+    dateOfBirth           | yes           | -       | text(28)
+    employeeType          | no            | -       | text(0)
+    externalSystemId      | yes           | -       | text(11)
+    firstName             | yes           | -       | text(4)
+    gender                | yes           | -       | text(4)
+    isActive              | no            | -       | boolean
+    jobTitle              | no            | -       | text(0)
+    languages             | no            | -       | list(0)
+    lastName              | yes           | -       | text(22)
+    middleInitial         | no            | -       | text(0)
+    npiNumber             | no            | -       | text(0)
+    payCodes              | no            | -       | list(0)
+    payTypes              | no            | -       | list(0)
+    phoneCell             | yes           | -       | text(10)
+    primaryEmail          | yes           | -       | text(38)
+    primaryOfficeLocation | no            | -       | text(9)
+    ssn                   | no            | -       | text(0)
+    stateProvince         | yes           | -       | text(2)
+    title                 | no            | -       | text(0)
+    type                  | no            | -       | text(8)
+    zipPostalCode         | yes           | -       | text(5)
+
+  Subset PUT (step C): 12 keys: externalSystemId:text(11), firstName:text(4), lastName:text(22), gender:text(4), dateOfBirth:text(24), primaryEmail:text(38), addressLine1:text(11), addressLine2:text(3), city:text(9), stateProvince:text(2), zipPostalCode:text(5), phoneCell:text(10)
+  Probe keys: jobTitle (blank: marker to set), chosenName (blank: marker to set)
+    phoneHome: not in the read
+    phoneWork: not in the read
+  Candidate probe keys holding a value now (what --probes-set-by-hand needs): none
+  Full-body PUT (steps B and E): 28 keys.
+  Restore file (mode 600, holds the record's values): /tmp/claude-501/cr-n1-restore-employee-5338681-2026-11-24T19-31-54-382Z.json
+
+B. Set the probe keys with a full-body PUT.
+  PUT body (full body as read, probes set to markers), 28 keys: contactId:number, isActive:boolean, type:text(8), externalSystemId:text(11), title:text(0), firstName:text(4), middleInitial:text(0), lastName:text(22), chosenName:text(12), primaryEmail:text(38), addressLine1:text(11), addressLine2:text(3), city:text(9), stateProvince:text(2), zipPostalCode:text(5), phoneCell:text(10), dateOfBirth:text(10), languages:list(0), gender:text(4), credentials:text(0), ssn:text(0), npiNumber:text(0), jobTitle:text(12), company:text(0), employeeType:text(0), payTypes:list(0), payCodes:list(0), primaryOfficeLocation:text(9)
+  [call 3] PUT /contacts/employee/5338681 -> HTTP 200
+  [call 4] GET /contacts/employee/5338681 -> HTTP 200
+  jobTitle holds a value: yes (exactly the marker: yes)
+  chosenName holds a value: yes (exactly the marker: yes)
+
+  Set-up check: keys that differ from the step-A read (only the probe keys should)
+    key        | result  | shape before -> after
+    chosenName | CHANGED | text(0) -> text(12)
+    jobTitle   | CHANGED | text(0) -> text(12)
+
+C. The subset PUT (the pending build's update body, from the step-B read).
+  PUT body (subset, as the build sends it), 12 keys: externalSystemId:text(11), firstName:text(4), lastName:text(22), gender:text(4), dateOfBirth:text(24), primaryEmail:text(38), addressLine1:text(11), addressLine2:text(3), city:text(9), stateProvince:text(2), zipPostalCode:text(5), phoneCell:text(10)
+  [call 5] PUT /contacts/employee/5338681 -> HTTP 200
+
+D. Read now and again after 20 s; compare every key with the step-B read.
+  [call 6] GET /contacts/employee/5338681 -> HTTP 200
+  [call 7] GET /contacts/employee/5338681 -> HTTP 200
+
+  Subset PUT result (PUT answered HTTP 200)
+    key                   | in subset PUT | result  | shape before -> after
+    addressLine1          | yes           | equal   | text(11) -> text(11)
+    addressLine2          | yes           | equal   | text(3) -> text(3)
+    chosenName            | no            | BLANKED | text(12) -> text(0)
+    city                  | yes           | equal   | text(9) -> text(9)
+    company               | no            | equal   | text(0) -> text(0)
+    contactId             | no            | equal   | number -> number
+    credentials           | no            | equal   | text(0) -> text(0)
+    dateOfBirth           | yes           | equal   | text(28) -> text(28), first 10 chars equal: yes
+    employeeType          | no            | equal   | text(0) -> text(0)
+    externalSystemId      | yes           | equal   | text(11) -> text(11)
+    firstName             | yes           | equal   | text(4) -> text(4)
+    gender                | yes           | equal   | text(4) -> text(4)
+    isActive              | no            | equal   | boolean -> boolean
+    jobTitle              | no            | BLANKED | text(12) -> text(0)
+    languages             | no            | equal   | list(0) -> list(0)
+    lastName              | yes           | equal   | text(22) -> text(22)
+    middleInitial         | no            | equal   | text(0) -> text(0)
+    npiNumber             | no            | equal   | text(0) -> text(0)
+    payCodes              | no            | equal   | list(0) -> list(0)
+    payTypes              | no            | equal   | list(0) -> list(0)
+    phoneCell             | yes           | equal   | text(10) -> text(10)
+    primaryEmail          | yes           | equal   | text(38) -> text(38)
+    primaryOfficeLocation | no            | equal   | text(9) -> text(9)
+    ssn                   | no            | equal   | text(0) -> text(0)
+    stateProvince         | yes           | equal   | text(2) -> text(2)
+    title                 | no            | equal   | text(0) -> text(0)
+    type                  | no            | equal   | text(8) -> text(8)
+    zipPostalCode         | yes           | equal   | text(5) -> text(5)
+
+E. Restore employee 5338681 to the step-A read.
+  Every key already equals the step-A read: no restore PUT.
+
+  Restore check: keys that differ from the step-A read
+    (every key equal)
+  Restore file deleted: /tmp/claude-501/cr-n1-restore-employee-5338681-2026-11-24T19-31-54-382Z.json
+
+F. Verdict, employee 5338681
+  SUBSET_PUT_PRESERVES_UNMAPPED = no (blanked: chosenName, jobTitle; absent: -; changed: -)
+  MAPPED_KEYS_CHANGED = none
+  DATE_FORM_OK = yes (sent text(24); read back with the same first 10 chars; whole value unchanged)
+  RESTORE_OK = yes
+  CR_CALLS = 7 (this entity, token request included when made here)
+
+==== client 5384589 ====
+
+A. Read (baseline).
+  [call 8] GET /contacts/client/5384589 -> HTTP 200
+  Kind: contact.type names a client.
+
+  Keys of contact (26)
+    key                  | in subset PUT | result  | shape before -> after
+    additionalContacts   | no            | -       | list(0)
+    addressLine1         | yes           | -       | text(17)
+    addressLine2         | yes           | -       | text(6)
+    chosenName           | no            | -       | text(0)
+    city                 | yes           | -       | text(8)
+    clientDiagnosisCodes | no            | -       | list(0)
+    contactId            | no            | -       | number
+    dateOfBirth          | yes           | -       | text(28)
+    externalSystemId     | yes           | -       | text(11)
+    firstName            | yes           | -       | text(4)
+    gender               | yes           | -       | text(4)
+    guarantorFirstName   | no            | -       | text(0)
+    guarantorLastName    | no            | -       | text(0)
+    guardianFirstName    | yes           | -       | text(17)
+    guardianLastName     | yes           | -       | text(7)
+    isActive             | no            | -       | boolean
+    lastName             | yes           | -       | text(21)
+    middleInitial        | no            | -       | text(0)
+    phoneCell            | yes           | -       | text(10)
+    primaryEmail         | yes           | -       | text(37)
+    primaryPayors        | no            | -       | list(0)
+    secondaryPayors      | no            | -       | list(0)
+    stateProvince        | yes           | -       | text(2)
+    title                | no            | -       | text(0)
+    type                 | no            | -       | text(6)
+    zipPostalCode        | yes           | -       | text(5)
+
+  Subset PUT (step C): 14 keys: ExternalSystemId:text(11), FirstName:text(4), LastName:text(21), Gender:text(4), DateOfBirth:text(24), PrimaryEmail:text(37), PhoneCell:text(10), AddressLine1:text(17), AddressLine2:text(6), City:text(8), StateProvince:text(2), ZipPostalCode:text(5), GuardianFirstName:text(17), GuardianLastName:text(7)
+  Probe keys: chosenName (blank: marker to set)
+    phoneHome: not in the read
+  Candidate probe keys holding a value now (what --probes-set-by-hand needs): none
+  Full-body PUT (steps B and E): 26 keys.
+  Restore file (mode 600, holds the record's values): /tmp/claude-501/cr-n1-restore-client-5384589-2026-11-24T19-32-16-470Z.json
+
+B. Set the probe keys with a full-body PUT.
+  PUT body (full body as read, probes set to markers), 26 keys: ContactId:number, IsActive:boolean, Type:text(6), ExternalSystemId:text(11), Title:text(0), FirstName:text(4), MiddleInitial:text(0), LastName:text(21), ChosenName:text(12), PrimaryEmail:text(37), AddressLine1:text(17), AddressLine2:text(6), City:text(8), StateProvince:text(2), ZipPostalCode:text(5), PhoneCell:text(10), DateOfBirth:text(24), Gender:text(4), GuardianFirstName:text(17), GuardianLastName:text(7), GuarantorFirstName:text(0), GuarantorLastName:text(0), ClientDiagnosisCodes:list(0), AdditionalContacts:list(0), PrimaryPayors:list(0), SecondaryPayors:list(0)
+  [call 9] PUT /contacts/client/5384589 -> HTTP 200
+  [call 10] GET /contacts/client/5384589 -> HTTP 200
+  chosenName holds a value: yes (exactly the marker: yes)
+
+  Set-up check: keys that differ from the step-A read (only the probe keys should)
+    key        | result  | shape before -> after
+    chosenName | CHANGED | text(0) -> text(12)
+
+C. The subset PUT (the pending build's update body, from the step-B read).
+  PUT body (subset, as the build sends it), 14 keys: ExternalSystemId:text(11), FirstName:text(4), LastName:text(21), Gender:text(4), DateOfBirth:text(24), PrimaryEmail:text(37), PhoneCell:text(10), AddressLine1:text(17), AddressLine2:text(6), City:text(8), StateProvince:text(2), ZipPostalCode:text(5), GuardianFirstName:text(17), GuardianLastName:text(7)
+  [call 11] PUT /contacts/client/5384589 -> HTTP 200
+
+D. Read now and again after 20 s; compare every key with the step-B read.
+  [call 12] GET /contacts/client/5384589 -> HTTP 200
+  [call 13] GET /contacts/client/5384589 -> HTTP 200
+
+  Subset PUT result (PUT answered HTTP 200)
+    key                  | in subset PUT | result  | shape before -> after
+    additionalContacts   | no            | equal   | list(0) -> list(0)
+    addressLine1         | yes           | equal   | text(17) -> text(17)
+    addressLine2         | yes           | equal   | text(6) -> text(6)
+    chosenName           | no            | BLANKED | text(12) -> text(0)
+    city                 | yes           | equal   | text(8) -> text(8)
+    clientDiagnosisCodes | no            | equal   | list(0) -> list(0)
+    contactId            | no            | equal   | number -> number
+    dateOfBirth          | yes           | equal   | text(28) -> text(28), first 10 chars equal: yes
+    externalSystemId     | yes           | equal   | text(11) -> text(11)
+    firstName            | yes           | equal   | text(4) -> text(4)
+    gender               | yes           | equal   | text(4) -> text(4)
+    guarantorFirstName   | no            | equal   | text(0) -> text(0)
+    guarantorLastName    | no            | equal   | text(0) -> text(0)
+    guardianFirstName    | yes           | equal   | text(17) -> text(17)
+    guardianLastName     | yes           | equal   | text(7) -> text(7)
+    isActive             | no            | equal   | boolean -> boolean
+    lastName             | yes           | equal   | text(21) -> text(21)
+    middleInitial        | no            | equal   | text(0) -> text(0)
+    phoneCell            | yes           | equal   | text(10) -> text(10)
+    primaryEmail         | yes           | equal   | text(37) -> text(37)
+    primaryPayors        | no            | equal   | list(0) -> list(0)
+    secondaryPayors      | no            | equal   | list(0) -> list(0)
+    stateProvince        | yes           | equal   | text(2) -> text(2)
+    title                | no            | equal   | text(0) -> text(0)
+    type                 | no            | equal   | text(6) -> text(6)
+    zipPostalCode        | yes           | equal   | text(5) -> text(5)
+
+E. Restore client 5384589 to the step-A read.
+  Every key already equals the step-A read: no restore PUT.
+
+  Restore check: keys that differ from the step-A read
+    (every key equal)
+  Restore file deleted: /tmp/claude-501/cr-n1-restore-client-5384589-2026-11-24T19-32-16-470Z.json
+
+F. Verdict, client 5384589
+  SUBSET_PUT_PRESERVES_UNMAPPED = no (blanked: chosenName; absent: -; changed: -)
+  MAPPED_KEYS_CHANGED = none
+  DATE_FORM_OK = yes (sent text(24); read back with the same first 10 chars; whole value unchanged)
+  RESTORE_OK = yes
+  CR_CALLS = 6 (this entity, token request included when made here)
+
+Total CentralReach calls: 13 (token request included).

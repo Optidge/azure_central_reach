@@ -1,20 +1,88 @@
 // Everything the app logged for one record, in order: webhook accepted, queue message accepted,
-// gate skips, mapper warnings, the run summary, retries, failures, and the exceptions.
-// Read-only. Set recordId first (required), then run:
-//   az monitor app-insights query --app centralreachserverless -g centralreachintegration --analytics-query @scripts/sandbox/kql/record-timeline.kql -o json
-// Lines are matched by the record ID in the message text, then every line of the same
-// operation_Id (one function invocation) is pulled in, so lines that do not repeat the ID show too.
+// gate skips, mapper warnings, the run summary, retries, failures, the host's own
+// Executing/Executed rows and the exceptions.
+// Read-only. Set recordId first (required), then run from the repo root (--offset must cover `since`):
+//   az monitor app-insights query --app df1c0c8f-12fe-41b7-a022-e3e5f1989f2e --offset 6h --analytics-query @scripts/sandbox/kql/record-timeline.kql -o json --query "tables[0].rows"
+//
+// How the app logs: safeLog calls console[level](message, meta). Node prints the meta over
+// several lines and the Functions host stores EACH LINE as its own `traces` row, Category
+// Host.Function.Console, with no operation_Id and no InvocationId. The lines of one call are
+// consecutive rows of one worker process, so `calls` below orders by process and time: a key line
+// (`name: 'value',`) or the closing `}` continues the call above it, any other line starts a new
+// call. One row per log call comes out: `logMessage` (the header) and `text` (all lines).
+// A call belongs to the record when its text holds the record ID. Every call, host row and
+// exception of the same function invocation (invocationId in the text = the host's InvocationId)
+// is pulled in too, so lines that do not repeat the ID show.
+//
+// PATH PROOF (review C O2, retest run sheet "Path rules"). The webhook path is proven by ARRIVAL, not
+// by which run wrote: set editTime to the moment of the HubSpot edit (UTC); a row with
+// pathProof = "WEBHOOK ARRIVAL" (log line "HubSpot webhook accepted." for this record) with
+// minutesAfterEdit between 0 and 15 proves the webhook leg, whatever `source` the first run has
+// (the poller often runs first: the sandbox webhook came ~9 min after the edit on 2026-11-23).
+// The poller path is proven by a run with source intakePoller (Case) or employeePoller (BCBA,
+// BT/RBT) while every webhook workflow of the object is OFF and no WEBHOOK ARRIVAL row exists.
+// Day-2 checks (retry chain, 08:00 UTC sweep): set since = 30h and --offset 30h.
 let recordId = "REPLACE_WITH_HUBSPOT_RECORD_ID";
 let since = 6h;
-let ops = union traces, exceptions
+let editTime = datetime(null); // e.g. datetime(2026-11-25 15:05:00); leave null to skip minutesAfterEdit
+let kv = (t: string, k: string) {
+    coalesce(extract(strcat(@"\b", k, @": '([^']*)'"), 1, t),
+        extract(strcat(@"\b", k, @": ""([^""]*)"""), 1, t))
+};
+let calls = traces
     | where timestamp > ago(since)
-    | where tostring(message) has recordId or tostring(outerMessage) has recordId
+    | where tostring(customDimensions.Category) == "Host.Function.Console"
+        or tostring(customDimensions.Category) endswith ".User"
+    | extend proc = strcat(cloud_RoleInstance, "/", tostring(customDimensions.ProcessId)),
+        line = trim_start(@"\s+", message)
+    | extend isPart = line == "}" or line matches regex @"^[A-Za-z_$][\w$]*: ['""`]"
+    | order by proc asc, timestamp asc, itemId asc
+    | extend callNo = row_cumsum(iff(isPart and proc == prev(proc), 0, 1))
+    | summarize callTime = min(timestamp), severityLevel = max(severityLevel),
+        header = take_anyif(line, not(isPart)), parts = make_list(line), lineCount = count()
+        by proc, callNo
+    | extend text = strcat_array(parts, "\n"),
+        logMessage = extract(@"(?s)^(.*?)\s*(?:\{.*)?$", 1, header)
+    | extend inv = kv(text, "invocationId"),
+        record = coalesce(kv(text, "recordId"), kv(text, "dealId"), kv(text, "contactId"))
+    | extend record = iff(record matches regex @"^\d+$", record, "");
+let hostRows = traces
+    | where timestamp > ago(since)
+    | extend inv = tostring(customDimensions.InvocationId)
+    | where isnotempty(inv);
+let invs = calls
+    | where record == recordId or text has recordId
+    | where isnotempty(inv)
+    | distinct inv;
+let ops = hostRows
+    | where inv in (invs) and isnotempty(operation_Id)
     | distinct operation_Id;
-union traces, exceptions
-| where timestamp > ago(since)
-| where operation_Id in (ops)
-| extend line = coalesce(tostring(message), tostring(outerMessage)),
-    fn = tostring(customDimensions["Category"]),
-    hostInvocation = tostring(customDimensions["InvocationId"])
-| project timestamp, itemType, severityLevel, operation_Name, fn, line, problemId, hostInvocation, operation_Id
+let fnByInv = hostRows
+    | summarize fn = take_any(operation_Name), operation_Id = take_any(operation_Id) by inv;
+union
+    (calls
+        | where record == recordId or text has recordId or inv in (invs)
+        | join kind=leftouter fnByInv on inv
+        | project timestamp = callTime, itemType = "log", severityLevel, fn, line = logMessage,
+            detail = text, invocationId = inv, operation_Id),
+    (hostRows
+        | where inv in (invs)
+        | where tostring(customDimensions.Category) != "Host.Function.Console"
+        | project timestamp, itemType = "host", severityLevel, fn = operation_Name, line = message,
+            detail = "", invocationId = inv, operation_Id),
+    (exceptions
+        | where timestamp > ago(since)
+        | extend inv = tostring(customDimensions.InvocationId),
+            line = coalesce(tostring(column_ifexists("outerMessage", "")),
+                tostring(column_ifexists("problemId", "")), tostring(column_ifexists("type", "")))
+        | where inv in (invs) or operation_Id in (ops) or line has recordId
+        | project timestamp, itemType = "exception", severityLevel, fn = operation_Name, line,
+            detail = tostring(column_ifexists("problemId", "")), invocationId = inv, operation_Id)
+| extend pathProof = case(
+        line == "HubSpot webhook accepted.", "WEBHOOK ARRIVAL",
+        line == "Sync run summary.", strcat("run: source ", kv(detail, "source"), ", outcome ", kv(detail, "outcome"),
+            iff(isempty(kv(detail, "gate")), "", strcat(", gate ", kv(detail, "gate")))),
+        line endswith "queue message accepted.", "queued",
+        ""),
+    minutesAfterEdit = iff(isnull(editTime), real(null), round((timestamp - editTime) / 1m, 1))
 | order by timestamp asc

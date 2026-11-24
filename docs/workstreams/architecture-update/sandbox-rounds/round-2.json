@@ -1,0 +1,62 @@
+{
+  "round": 2,
+  "state": "Colorado",
+  "createdAt": "2026-11-23T16:46:00.906Z",
+  "ids": {
+    "guardianContact": "264888734624",
+    "bcbaContact": "264886480007",
+    "bt1Contact": "264886994789",
+    "bt2Contact": "264888562843",
+    "bcba": "67197219211",
+    "bcba2": "67194634674",
+    "bt1": "67197081363",
+    "bt2": "67196993621",
+    "deal": "68589573817"
+  },
+  "decoys": {
+    "deal": {
+      "done": [
+        "n2_what_type_of_insurance",
+        "ongoing_auth_period_start_date_f",
+        "ongoing_auth_period_end_date_f"
+      ],
+      "skipped": [
+        "total_hours_bt_12_work_schedule (read-only)"
+      ]
+    },
+    "bcba": {
+      "done": [
+        "credentialed_insurances__ny",
+        "co_insurance_labels",
+        "nj_insurance_labels",
+        "external_system_id",
+        "date_of_birth"
+      ],
+      "skipped": []
+    },
+    "bt1": {
+      "done": [
+        "bt_to_rbt_path",
+        "external_system_id"
+      ],
+      "skipped": []
+    }
+  },
+  "report": {
+    "deal": {
+      "differs": [],
+      "blankMirrors": [
+        "referral_source"
+      ]
+    },
+    "bcba": {
+      "differs": [],
+      "blankMirrors": [],
+      "emailVsContact": "matches the Contact"
+    },
+    "bt1": {
+      "differs": [],
+      "blankMirrors": []
+    }
+  }
+}

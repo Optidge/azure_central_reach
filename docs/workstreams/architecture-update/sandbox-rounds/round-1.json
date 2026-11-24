@@ -1,7 +1,7 @@
 {
   "round": 1,
   "state": "New York",
-  "createdAt": "2026-11-20T19:56:44.755Z",
+  "createdAt": "2026-11-23T16:30:39.174Z",
   "ids": {
     "guardianContact": "264366211603",
     "bcbaContact": "264352124460",
@@ -13,6 +13,10 @@
     "bt2": "67048799131",
     "deal": "68493177375"
   },
+  "workdayIds": {
+    "bt1": "4837593",
+    "bcba": "0498374"
+  },
   "decoys": {
     "deal": {
       "done": [
@@ -21,8 +25,7 @@
         "ongoing_auth_period_end_date_f"
       ],
       "skipped": [
-        "total_hours_bt_12_work_schedule (read-only)",
-        "total_hours_btrbt_12 (read-only)"
+        "total_hours_bt_12_work_schedule (read-only)"
       ]
     },
     "bcba": {
@@ -30,7 +33,8 @@
         "credentialed_insurances__ny",
         "co_insurance_labels",
         "nj_insurance_labels",
-        "external_system_id"
+        "external_system_id",
+        "date_of_birth"
       ],
       "skipped": []
     },
@@ -51,9 +55,8 @@
     },
     "bcba": {
       "differs": [],
-      "blankMirrors": [
-        "email"
-      ]
+      "blankMirrors": [],
+      "emailVsContact": "matches the Contact"
     },
     "bt1": {
       "differs": [],
