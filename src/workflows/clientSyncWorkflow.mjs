@@ -35,6 +35,7 @@ import {
   NO_IN_PROGRESS,
   NO_PENDING_CREATE,
   hashesForContact,
+  inProgressAsBefore,
   inProgressFields,
   inProgressHashesFor,
   isDigitsOnly,
@@ -73,7 +74,12 @@ import {
   unreadableDate,
   unreadableValue
 } from "../constants/syncReasons.mjs";
-import { caseSyncEligibility } from "../lib/syncEligibility.mjs";
+import {
+  SKIP_REASONS,
+  caseSyncEligibility,
+  gateProperties,
+  gatePropertyNames
+} from "../lib/syncEligibility.mjs";
 import {
   createSyncRunSummary,
   reasonCodeOfError
@@ -84,6 +90,7 @@ import {
   missingMappedProperties,
   missingProperties,
   omitFieldIdsFor,
+  readGradPermitSupervisors,
   readStaffNames,
   staffRecordIdsByRole
 } from "./clientSyncInputs.mjs";
@@ -106,6 +113,14 @@ const DECIDED_CODES = Object.freeze({
 // A run that is held on purpose and retried: another run holds the record, or a create was sent
 // a short time ago and CentralReach does not show it yet. The summary line says `waiting`.
 const WAITING_CODES = new Set(["SYNC_IN_PROGRESS", "CR_CREATE_PENDING"]);
+
+// Failures createOrUpdateClient throws before it sends any write: the client read before an
+// update (item B21) and the SSN guard, and its lookup by External System ID.
+const CLIENT_FAILED_BEFORE_WRITE = new Set([
+  "CR_CLIENT_READ_FAILED",
+  "CR_LOOKUP_UNKNOWN",
+  "CR_LOOKUP_UNREADABLE"
+]);
 
 function hashPayload(payload) {
   return hashMappedState(payload);
@@ -160,13 +175,14 @@ function buildCentralReachContactUrl(contactId) {
   return `https://members.centralreach.com/#contacts/details/?id=${id}`;
 }
 
-// dateOfBirthStatus and unreadableValueProperties are notes for the worker. They are not
+// dateOfBirthStatus, unreadableValueProperties and warnings are notes for the worker. They are not
 // CentralReach fields, so they are kept out of the request and out of the hash on every read of
 // the Case.
 function centralReachPayload(mapped) {
   const payload = { ...(mapped || {}) };
   delete payload.dateOfBirthStatus;
   delete payload.unreadableValueProperties;
+  delete payload.warnings;
   return payload;
 }
 
@@ -317,10 +333,14 @@ export async function runClientSyncWorkflow(
       throw busy;
     }
 
-    const recordGateProperty = config.sync?.recordGateProperty || null;
+    // Item 24: both path gates are read on every run, whichever path the record is on.
+    const gates = gateProperties(config.sync);
+    const gateNames = gatePropertyNames(gates);
     const propertyList = [...caseRequestProperties(), crContactIdProperty];
-    if (recordGateProperty && !propertyList.includes(recordGateProperty)) {
-      propertyList.push(recordGateProperty);
+    for (const name of gateNames) {
+      if (!propertyList.includes(name)) {
+        propertyList.push(name);
+      }
     }
     let deal;
     try {
@@ -349,7 +369,7 @@ export async function runClientSyncWorkflow(
     // is written to HubSpot (rule 5.1: the gate has not passed); the run is retried.
     const missingGateKeys = missingProperties(deal?.properties, [
       ...DECISION_PROPERTIES,
-      ...(recordGateProperty ? [recordGateProperty] : [])
+      ...gateNames
     ]);
     if (missingGateKeys.length > 0) {
       throw new HubSpotReadError(`deal:${missingGateKeys.join(",")}`);
@@ -358,8 +378,9 @@ export async function runClientSyncWorkflow(
     const eligibility = caseSyncEligibility({
       properties: deal?.properties,
       linked: Boolean(existingContactId),
+      hubspotHasCrId: hubspotHasContactId,
       includeTestRecords: Boolean(config.sync?.includeTestRecords),
-      recordGateProperty
+      gates
     });
     if (!eligibility.eligible) {
       // No Central Reach call and no HubSpot writeback for a skipped Case.
@@ -368,9 +389,14 @@ export async function runClientSyncWorkflow(
         recordId: normalizedDealId,
         source: source || null,
         reason: eligibility.reason,
+        gate: eligibility.gate || null,
         linked: Boolean(existingContactId),
         invocationId: context?.invocationId || null
       });
+      // Item 24: only a record_gate skip names its path; setGate throws for anything else.
+      if (eligibility.reason === SKIP_REASONS.RECORD_GATE) {
+        summary.setGate(eligibility.gate);
+      }
       summary.setOutcome("skipped", eligibility.reason);
       return {
         ok: true,
@@ -452,10 +478,8 @@ export async function runClientSyncWorkflow(
     // clean. This is the basis for a clear and for an omitted field's kept hash, not for
     // "did anything change".
     const savedAnyVersion = savedHashesForContact(prior, existingContactId);
-    const writtenBefore = writtenFieldHashes(
-      savedAnyVersion,
-      inProgressHashesFor(prior, existingContactId)
-    );
+    const unfinishedFieldHashes = inProgressHashesFor(prior, existingContactId);
+    const writtenBefore = writtenFieldHashes(savedAnyVersion, unfinishedFieldHashes);
 
     const mappedPayload = mapPayload({ deal, config });
     const validation = validatePayload(mappedPayload, { linked: Boolean(existingContactId) });
@@ -465,13 +489,26 @@ export async function runClientSyncWorkflow(
         DECIDED_CODES.VALIDATION_FAILED
       );
     }
-    // F-1 (rule 5.8): a filled phone, email, state or gender that cannot be converted to the
+    // F-1 (rule 5.8): a filled phone, email or gender that cannot be converted to the
     // CentralReach format. It is never sent as a blank: the run ends as `error`, nothing is sent.
+    // An unreadable state is not an error (item 5): it falls back and is logged below.
     if ((mappedPayload.unreadableValueProperties || []).length > 0) {
       return await decidedError(
         unreadableValue(mappedPayload.unreadableValueProperties.join(", ")),
         DECIDED_CODES.UNREADABLE_VALUE
       );
+    }
+    // Item 5: an unreadable stateregion fell back to location (or to no state). Code and property
+    // only, never the value (BR21). Logged once per run, not again for the confirm read.
+    for (const warning of mappedPayload.warnings || []) {
+      logger("warn", "Client payload mapper warning.", {
+        workflow: "clientSync",
+        recordId: normalizedDealId,
+        source: source || null,
+        code: warning.code,
+        property: warning.property,
+        invocationId: context?.invocationId || null
+      });
     }
     const payload = centralReachPayload(mappedPayload);
 
@@ -525,6 +562,15 @@ export async function runClientSyncWorkflow(
           btRbtObjectTypeId: btType,
           readBatch
         });
+        // Item 9 rule 3: the Grad Permit holders' supervisors. No call for a Case with no holder,
+        // nor for a mixed Case (a holder and a non-holder; rule 7 leaves 131308 and 136052 out).
+        staffNames = await readGradPermitSupervisors({
+          staffNames,
+          bcbaObjectTypeId: bcbaType,
+          supervisorTypeId: portal.gradPermitSupervisorAssociationTypeId,
+          loadAssociations,
+          readBatch
+        });
       } catch (error) {
         throw asReadFailure(error, "staffNames") || error;
       }
@@ -533,19 +579,26 @@ export async function runClientSyncWorkflow(
     // Contract P.5 (c) in src/mappings/client/buildClientMetadata.mjs: the CentralReach metadata
     // fields whose input was not read in this run. `dependencies.omitFieldIds` is a seam for
     // tests; the worker adds the staff fields when the staff were not read. Both mappings of the
-    // run (SP-R7) get exactly the same inputs: if they differed, the two hashes would differ and
-    // the run would end as "changed during the run" after the CentralReach writes.
-    const omitFieldIds = omitFieldIdsFor({ base: dependencies.omitFieldIds, staffNames });
-    const metadataInputs = { portalId: portal.portalId, staffNames, omitFieldIds };
-    const metadata = mapMetadata({ deal, ...metadataInputs });
-    // Row 4.14 (C-R6): a staff record with no name. Role and code only, never a name.
-    for (const warning of metadata.warnings || []) {
+    // run (SP-R7) get the same staffNames and the same base list. The omit list also depends on
+    // the Case (a blank typed supplier, a Care Coordinator that is not ready), so the confirm
+    // mapping builds its own from the confirm read: a change there between the reads makes the
+    // two hashes differ and the run ends as "changed during the run".
+    const omitFieldIdsOf = (caseRead) =>
+      omitFieldIdsFor({ base: dependencies.omitFieldIds, staffNames, deal: caseRead });
+    const omitFieldIds = omitFieldIdsOf(deal);
+    const metadataInputs = { portalId: portal.portalId, staffNames };
+    const metadata = mapMetadata({ deal, ...metadataInputs, omitFieldIds });
+    // Row 4.14 (C-R6): a staff record with no name; C10 (item 6): a Care Coordinator that is not
+    // ready. Code, role, property and coordinator status only (each when set), never a name.
+    for (const { code, role, property, status } of metadata.warnings || []) {
       logger("warn", "Client metadata mapper warning.", {
         workflow: "clientSync",
         recordId: normalizedDealId,
         source: source || null,
-        code: warning.code,
-        role: warning.role,
+        code,
+        ...(role && { role }),
+        ...(property && { property }),
+        ...(status && { status }),
         invocationId: context?.invocationId || null
       });
     }
@@ -573,11 +626,13 @@ export async function runClientSyncWorkflow(
       includeRelationships
     });
     const payloadHash = digestPayload(comparable);
-    // Row 3.18: an omitted field keeps its saved hash and is not a changed field.
+    // Row 3.18: an omitted field keeps its saved hash and is not a changed field. After a run
+    // that did not finish clean it may keep the unsettled hash instead (keepOmittedFieldHashes).
     const nextFieldHashes = keepOmittedFieldHashes(
       fieldHashes(comparable),
       savedAnyVersion,
-      omitFieldIds
+      omitFieldIds,
+      unfinishedFieldHashes
     );
     const changedFields = changedNamesFromHashes(savedFieldHashes, nextFieldHashes);
     summary.setChangedFieldNames(changedFields);
@@ -699,15 +754,26 @@ export async function runClientSyncWorkflow(
       });
     } catch (error) {
       // Nothing is pending when no create can have reached CentralReach: it said no (a permanent
-      // failure), or the lookup inside createOrUpdateClient failed before any create was sent
-      // (CR_LOOKUP_UNKNOWN, CR_LOOKUP_UNREADABLE). An unknown create outcome and an error with
-      // no code keep the marker.
+      // failure; this includes CR_CLIENT_READ_FAILED, item B21: the lookup found the client and
+      // its read before the update could not be used), or the lookup inside createOrUpdateClient
+      // failed before any create was sent (CR_LOOKUP_UNKNOWN, CR_LOOKUP_UNREADABLE). An unknown
+      // create outcome and an error with no code keep the marker.
       const createNotSent =
         classifyFailure(error) === FAILURE_KINDS.PERMANENT ||
         error?.code === "CR_LOOKUP_UNKNOWN" ||
         error?.code === "CR_LOOKUP_UNREADABLE";
-      if (creating && createNotSent) {
-        await saveLinkFields(NO_PENDING_CREATE);
+      // BR16 (review finding 7): the client read and its checks (item B21, the SSN guard) and the
+      // lookup inside createOrUpdateClient fail before any CentralReach write, but after the
+      // in-progress save above. Nothing reached CentralReach, so the clean flag and the
+      // in-progress hashes go back to what this run found; otherwise the next run would count
+      // this run's HubSpot values as written (rule 5.8) and could clear a value never written.
+      const nothingWritten = CLIENT_FAILED_BEFORE_WRITE.has(error?.code);
+      const changes = {
+        ...(nothingWritten ? inProgressAsBefore(prior) : {}),
+        ...(creating && createNotSent ? NO_PENDING_CREATE : {})
+      };
+      if (Object.keys(changes).length > 0) {
+        await saveLinkFields(changes);
       }
       throw error;
     }
@@ -833,7 +899,11 @@ export async function runClientSyncWorkflow(
       throw error;
     }
     const confirmedPayload = centralReachPayload(mapPayload({ deal: confirmedDeal, config }));
-    const confirmedMetadata = mapMetadata({ deal: confirmedDeal, ...metadataInputs });
+    const confirmedMetadata = mapMetadata({
+      deal: confirmedDeal,
+      ...metadataInputs,
+      omitFieldIds: omitFieldIdsOf(confirmedDeal)
+    });
     const confirmedHash = digestPayload(
       buildComparableState({
         core: confirmedPayload,

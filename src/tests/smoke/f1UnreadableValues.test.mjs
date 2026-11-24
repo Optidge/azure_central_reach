@@ -215,21 +215,26 @@ test("[C4][old] F-1 gender reader: male and female; m and f only where the side 
 
 // --- the mappers ---
 
-test("[C8][4.1] F-1 Case phone and stateregion: accepted formats convert, a filled bad value is named and sent as nothing, blank is null", () => {
+// Item 5 (Zeke: "confirmed"): an unreadable stateregion is no longer an unreadable value. It falls
+// back to location with a warning that names the property, never the value. Phone is unchanged.
+test("[C8][4.1] F-1 Case phone and stateregion: accepted formats convert, a filled bad phone is named and sent as nothing, a bad stateregion falls back to location with a warning, blank is null", () => {
   const good = mapCase({ phone: "1 (212) 555-0101", stateregion: "N.Y." });
   assert.equal(good.PhoneCell, "2125550101");
   assert.equal(good.StateProvince, "NY");
   assert.deepEqual(good.unreadableValueProperties, []);
+  assert.deepEqual(good.warnings, []);
 
-  const bad = mapCase({ phone: BAD.phone, stateregion: "XX" });
+  const bad = mapCase({ phone: BAD.phone, stateregion: "XX", location: "New York" });
   assert.equal(bad.PhoneCell, null);
-  assert.equal(bad.StateProvince, null);
-  assert.deepEqual(bad.unreadableValueProperties, ["phone", "stateregion"]);
+  assert.equal(bad.StateProvince, "NY");
+  assert.deepEqual(bad.unreadableValueProperties, ["phone"]);
+  assert.deepEqual(bad.warnings, [{ code: "state_unreadable_used_location", property: "stateregion" }]);
 
   const blank = mapCase({ phone: "", stateregion: null });
   assert.equal(blank.PhoneCell, null);
   assert.equal(blank.StateProvince, null);
   assert.deepEqual(blank.unreadableValueProperties, []);
+  assert.deepEqual(blank.warnings, []);
 });
 
 test("[C4][old] F-1 Case phi_gender: m and f were never accepted on the Case and are unreadable", () => {
@@ -325,14 +330,14 @@ test("[T9][6.4] F-1 BT/RBT personal email is held (2026-11-23): `personal_email`
 
 // --- the Case worker ---
 
+// Item 5: stateregion left this list. An unreadable state falls back to location (tests below).
 const CASE_BAD = [
   ["C8", "phone", BAD.phone],
   ["C6", "email", BAD.email],
-  ["C8", "stateregion", BAD.state],
   ["C4", "phi_gender", BAD.gender]
 ];
 
-test("[C8][4.1] F-1 Case create: a filled phone, email, state or gender that cannot be converted ends as error with no CentralReach write", async () => {
+test("[C8][4.1] F-1 Case create: a filled phone, email or gender that cannot be converted ends as error with no CentralReach write", async () => {
   for (const [, property, value] of CASE_BAD) {
     const { container, cr } = setup();
     const record = stage3Case({ [property]: value });
@@ -341,7 +346,7 @@ test("[C8][4.1] F-1 Case create: a filled phone, email, state or gender that can
   }
 });
 
-test("[C8][4.1] F-1 Case update: a filled phone, email, state or gender that cannot be converted ends as error, sends no blank, and leaves the link record as it was", async () => {
+test("[C8][4.1] F-1 Case update: a filled phone, email or gender that cannot be converted ends as error, sends no blank, and leaves the link record as it was", async () => {
   for (const [, property, value] of CASE_BAD) {
     const { container, cr } = setup();
     const record = linkedCase(cr, { phone: "2125550101", email: "g@example.com", stateregion: "NY" });
@@ -351,13 +356,60 @@ test("[C8][4.1] F-1 Case update: a filled phone, email, state or gender that can
   }
 });
 
+const PAYLOAD_WARNING = "Client payload mapper warning.";
+
+test("[C8][4.1] item 5: an unreadable stateregion on a create sends the location state, logs the warning code and property only, and the run is not an error", async () => {
+  const { cr } = setup();
+  const logs = [];
+  const record = stage3Case({ stateregion: BAD.state, location: "New York" });
+  assert.equal((await runCase(record, logs)).status, "success");
+  const [post] = cr.calls.filter((call) => call.name === "POST /contacts/client");
+  assert.equal(post.body.StateProvince, "NY");
+  assert.equal(Object.hasOwn(post.body, "warnings"), false);
+  const warnings = logs.filter((entry) => entry.message === PAYLOAD_WARNING);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].meta.code, "state_unreadable_used_location");
+  assert.equal(warnings[0].meta.property, "stateregion");
+  assert.equal(JSON.stringify([record.writes, logs]).includes(BAD.state), false, "the value is not logged");
+});
+
+test("[C8][4.1] item 5: an unreadable stateregion with no readable location creates with StateProvince null, warns state_unreadable_no_fallback, and the run is not an error", async () => {
+  const { cr } = setup();
+  const logs = [];
+  const record = stage3Case({ stateregion: BAD.state, location: "" });
+  assert.equal((await runCase(record, logs)).status, "success");
+  const [post] = cr.calls.filter((call) => call.name === "POST /contacts/client");
+  assert.equal(post.body.StateProvince, null);
+  const [warning] = logs.filter((entry) => entry.message === PAYLOAD_WARNING);
+  assert.equal(warning.meta.code, "state_unreadable_no_fallback");
+  assert.equal(warning.meta.property, "stateregion");
+  assert.equal(JSON.stringify([record.writes, logs]).includes(BAD.state), false, "the value is not logged");
+});
+
+test("[C8][4.1] item 5: an update to an unreadable stateregion falls back to location, logs the warning code and property only, and is not an error", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, { stateregion: "NY", location: "Colorado" });
+  assert.equal((await runCase(record)).status, "success", "first run syncs");
+  record.properties.stateregion = BAD.state;
+  const logs = [];
+  assert.equal((await runCase(record, logs)).status, "success");
+  const puts = cr.calls.filter((call) => call.name === "PUT /contacts/client/{id}");
+  assert.equal(puts.at(-1).body.StateProvince, "CO");
+  const warnings = logs.filter((entry) => entry.message === PAYLOAD_WARNING);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].meta.code, "state_unreadable_used_location");
+  assert.equal(warnings[0].meta.property, "stateregion");
+  assert.equal(JSON.stringify([record.writes, logs]).includes(BAD.state), false, "the value is not logged");
+});
+
 test("[C8][4.1] F-1 Case: blank phone, email, state and gender still sync as before", async () => {
   const { cr } = setup();
   const record = linkedCase(cr, { phone: "", email: "", stateregion: "", phi_gender: "" });
   assert.equal((await runCase(record)).status, "success");
   const [put] = cr.calls.filter((call) => call.name === "PUT /contacts/client/{id}");
-  assert.equal(put.body.PhoneCell, null);
-  assert.equal(put.body.StateProvince, null);
+  // Item B21: a blank core field sends back what the client read holds; this client holds "".
+  assert.equal(put.body.PhoneCell, "");
+  assert.equal(put.body.StateProvince, "");
   assert.equal(Object.hasOwn(put.body, "unreadableValueProperties"), false);
 });
 

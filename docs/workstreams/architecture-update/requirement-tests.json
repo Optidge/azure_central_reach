@@ -2,6 +2,15 @@
   "gate skips a Case with test_record = true": ["BR7"],
   "gate skips test_record = true unless test records are included": ["BR7"],
 
+  "gate skips a linked Case in Cleanup stage ${stageId}": ["BR6"],
+
+  "client read failure does not write a blank baseline": ["BR16"],
+  "Hybrid minimum changes: a failed HubSpot read does not erase the stored CR id or hashes": ["BR16"],
+  "[GBR] a failed employee read sends nothing to CentralReach": ["BR16"],
+
+  "same display name with a different association id changes state": ["BR17"],
+  "intentional blank is distinct from a later value and repeated blanks hash the same": ["BR17"],
+
   "[G17] linked ${employeeType} when CentralReach holds ${row.name}": ["BR8"],
   "[GBR] the employee ID mismatch error keeps the saved field hashes": ["BR8"],
   "[G17] a linked ${employeeType} with no External System ID in CentralReach and a blank workday_id sends no ID": ["BR8"],
@@ -40,7 +49,7 @@
 
   "[GER-REQ] a blank employee date of birth on create sends the placeholder": ["B5"],
   "[GER-REQ] a blank employee date of birth on update sends back the date CentralReach holds": ["B5"],
-  "[GER-REQ] a blank employee date of birth on update is left out when the CentralReach read does not hold the key": ["B5"],
+  "[GER-REQ] a blank employee date of birth on update sends no update when the CentralReach read does not hold the key": ["B5"],
   "[GER-REQ] a missing employee date_of_birth property is an error": ["B5"],
   "[GER-REQ] an unreadable employee date of birth is an error and is not sent as blank": ["B5"],
   "a create with a blank date of birth sends 2000-01-01 and reports it": ["B5"],

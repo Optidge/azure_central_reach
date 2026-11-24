@@ -17,6 +17,7 @@
 //   summary.setLabels(labelResult);            // the label sender's labelResult (contract P.5 (e))
 //   summary.noteWriteback("success");          // after a HubSpot write that succeeded
 //   summary.setQueued({ bcba: 2, btRbt: 1 });  // the fan-out only: messages queued per object type
+//   summary.setGate("create");                 // a record_gate skip only: "create" | "update"
 //   summary.setOutcome("success", null);       // "success" | "noop" | "waiting" | "error" | "skipped"
 //   summary.log(logger);                       // logger defaults to safeLog; logs the first call only
 //
@@ -41,6 +42,8 @@
 //   writeback        { written, status }: whether HubSpot was written in this run, and the last
 //                    last_sync_status written (null when none)
 //   queuedMessages   only when setQueued was called: { objectType: count }
+//   gate             only when setGate was called (a record_gate skip, item 24): create | update,
+//                    the path whose gate property was not true. Never the property's value.
 // Only names, IDs, codes and counts go in the line, never a field value, a person's name, an
 // email or a phone number. The helper accepts nothing else: a reason code that is not a code is
 // replaced, and a call or a label entry is rebuilt from known keys.
@@ -50,6 +53,7 @@ export const SYNC_RUN_SUMMARY_MESSAGE = "Sync run summary.";
 
 export const RUN_OUTCOMES = Object.freeze(["success", "noop", "waiting", "error", "skipped"]);
 export const RUN_OPERATIONS = Object.freeze(["create", "update", "none"]);
+export const RUN_GATES = Object.freeze(["create", "update"]);
 export const CR_CALL_KINDS = Object.freeze([
   "lookup",
   "create",
@@ -133,7 +137,8 @@ export function createSyncRunSummary({
     crCalls: [],
     labels: null,
     writeback: { written: false, status: null },
-    queued: null
+    queued: null,
+    gate: null
   };
   let logged = false;
   let operationExplicit = false;
@@ -155,7 +160,8 @@ export function createSyncRunSummary({
     crCalls: run.crCalls.map((call) => ({ ...call })),
     labels: run.labels ? { ...run.labels } : null,
     writeback: { ...run.writeback },
-    ...(run.queued ? { queuedMessages: { ...run.queued } } : {})
+    ...(run.queued ? { queuedMessages: { ...run.queued } } : {}),
+    ...(run.gate ? { gate: run.gate } : {})
   });
 
   return {
@@ -209,6 +215,10 @@ export function createSyncRunSummary({
         counts[objectType] = Number.isInteger(count) ? count : 0;
       }
       run.queued = counts;
+    },
+    // The path of a record_gate skip (item 24). Throws for any other value, as setOperation.
+    setGate(gate) {
+      run.gate = oneOf(RUN_GATES, gate, "gate");
     },
     hasOutcome() {
       return run.outcome !== null;

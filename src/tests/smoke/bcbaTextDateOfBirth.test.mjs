@@ -1,12 +1,14 @@
-// B5, row 1.4 (rule 5.7): the BCBA date of birth is read from the single-line text property `dob`
-// (decision 48, 2026-11-21; production holds it as M/D/YYYY, the BCBA `date_of_birth` is blank on
-// every record). `date_of_birth` is no longer requested for a BCBA (pending United Care, O-10). The
-// code converts the typed text to the date CentralReach gets in `dateOfBirth` (YYYY-MM-DD). Owner: "Make the code transform the format into a date format
+// B5, row 1.4 (rule 5.7): the BCBA date of birth is read from the text property `date_of_birth`
+// (item 1, O-10; Zeke 2026-11-23: "use date_of_birth, fill with the place holder birthday"; it
+// replaces the `dob` of decision 48, which is no longer requested or read). Production holds it as
+// plain text (EMP §1). The code converts the typed text to the date CentralReach gets in
+// `dateOfBirth` (YYYY-MM-DD). Owner: "Make the code transform the format into a date format
 // that's correct for central reach." US people: a date with the year last is month/day/year.
-// Unreadable text ends the run as `error` with no CentralReach call; blank stays blank.
-// The Case dates and the BT/RBT `date_of_birth` are HubSpot date pickers and stay on the strict
-// `readDate`. Only HubSpot is faked; the mapper, the worker and centralReachClient.mjs (fake HTTP
-// adapter) are real. No live call.
+// Unreadable text ends the run as `error` with no CentralReach call; blank stays blank, and a
+// create sends the placeholder 2000-01-01. The BT/RBT `date_of_birth` is text too and uses the same
+// reader (item 16, T2). The Case dates are HubSpot date pickers and stay on the strict `readDate`.
+// Only HubSpot is faked; the mapper, the worker and centralReachClient.mjs (fake HTTP adapter) are
+// real. No live call.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readDate, readTextDate } from "../../lib/dates.mjs";
@@ -20,7 +22,6 @@ import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import { employeeWorkflowDeps, workflowConfig } from "./stage2Fakes.mjs";
 import {
-  STORED_EMPLOYEE,
   linkedBcba,
   seedStoredEmployee,
   setup,
@@ -82,7 +83,7 @@ function bcbaPayload(dateOfBirth) {
     config: workflowConfig(),
     record: {
       id: "HS2",
-      properties: { hs_object_id: "HS2", first_name: "Pat", last_name: "Morgan", dob: dateOfBirth }
+      properties: { hs_object_id: "HS2", first_name: "Pat", last_name: "Morgan", date_of_birth: dateOfBirth }
     }
   });
 }
@@ -122,9 +123,9 @@ test("[B5][1.4] the BCBA mapper sends every accepted form to CentralReach as dat
 });
 
 for (const text of ["01/05/1990", "Jan 5, 1990", "631497600000"]) {
-  test(`[B5][1.4] a linked BCBA with dob "${text}" updates CentralReach with 1990-01-05`, async () => {
+  test(`[B5][1.4] a linked BCBA with date_of_birth "${text}" updates CentralReach with 1990-01-05`, async () => {
     const { cr } = setup();
-    const record = linkedBcba(cr, { dob: text });
+    const record = linkedBcba(cr, { date_of_birth: text });
     const result = await runBcba(record);
     assert.equal(result.status, "success");
     const put = cr.calls.filter((call) => call.name === EMPLOYEE_PUT).at(-1);
@@ -133,12 +134,12 @@ for (const text of ["01/05/1990", "Jan 5, 1990", "631497600000"]) {
 }
 
 for (const [name, text] of REJECTED.filter(([name]) => !name.includes("future") && name !== "tomorrow")) {
-  test(`[B5][1.4] a linked BCBA with ${name} as dob is error, with no CentralReach call`, async () => {
+  test(`[B5][1.4] a linked BCBA with ${name} as date_of_birth is error, with no CentralReach call`, async () => {
     const { cr } = setup();
-    const record = linkedBcba(cr, { dob: text });
+    const record = linkedBcba(cr, { date_of_birth: text });
     const result = await runBcba(record);
     assert.equal(result.status, "error");
-    assert.equal(record.properties.last_sync_error.includes("dob"), true);
+    assert.equal(record.properties.last_sync_error.includes("date_of_birth"), true);
     assert.equal(record.properties.last_sync_error.includes(text), false);
     assert.deepEqual(cr.calls, []);
   });
@@ -146,7 +147,7 @@ for (const [name, text] of REJECTED.filter(([name]) => !name.includes("future") 
 
 test("[B5][1.4] a linked BCBA with a date of birth in the future is error, with no CentralReach call", async () => {
   const { cr } = setup();
-  const record = linkedBcba(cr, { dob: "01/05/2999" });
+  const record = linkedBcba(cr, { date_of_birth: "01/05/2999" });
   const result = await runBcba(record);
   assert.equal(result.status, "error");
   assert.deepEqual(cr.calls, []);
@@ -158,28 +159,28 @@ test("[B5][1.4] a blank BCBA date of birth is still blank", () => {
   assert.equal(mapped.employeePayload.dateOfBirth ?? null, null);
 });
 
-test("[B5][1.4] the BCBA date of birth property is dob, one constant; date_of_birth is not requested for a BCBA", () => {
-  assert.equal(BCBA_DATE_OF_BIRTH_PROPERTY, "dob");
+test("[B5][1.4] the BCBA date of birth property is date_of_birth, one constant; dob is not requested for a BCBA", () => {
+  assert.equal(BCBA_DATE_OF_BIRTH_PROPERTY, "date_of_birth");
   const bcba = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BCBA);
-  assert.equal(bcba.includes("dob"), true);
-  assert.equal(bcba.includes("date_of_birth"), false);
+  assert.equal(bcba.includes("date_of_birth"), true);
+  assert.equal(bcba.includes("dob"), false);
   // BT/RBT is unchanged.
   const bt = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BT_RBT);
   assert.equal(bt.includes("date_of_birth"), true);
   assert.equal(bt.includes("dob"), false);
 });
 
-test("[B5][1.4] a BCBA date_of_birth value is not read: only dob supplies the date of birth", () => {
+test("[B5][1.4] a BCBA dob value is not read: only date_of_birth supplies the date of birth", () => {
   const mapped = buildEmployeePayload({
     employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
     config: workflowConfig(),
-    record: stage3Bcba({ dob: "", date_of_birth: "1990-01-05" }).read()
+    record: stage3Bcba({ date_of_birth: "", dob: "1990-01-05" }).read()
   });
   assert.equal(mapped.dateOfBirthStatus, "blank");
   assert.equal(mapped.employeePayload.dateOfBirth ?? null, null);
 });
 
-test("[B5][1.4] dob typed as M/D/YYYY, as production holds it, converts to YYYY-MM-DD", () => {
+test("[B5][1.4] date_of_birth typed as M/D/YYYY converts to YYYY-MM-DD", () => {
   for (const [text, date] of [
     ["3/2/1985", "1985-03-02"],
     ["12/31/1979", "1979-12-31"],
@@ -191,9 +192,9 @@ test("[B5][1.4] dob typed as M/D/YYYY, as production holds it, converts to YYYY-
   }
 });
 
-test("[B5][1.4] a new BCBA with a blank dob is created with the placeholder date of birth 2000-01-01 (decision 23)", async () => {
+test("[B5][1.4] a new BCBA with a blank date_of_birth is created with the placeholder date of birth 2000-01-01 (decision 23)", async () => {
   const { cr } = setup();
-  const record = stage3Bcba({ employee_id: "", email: "pat@uca.example", dob: "" });
+  const record = stage3Bcba({ employee_id: "", email: "pat@uca.example", date_of_birth: "" });
   const result = await runBcba(record);
   assert.equal(result.status, "success");
   const post = cr.calls.filter((call) => call.name === EMPLOYEE_POST).at(-1);
@@ -201,17 +202,47 @@ test("[B5][1.4] a new BCBA with a blank dob is created with the placeholder date
   assert.equal(post.body.dateOfBirth, "2000-01-01");
 });
 
-test("[B5][1.4] a linked BCBA with a blank dob sends back the date CentralReach holds, never the placeholder", async () => {
+test("[B5][1.4] a new BCBA with dob filled and date_of_birth blank is created with the placeholder 2000-01-01: dob is never read", async () => {
   const { cr } = setup();
-  seedStoredEmployee(cr, "5002", "WD2");
-  const record = stage3Bcba({ dob: "" });
+  const record = stage3Bcba({
+    employee_id: "",
+    email: "pat@uca.example",
+    date_of_birth: "",
+    dob: "7/23/1984"
+  });
+  const requested = [];
+  const deps = employeeWorkflowDeps({ record });
+  const result = await runEmployeeSyncWorkflow(
+    { recordId: "HS2", employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA },
+    {
+      ...deps,
+      getBcbaRecordById: async (id, type, names) => {
+        requested.push(...names);
+        return deps.getBcbaRecordById(id, type, names);
+      }
+    }
+  );
+  assert.equal(result.status, "success");
+  assert.equal(requested.includes("dob"), false);
+  assert.equal(requested.includes("date_of_birth"), true);
+  const post = cr.calls.filter((call) => call.name === EMPLOYEE_POST).at(-1);
+  assert.ok(post, "the create was sent");
+  assert.equal(post.body.dateOfBirth, "2000-01-01");
+});
+
+test("[B5][1.4] a linked BCBA with a blank date_of_birth sends back the date CentralReach holds, never the placeholder", async () => {
+  const { cr } = setup();
+  seedStoredEmployee(cr, "5002", "1000002");
+  const record = stage3Bcba({ date_of_birth: "" });
   const result = await runBcba(record);
   assert.equal(result.status, "success");
   const put = cr.calls.filter((call) => call.name === EMPLOYEE_PUT).at(-1);
-  assert.equal(put.body.dateOfBirth, STORED_EMPLOYEE.dateOfBirth);
+  // Item 1, option (a): rebuilt as YYYY-MM-DDT00:00:00.000Z from the first 10 characters.
+  assert.equal(put.body.dateOfBirth, "1988-04-09T00:00:00.000Z");
+  assert.equal(JSON.stringify(put.body).includes("2000-01-01"), false);
 });
 
-test("[B5][1.4] the date pickers keep the strict reader: Case and BT/RBT dates are unchanged", () => {
+test("[B5][T2][1.4] the Case date pickers keep the strict reader; the BT/RBT date_of_birth is read as text (item 16)", () => {
   for (const text of ["01/05/1990", "Jan 5, 1990", "631497600000"]) {
     assert.equal(readDate(text), "unreadable", text);
     const bt = buildEmployeePayload({
@@ -219,7 +250,8 @@ test("[B5][1.4] the date pickers keep the strict reader: Case and BT/RBT dates a
       config: workflowConfig(),
       record: stage3Bt({ date_of_birth: text }).read()
     });
-    assert.equal(bt.dateOfBirthStatus, "unreadable", text);
+    assert.equal(bt.dateOfBirthStatus, "date", text);
+    assert.equal(bt.employeePayload.dateOfBirth, "1990-01-05", text);
     const client = buildClientPayload({ deal: { id: "deal-1", properties: { phi_date_of_birth: text } } });
     assert.equal(client.dateOfBirthStatus, "unreadable", text);
   }

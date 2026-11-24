@@ -44,7 +44,6 @@ const CASE_MAPPED = [
   "work_schedule_details",
   "btrbt_work_schedule_2_details",
   "finalized_client_service_hours_post_assessment",
-  "client_service_hours_total",
   "hours_bt_work_schedule_1",
   "bt_rbt_2_work_schedule",
   "initial_auth_tracks",
@@ -52,11 +51,11 @@ const CASE_MAPPED = [
   "ia_hours_from_the_ia",
   "ongoing_auth_period_start_date",
   "ongoing_autrh_period_end_date",
-  // C24 (4.13), C25 (4.22)
-  "full_home_address",
+  // C24 (4.13; item 5: the parts, not full_home_address), C25 (4.22)
   "service__street_address",
   "service__apt",
   "service__city",
+  "service__stateregion_2",
   "service__postal_code",
   "service_address__other",
   // C26 (4.9), C27 (4.2), C28 (4.3)
@@ -87,8 +86,12 @@ const CASE_MAPPED = [
   "policy_holder_name",
   "phi__policy_holder_dob",
   "referral_source",
-  // C10 (4.16)
-  "care_coordinator_name"
+  // C36 (item 2): the "Referral - Other" text
+  "referral_other",
+  // C10 (4.16; item 6: the coordinator workflow's fields)
+  "care_coordinator_first_name",
+  "care_coordinator_last_name",
+  "coordinator_export_status"
 ];
 
 test("[BR5][4.17] the Case mapped list holds exactly the HubSpot sources of the built Case requirements", () => {
@@ -101,10 +104,10 @@ test("[C38][4.17] insurance_id_3 and insurance_id_4 are no longer requested", ()
   assert.equal(requested.includes("insurance_id_4"), false);
 });
 
-test("[C8][4.17] the misspelled alternate-address property and location_central_reach are no longer requested", () => {
+test("[C8][4.17] the alternate-address questionnaire property and location_central_reach are not requested", () => {
   const requested = caseRequestProperties();
   assert.equal(
-    requested.includes("if_services_will_be_in_more_than_one_location__list_the_other_addres"),
+    requested.includes("if_services_will_be_in_more_than_one_location__list_the_other_address"),
     false
   );
   assert.equal(requested.includes("location_central_reach"), false);
@@ -169,11 +172,23 @@ test("[BR18][4.14] the five staffing-name signals are change signals only: curre
   }
 });
 
-test("[C10][4.16] care_coordinator_name is a mapped property; hubspot_owner_id and care_coordinator_email are not requested (decision 39)", () => {
+test("[C10][4.16] the Care Coordinator's three workflow fields are mapped; care_coordinator_name, hubspot_owner_id, care_coordinator_email and coordinator_export_source_snapshot are not requested (item 6)", () => {
   const requested = caseRequestProperties();
-  assert.equal(CASE_PROPERTIES.mapped.includes("care_coordinator_name"), true);
-  assert.equal(requested.includes("hubspot_owner_id"), false);
-  assert.equal(requested.includes("care_coordinator_email"), false);
+  for (const property of [
+    "care_coordinator_first_name",
+    "care_coordinator_last_name",
+    "coordinator_export_status"
+  ]) {
+    assert.equal(CASE_PROPERTIES.mapped.includes(property), true, property);
+  }
+  for (const property of [
+    "care_coordinator_name",
+    "hubspot_owner_id",
+    "care_coordinator_email",
+    "coordinator_export_source_snapshot"
+  ]) {
+    assert.equal(requested.includes(property), false, property);
+  }
 });
 
 test("[BR13][4.17] the Case mustTrigger and system lists are unchanged, and no property sits in two lists", () => {
@@ -252,8 +267,8 @@ const BCBA_MAPPED = [
   "workday_id",
   "first_name",
   "last_name",
-  // B5 (decision 48): dob, pending United Care's confirmation (O-10)
-  "dob",
+  // B5 (item 1, O-10): date_of_birth; dob is not read
+  "date_of_birth",
   // B6 (5.1)
   "gender_new",
   // B7 (5.2)
@@ -298,12 +313,12 @@ test("[B13][5.3] credentialed_insurances__ny, work_email and bcba_name are no lo
   }
 });
 
-test("[B4][1.3] ucaba_email_address and date_of_birth are no longer requested for a BCBA (decisions 49 and 48)", () => {
+test("[B4][1.3] ucaba_email_address and dob are no longer requested for a BCBA (decision 49, item 1)", () => {
   const requested = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BCBA);
-  for (const property of ["ucaba_email_address", "date_of_birth"]) {
+  for (const property of ["ucaba_email_address", "dob"]) {
     assert.equal(requested.includes(property), false, `${property} is not requested`);
   }
-  assert.equal(requested.includes("dob"), true);
+  assert.equal(requested.includes("date_of_birth"), true);
   assert.equal(requested.includes("email"), true);
 });
 

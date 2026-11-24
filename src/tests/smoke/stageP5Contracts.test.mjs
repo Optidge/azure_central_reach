@@ -86,7 +86,14 @@ const STAFF_NAMES = {
   initialAssessmentBcba: [{ recordId: "11", firstName: "Kim", lastName: "Lowe" }],
   reEvaluationBcba: [],
   primaryBt1: [{ recordId: "21", firstName: "Sam", lastName: "Poe" }],
-  primaryBt2: []
+  primaryBt2: [],
+  // Items 9 and 10: the roles the worker now also reads, nobody in them.
+  outgoingBt1: [],
+  outgoingBt2: [],
+  supervisingBcba: [],
+  subBcba: [],
+  outgoingSubBcba: [],
+  outgoingSupervisingBcba: []
 };
 
 // --- (a) every mapper returns requiredLabelIds and managedLabelIds ---
@@ -116,9 +123,23 @@ test("[P.5a] the Case metadata mapper returns requiredLabelIds and the filled ma
 // --- (b) and (c) inputs of the Case metadata mapper ---
 
 test("[P.5b] the Case metadata mapper builds the staff fields from staffNames, and maps the rest as without them", () => {
-  const { INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME } =
-    CENTRAL_REACH_CLIENT_METADATA_FIELDS;
-  const inputFieldIds = [INITIAL_ASSESSMENT_BCBA, REASSESSMENT_BCBA, BT_1_NAME, BT_2_NAME];
+  const {
+    INITIAL_ASSESSMENT_BCBA,
+    REASSESSMENT_BCBA,
+    BT_1_NAME,
+    BT_2_NAME,
+    SUPERVISING_BCBA,
+    GRAD_PERMIT_HOLDER
+  } = CENTRAL_REACH_CLIENT_METADATA_FIELDS;
+  // Items 9 and 10: Supervising BCBA and Grad Permit Holder are built from staffNames too.
+  const inputFieldIds = [
+    INITIAL_ASSESSMENT_BCBA,
+    REASSESSMENT_BCBA,
+    BT_1_NAME,
+    BT_2_NAME,
+    SUPERVISING_BCBA,
+    GRAD_PERMIT_HOLDER
+  ];
   const before = buildClientMetadata({ deal: CASE_DEAL, portalId: SANDBOX_PORTAL });
   const withInputs = buildClientMetadata({
     deal: CASE_DEAL,
@@ -127,7 +148,7 @@ test("[P.5b] the Case metadata mapper builds the staff fields from staffNames, a
     omitFieldIds: []
   });
 
-  // Not passed means not read (contract P.5 (c)): the four fields are left out, not blanked.
+  // Not passed means not read (contract P.5 (c)): the staff fields are left out, not blanked.
   for (const fieldId of inputFieldIds) {
     assert.equal(Object.prototype.hasOwnProperty.call(before.metadataValues, fieldId), false);
   }
@@ -165,8 +186,8 @@ test("[P.5c][BR16] a Case metadata field named in omitFieldIds is left out of th
   assert.equal(Object.prototype.hasOwnProperty.call(omitted, BT_1_NAME), false);
   assert.equal(Object.prototype.hasOwnProperty.call(omitted, BT_2_NAME), false);
   // Every other key is as before; a blank that was read stays a blank.
-  // allergies "Denial" is shown as No (row 4.9).
-  assert.equal(omitted[ALLERGIES], "No");
+  // allergies "Denial" is sent as "None" (row 4.9, package item 3).
+  assert.equal(omitted[ALLERGIES], "None");
   assert.equal(Object.keys(omitted).length, Object.keys(all).length - 2);
 });
 
@@ -180,12 +201,18 @@ test("[P.5c][BR16] employee: a field in the worker's omit list is not sent, alth
     {
       ...employeeWorkflowDeps({ record }),
       buildEmployeePayload: () => ({
-        employeePayload: { externalSystemId: "WD1", firstName: "Alex", lastName: "Rivera" },
+        employeePayload: { externalSystemId: "1000001", firstName: "Alex", lastName: "Rivera" },
         metadataValues: {},
         requiredLabelIds: [],
         warnings: [{ code: "missing_hubspot_portal_id" }]
       }),
-      getEmployeeByContactId: async () => ({ contact: { contactId: "7001", externalSystemId: "WD1" } }),
+      getEmployeeByContactId: async () => ({
+        contact: {
+          contactId: "7001",
+          externalSystemId: "1000001",
+          dateOfBirth: "1990-10-20T00:00:00.0000000Z"
+        }
+      }),
       createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "7001" }),
       updateClientMetadata: async (contactId, values, options) => {
         sent.push({ values, options });
@@ -224,7 +251,7 @@ test("[P.5d] getEmployeeContactForm takes the employee type and the work states"
 test("[P.5d] createOrUpdateEmployee takes workStates for the contact form and never sends it to CentralReach", async () => {
   const cr = fakeCentralReach();
   const result = await createOrUpdateEmployee({
-    payload: { externalSystemId: "WD9", firstName: "Alex", lastName: "Rivera", dateOfBirth: "1990-10-20" },
+    payload: { externalSystemId: "1000009", firstName: "Alex", lastName: "Rivera", dateOfBirth: "1990-10-20" },
     employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
     workStates: ["NY"],
     existingContactId: null,
@@ -249,7 +276,7 @@ test("[P.5d] the employee worker passes the mapper's workStates to the create ca
       ...employeeWorkflowDeps({ record }),
       buildEmployeePayload: () => ({
         employeePayload: {
-          externalSystemId: "WD1",
+          externalSystemId: "1000001",
           firstName: "Alex",
           lastName: "Rivera",
           primaryEmail: "alex@example.com",
@@ -379,7 +406,7 @@ test("[P.5e][BR19] real path, Case: a label staff added by hand is kept and the 
 
 test("[P.5e][BR19] real path, BT/RBT: a label staff added by hand is kept and the required labels are added", async () => {
   const { cr } = setup();
-  cr.employees.set("7001", { contactId: "7001", externalSystemId: "WD1", primaryEmail: "stored@example.com" });
+  cr.employees.set("7001", { contactId: "7001", externalSystemId: "1000001", primaryEmail: "stored@example.com" });
   cr.labels.set("7001", [777]);
   const record = btRecord({ employee_id: "7001", location: "New York", bt_rbt_type: "BT" });
   const result = await runEmployeeSyncWorkflow(

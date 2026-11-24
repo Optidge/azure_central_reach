@@ -33,9 +33,9 @@ export function readDate(value) {
   return parsed.toISOString().slice(0, 10);
 }
 
-// The BCBA date of birth (`dob` since decision 48; the BCBA `date_of_birth` too) is a single-line
+// The employee date of birth (`date_of_birth` on the BCBA and the BT/RBT, items 1 and 16) is a
 // text property in production, so people type it in many ways. `readDate` stays strict for the
-// HubSpot date pickers (Case dates, BT/RBT `date_of_birth`); this reader is for typed date text. Same answers: "YYYY-MM-DD",
+// HubSpot date pickers (Case dates); this reader is for typed date text. Same answers: "YYYY-MM-DD",
 // "blank" or "unreadable". Every form is parsed by hand (never `new Date(string)`), and the
 // calendar date is built in UTC, so no time zone can move it a day.
 // Accepted, after trimming:

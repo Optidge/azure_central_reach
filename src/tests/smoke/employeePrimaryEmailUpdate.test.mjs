@@ -24,7 +24,7 @@ const SIDES = [
     emailProperty: "email",
     changedFields: ["employee.primaryEmail"],
     contactId: "5001",
-    externalSystemId: "WD1",
+    externalSystemId: "1000001",
     record: (properties) => stage3Bt({ employee_id: "5001", ...properties }),
     run: (record, logs = []) =>
       runEmployeeSyncWorkflow(
@@ -38,7 +38,7 @@ const SIDES = [
     emailProperty: "email",
     changedFields: ["employee.primaryEmail"],
     contactId: "5002",
-    externalSystemId: "WD2",
+    externalSystemId: "1000002",
     record: (properties) => stage3Bcba({ email: "pat@uca.example", ...properties }),
     run: (record, logs = []) =>
       runEmployeeSyncWorkflow(
@@ -127,7 +127,7 @@ for (const side of SIDES) {
 
 test("[B4][1.10] the BCBA primaryEmail is the BCBA record's own email; ucaba_email_address is not read", async () => {
   const { cr } = setup();
-  seedStoredEmployee(cr, "5002", "WD2");
+  seedStoredEmployee(cr, "5002", "1000002");
   const record = stage3Bcba({ email: "own@uca.example", ucaba_email_address: "other@uca.example" });
   const run = SIDES.find((side) => side.id === "B4").run;
   assert.equal((await run(record)).status, "success");

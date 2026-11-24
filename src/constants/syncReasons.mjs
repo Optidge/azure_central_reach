@@ -52,6 +52,9 @@ export const ANOTHER_HUBSPOT_RECORD_LINKED =
 export const WORKDAY_ALREADY_IN_CENTRALREACH =
   "A CentralReach employee already holds this Workday ID.";
 
+// Item 15: names the property, never the value.
+export const WORKDAY_ID_NOT_SEVEN_DIGITS = "workday_id must be exactly 7 digits.";
+
 export const CASE_CLIENT_ID_MISMATCH =
   "HubSpot client_id_number does not match the CentralReach client found for this Case record.";
 

@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { buildEmployeePayload } from "../../mappings/employees/buildEmployeePayload.mjs";
 import { validateEmployeePayload } from "../../mappings/employees/validateEmployeePayload.mjs";
 import { CENTRAL_REACH_EMPLOYEE_LABELS } from "../../constants/centralReach.mjs";
+import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+import { employeeWorkflowDeps } from "./stage2Fakes.mjs";
+import { linkedBt, setup } from "./stage3WorkerFakes.mjs";
 
 const config = {
   hubspot: {
@@ -61,7 +64,7 @@ test("[B7][5.2] BCBA mapping builds expected payload and metadata", () => {
         workday_id: "1000002",
         first_name: "Pat",
         last_name: "Morgan",
-        dob: "10/20/1990",
+        date_of_birth: "10/20/1990",
         email: "pat@work.test",
         address: "22 Oak",
         city_home: "Aurora",
@@ -221,4 +224,46 @@ test("employee payload validation fails for missing identifiers", () => {
   const result = validateEmployeePayload({ firstName: "", lastName: "", externalSystemId: "" });
   assert.equal(result.isValid, false);
   assert.equal(result.errors.length > 0, true);
+});
+
+// Item 16 (T2, rule 5.7): the BT/RBT date_of_birth is text in production (a property sync from the
+// Contact's text date_of_birth, EMP §1), so it is read like the BCBA one: typed forms become
+// YYYY-MM-DD. Blank stays blank; the placeholder is added on a create only (centralReachClient.mjs).
+function btDateOfBirth(dateOfBirth) {
+  return buildEmployeePayload({
+    employeeType: "bt_rbt",
+    config,
+    record: { id: "r1", properties: { hs_object_id: "r1", date_of_birth: dateOfBirth } }
+  });
+}
+
+test("[T2][1.4] BT/RBT date_of_birth is read as text: 2/20/1992 and 1992-02-20 both send 1992-02-20", () => {
+  for (const text of ["2/20/1992", "1992-02-20"]) {
+    const mapped = btDateOfBirth(text);
+    assert.equal(mapped.dateOfBirthStatus, "date", text);
+    assert.equal(mapped.employeePayload.dateOfBirth, "1992-02-20", text);
+  }
+});
+
+test("[T2][1.4] BT/RBT date_of_birth: unreadable text is unreadable, blank stays blank (no placeholder in the mapper)", () => {
+  for (const text of ["2/30/1992", "2/20/92", "not-a-date"]) {
+    const mapped = btDateOfBirth(text);
+    assert.equal(mapped.dateOfBirthStatus, "unreadable", text);
+    assert.equal(mapped.employeePayload.dateOfBirth, null, text);
+  }
+  const blank = btDateOfBirth("  ");
+  assert.equal(blank.dateOfBirthStatus, "blank");
+  assert.equal(blank.employeePayload.dateOfBirth, null);
+});
+
+test("[T2][1.4] a linked BT/RBT with date_of_birth 2/20/1992 updates CentralReach with 1992-02-20, not error", async () => {
+  const { cr } = setup();
+  const record = linkedBt(cr, { date_of_birth: "2/20/1992" });
+  const result = await runEmployeeSyncWorkflow(
+    { recordId: "HS1", employeeType: "bt_rbt" },
+    employeeWorkflowDeps({ record })
+  );
+  assert.equal(result.status, "success");
+  const put = cr.calls.filter((call) => call.name === "PUT /contacts/employee/{id}").at(-1);
+  assert.equal(String(put.body.dateOfBirth).slice(0, 10), "1992-02-20");
 });

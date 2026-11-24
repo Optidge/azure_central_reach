@@ -3,8 +3,8 @@ import {
   createValueReader,
   readEmail,
   readGender,
-  readPhone,
-  readStateCode
+  readCaseStateCode,
+  readPhone
 } from "../../lib/fieldFormats.mjs";
 
 function clientDateOfBirth(properties) {
@@ -25,9 +25,12 @@ export function buildClientPayload({ deal, config }) {
   void config;
 
   const props = deal?.properties || {};
-  // F-1: a filled phone, email, state or gender that cannot be converted is named in
+  // F-1: a filled phone, email or gender that cannot be converted is named in
   // unreadableValueProperties (a note for the worker, like dateOfBirthStatus) and sent as nothing.
   const { valueOf, unreadableValueProperties } = createValueReader(props);
+  // Item 5: the state is stateregion, else location. An unreadable stateregion is not an error:
+  // it falls back and adds a warning (a note for the worker; code and property, never the value).
+  const state = readCaseStateCode(props);
   const dateOfBirth = clientDateOfBirth(props);
   const trimmed = (value) => {
     const text = String(value ?? "").trim();
@@ -45,14 +48,16 @@ export function buildClientPayload({ deal, config }) {
     PrimaryEmail: valueOf(readEmail, "email"),
     // Decision 36: no second phone. phone_number__second_ is not read and PhoneHome is not sent.
     PhoneCell: valueOf(readPhone, "phone"),
-    // C8, row 4.1: the Case mailing address. Line 1 is street_address only; the state is stateregion.
+    // C8, row 4.1: the Case mailing address. Line 1 is street_address only; the state is
+    // stateregion, else location (item 5; departs from guide lines 351 and 500, guide note D11).
     AddressLine1: props.street_address || null,
     AddressLine2: props.home_apt || null,
     City: props.location_city || null,
-    StateProvince: valueOf(readStateCode, "stateregion"),
+    StateProvince: state.code,
     ZipPostalCode: props.postal_code || null,
     GuardianFirstName: props.guardian_first_name || null,
     GuardianLastName: props.guardian_last_name || null,
-    unreadableValueProperties
+    unreadableValueProperties,
+    warnings: state.warning ? [{ code: state.warning, property: "stateregion" }] : []
   };
 }

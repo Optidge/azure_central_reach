@@ -13,6 +13,7 @@ import { safeLog } from "../lib/safeLog.mjs";
 import { buildErrorLog } from "../lib/errors.mjs";
 import { createHubSpotClient, searchObjectPage } from "../lib/hubspotClient.mjs";
 import { HubSpotReadError } from "../lib/mappedState.mjs";
+import { gateProperties } from "../lib/syncEligibility.mjs";
 import {
   createStateClient,
   acquireLease,
@@ -105,15 +106,19 @@ function pollerEntities(config, { sendClient, sendEmployee }) {
   ];
 }
 
-// HubSpot ORs the filter groups and ANDs the filters inside one. So each branch becomes a group,
-// and every group carries the record gate, the Case stage exclusion and the shared filters.
-function buildFilterGroups({ entity, gateProperty, branches, shared }) {
-  const always = [
-    ...(gateProperty ? [{ propertyName: gateProperty, operator: "EQ", value: "true" }] : []),
-    ...entity.stageFilters,
-    ...shared
-  ];
-  return branches.map((branch) => ({ filters: [...always, branch] }));
+// HubSpot ORs the filter groups and ANDs the filters inside one. So each branch { gate, filter }
+// becomes a group: its own path's gate (item 24: linked → update gate, unlinked → create gate),
+// the Case stage exclusion, the shared filters and the branch filter. With one gate for both
+// paths every group carries the same gate, as before item 24.
+function buildFilterGroups({ entity, branches, shared }) {
+  return branches.map(({ gate, filter }) => ({
+    filters: [
+      ...(gate ? [{ propertyName: gate, operator: "EQ", value: "true" }] : []),
+      ...entity.stageFilters,
+      ...shared,
+      filter
+    ]
+  }));
 }
 
 const linkedFilter = (entity) => ({ propertyName: entity.idProperty, operator: "HAS_PROPERTY" });
@@ -158,7 +163,7 @@ function lastIdAfter(page, afterId) {
 async function pollEntity({
   entity,
   portalId,
-  gateProperty,
+  gates,
   nowMs,
   searchPage,
   readState,
@@ -199,8 +204,10 @@ async function pollEntity({
       objectTypeId: entity.objectTypeId,
       filterGroups: buildFilterGroups({
         entity,
-        gateProperty,
-        branches: [linkedFilter(entity), entity.entryFilter],
+        branches: [
+          { gate: gates.update, filter: linkedFilter(entity) },
+          { gate: gates.create, filter: entity.entryFilter }
+        ],
         shared
       }),
       sorts: [{ propertyName: sortProperty, direction: "ASCENDING" }],
@@ -312,7 +319,7 @@ async function loadSweep({ portalId, day, readState }) {
 async function runDailySweep({
   entities,
   portalId,
-  gateProperty,
+  gates,
   nowMs,
   searchPage,
   readState,
@@ -350,16 +357,20 @@ async function runDailySweep({
     try {
       while (!progress.finished && result.queued < SWEEP_MAX_MESSAGES_PER_RUN) {
         // Paged by record ID, not by HubSpot's cursor, so the place survives until the next hour.
-        // With the gate off, linked records only.
+        // The waiting branch is on the create gate; with no create gate, linked records only.
         const page = await searchPage({
           objectTypeId: entity.objectTypeId,
           filterGroups: buildFilterGroups({
             entity,
-            gateProperty,
             branches: [
-              linkedFilter(entity),
-              ...(gateProperty
-                ? [{ propertyName: STATUS_PROPERTY, operator: "EQ", value: WAITING_STATUS }]
+              { gate: gates.update, filter: linkedFilter(entity) },
+              ...(gates.create
+                ? [
+                    {
+                      gate: gates.create,
+                      filter: { propertyName: STATUS_PROPERTY, operator: "EQ", value: WAITING_STATUS }
+                    }
+                  ]
                 : [])
             ],
             shared: progress.afterId
@@ -416,7 +427,7 @@ export async function runIntakePollerWorkflow(context, dependencies = {}) {
   const nowMs = (dependencies.now || Date.now)();
 
   const portalId = config.hubspot.hubspotPortalId;
-  const gateProperty = config.sync.recordGateProperty;
+  const gates = gateProperties(config.sync);
   const entities = pollerEntities(config, portalSenders(config.hubspot.hubspotPortalId));
 
   const summary = {
@@ -445,7 +456,7 @@ export async function runIntakePollerWorkflow(context, dependencies = {}) {
       buildErrorLog({ workflow: "intakePoller", stage: `${stage}:${entity.key}`, error })
     );
   };
-  const shared = { portalId, gateProperty, nowMs, searchPage, readState, saveState };
+  const shared = { portalId, gates, nowMs, searchPage, readState, saveState };
 
   try {
     for (const entity of entities) {

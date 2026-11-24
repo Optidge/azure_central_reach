@@ -235,7 +235,9 @@ test("[BR1][3.19] the real BUILD-PLAN section 9 is read: every family of IDs, wi
   // C22 was "to build (4)" until the wave 1 merge of 2026-11-20. These lines follow the plan's
   // statuses: K1 below changes the same way when row 6.1 is merged.
   assert.equal(classifyStatus(status("C22")).built, true);
-  assert.deepEqual(classifyStatus(status("C13")), { built: false, toBuildStages: [] });
+  // C13 was "open" until it was built in the package of 2026-11-24; C18 is still open.
+  assert.deepEqual(classifyStatus(status("C13")), { built: true, toBuildStages: [] });
+  assert.deepEqual(classifyStatus(status("C18")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("CL5")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("BL6")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("K1")), { built: true, toBuildStages: [] });

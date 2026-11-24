@@ -34,6 +34,21 @@ function clientPayload() {
   };
 }
 
+// Item B21: an update carries all 11 core keys. These fake clients hold every core field blank
+// (""), so a core field the payload does not fill is sent back as "".
+const HELD_BLANK_CORE = {
+  Gender: "",
+  PrimaryEmail: "",
+  PhoneCell: "",
+  AddressLine1: "",
+  AddressLine2: "",
+  City: "",
+  StateProvince: "",
+  ZipPostalCode: "",
+  GuardianFirstName: "",
+  GuardianLastName: ""
+};
+
 function callsNamed(cr, name) {
   return cr.calls.filter((call) => call.name === name);
 }
@@ -101,11 +116,15 @@ test("[BR22][3.14] a linked update with externalSystemIdHeld: true carries Exter
   assert.equal(cr.count(LOOKUP_GET), 0);
   const puts = callsNamed(cr, CLIENT_PUT);
   assert.equal(puts.length, 1);
+  // BR16 (2026-11-24): the body is the client read with the mapped keys laid over it, so the
+  // read's contactId goes back too.
   assert.deepEqual(puts[0].body, {
+    ContactId: 2001,
     ExternalSystemId: CASE_ID,
     FirstName: "Alex",
     LastName: "Rivera",
-    DateOfBirth: "2017-01-14"
+    DateOfBirth: "2017-01-14",
+    ...HELD_BLANK_CORE
   });
   assert.deepEqual(payload, clientPayload());
 });
@@ -167,9 +186,11 @@ test("[BR22][3.14] a linked update with no externalSystemIdHeld carries neither 
   assert.equal(puts.length, 1);
   assert.equal(puts[0].url, "/contacts/client/2001");
   assert.deepEqual(puts[0].body, {
+    ContactId: 2001,
     FirstName: "Alex",
     LastName: "Rivera",
-    DateOfBirth: "2017-01-14"
+    DateOfBirth: "2017-01-14",
+    ...HELD_BLANK_CORE
   });
   // The worker hashes the payload it passed in: it must not be changed.
   assert.deepEqual(payload, clientPayload());

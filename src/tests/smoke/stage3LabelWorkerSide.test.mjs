@@ -10,10 +10,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { LABEL_NOT_SENDABLE, RETRIES_USED_UP } from "../../constants/syncReasons.mjs";
-import { FAILURE_KINDS, classifyFailure, permanentFailureReason } from "../../lib/retry.mjs";
+import {
+  FAILURE_KINDS,
+  LABEL_POST_WINDOW_SECONDS,
+  classifyFailure,
+  permanentFailureReason
+} from "../../lib/retry.mjs";
+import { processClientQueue } from "../../functions/processClientQueue.mjs";
+import { processEmployeeQueue } from "../../functions/processEmployeeQueue.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
-import { clientWorkflowDeps, employeeWorkflowDeps, timeoutError } from "./stage2Fakes.mjs";
+import {
+  SANDBOX_PORTAL,
+  clientWorkflowDeps,
+  employeeWorkflowDeps,
+  timeoutError
+} from "./stage2Fakes.mjs";
 import {
   BT_LINK,
   CASE_LINK,
@@ -125,7 +137,7 @@ test("[BR19][L.2] BT/RBT: labelsPending set for one CR contact does not count fo
 
   // Staff point the HubSpot record at another CentralReach employee, one the integration did
   // not create. Its empty label read must not be taken as "no labels".
-  seedEmployee(cr, "7777", "WD1");
+  seedEmployee(cr, "7777", "1000001");
   record.properties.employee_id = "7777";
   await runBt(record, sender);
   assert.equal(sender.calls[1].contactId, "7777");
@@ -225,7 +237,7 @@ test("[BR19][L.3] a saved label POST for another CR ID is passed to the sender a
   const { container, cr } = setup();
   const otherPost = { contactId: "1111", labelIds: [1052618], postedAt: "2026-11-20T14:59:00.000Z" };
   seedClient(cr, "2001");
-  seedEmployee(cr, "5001", "WD1");
+  seedEmployee(cr, "5001", "1000001");
   for (const link of [CASE_LINK, BT_LINK]) {
     await container.items.upsert({
       id: link.id,
@@ -309,7 +321,7 @@ test("[BR19][L.3] a run inside the window that posts nothing and is not confirme
 test("[BR19][L.3] a label POST that is never confirmed ends as error \"Retries used up\" on the last attempt, for a Case and for a BT/RBT (sender faked)", async () => {
   const { cr } = setup();
   seedClient(cr, "2001");
-  seedEmployee(cr, "5001", "WD1");
+  seedEmployee(cr, "5001", "1000001");
 
   const caseRecord = stage3Case({ client_id_number: "2001" });
   await assert.rejects(
@@ -328,11 +340,47 @@ test("[BR19][L.3] a label POST that is never confirmed ends as error \"Retries u
   assert.equal(bt.properties.last_sync_error, RETRIES_USED_UP);
 });
 
+// Item 12: through the queue, the first retry of an unconfirmed POST is scheduled at least the
+// 150 s label window out (not the 60 s first step), for a Case and for a BT/RBT.
+test("[BR19][L.3] through the queue: a run that ends CR_LABEL_POST_UNCONFIRMED schedules its first retry at least 150 s out, for a Case and for a BT/RBT (sender faked)", async () => {
+  const message = {
+    portalId: SANDBOX_PORTAL,
+    source: "hubspotWorkflow",
+    enqueuedAt: "2026-11-24T00:00:00.000Z"
+  };
+  const queueContext = { invocationId: "inv-12", triggerMetadata: { messageId: "msg-12", deliveryCount: 1 } };
+  for (const [kind, makeRecord, runQueue, body, run] of [
+    ["Case", linkedCase, processClientQueue, { dealId: "deal-1", workflow: "clientSync" }, runCase],
+    ["BT/RBT", linkedBt, processEmployeeQueue, { recordId: "HS1", employeeType: "bt_rbt", workflow: "employeeSync" }, runBt]
+  ]) {
+    const { cr } = setup();
+    const record = makeRecord(cr);
+    const sender = fakeLabelSender([POSTED_UNCONFIRMED]);
+    const scheduled = [];
+    const startedAt = Date.now();
+
+    await runQueue({ ...message, ...body }, queueContext, {
+      portalId: SANDBOX_PORTAL,
+      runWorkflow: (input) => run(record, sender, input),
+      scheduleRetry: async (retry) => {
+        scheduled.push(retry);
+      }
+    });
+
+    assert.equal(sender.calls.length, 1, kind);
+    assert.equal(scheduled.length, 1, kind);
+    assert.equal(scheduled[0].body.attempt, 1, kind);
+    const delayMs = scheduled[0].scheduledEnqueueTimeUtc.getTime() - startedAt;
+    assert.equal(delayMs >= LABEL_POST_WINDOW_SECONDS * 1000, true, kind);
+    assert.equal(delayMs <= (LABEL_POST_WINDOW_SECONDS + 60) * 1000, true, kind);
+  }
+});
+
 test("[BR19][L.3] with the sender as it is before row L.3 (no postedLabelIds, no confirmed), nothing is saved as a label POST and the run is not failed", async () => {
   // Real sender, real CentralReach client over the fake HTTP adapter.
   const { container, cr } = setup();
   seedClient(cr, "2001");
-  seedEmployee(cr, "5001", "WD1");
+  seedEmployee(cr, "5001", "1000001");
 
   const caseResult = await runCase(stage3Case({ client_id_number: "2001" }), null);
   const btResult = await runBt(stage3Bt({ employee_id: "5001" }), null);
@@ -364,7 +412,7 @@ test("[BR19][L.1] CR_LABEL_NOT_SENDABLE is permanent and has its own fixed sente
 test("[BR19][L.1] a label outside the sendable list ends the run as error with the fixed sentence and no retry, for a Case and for a BT/RBT (sender faked)", async () => {
   const { cr } = setup();
   seedClient(cr, "2001");
-  seedEmployee(cr, "5001", "WD1");
+  seedEmployee(cr, "5001", "1000001");
   const notSendable = () =>
     fakeLabelSender([Object.assign(new Error("not sendable"), { code: "CR_LABEL_NOT_SENDABLE" })]);
 

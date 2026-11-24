@@ -289,7 +289,7 @@ test("[BR10][3.2] a linked waiting employee whose workday_id or checklist change
   // Staff fill the Workday ID on one record and tick the checklist on the other. HubSpot moves
   // hs_lastmodifieddate on both. Record 12 is not touched.
   poller.setNow("2026-11-20T07:00:00.000Z");
-  poller.hubspot.set(SANDBOX_BT_TYPE, "11", { workday_id: "WD1", hs_lastmodifieddate: poller.minutesAgo(40) });
+  poller.hubspot.set(SANDBOX_BT_TYPE, "11", { workday_id: "1000001", hs_lastmodifieddate: poller.minutesAgo(40) });
   poller.hubspot.set(SANDBOX_BCBA_TYPE, "21", {
     bcba_in_cr_checklist: "External System ID",
     hs_lastmodifieddate: poller.minutesAgo(20)

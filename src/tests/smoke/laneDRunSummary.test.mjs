@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   CR_CALL_KINDS,
   INVALID_REASON_CODE,
+  RUN_GATES,
   RUN_OUTCOMES,
   SYNC_RUN_SUMMARY_MESSAGE,
   createSyncRunSummary,
@@ -15,6 +16,7 @@ import {
   reasonCodeOfError,
   toReasonCode
 } from "../../lib/syncRunSummary.mjs";
+import { CASE_EXCLUDED_STAGE_IDS } from "../../constants/hubspot.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { caseDeps, caseStaff, logged, refused, roleRow, ROLE_TYPE } from "./laneDFakes.mjs";
 import { safeLog } from "../../lib/safeLog.mjs";
@@ -52,7 +54,8 @@ const DISTINCT = Object.freeze({
   street: "742 Evergreen Terrace",
   guardian: "Mortimer",
   policyHolder: "Wilhelmina Fitzgibbon",
-  careCoordinator: "Ottoline Brightwater",
+  careCoordinatorFirst: "Ottoline",
+  careCoordinatorLast: "Brightwater",
   staff: "Peregrine Thistlewood"
 });
 
@@ -65,7 +68,9 @@ function distinctiveCase(properties = {}) {
     street_address: DISTINCT.street,
     guardian_first_name: DISTINCT.guardian,
     policy_holder_name: DISTINCT.policyHolder,
-    care_coordinator_name: DISTINCT.careCoordinator,
+    care_coordinator_first_name: DISTINCT.careCoordinatorFirst,
+    care_coordinator_last_name: DISTINCT.careCoordinatorLast,
+    coordinator_export_status: "ready",
     severity_level_clinical: "Level 2",
     ...properties
   };
@@ -107,6 +112,8 @@ function callsOf(line, kind) {
 // did not answer 200, by position in the log.
 const KIND_BY_ROUTE = {
   "GET /contacts/client/byExternalSystemId": "lookup",
+  // Item B21: the client read before every update.
+  "GET /contacts/client/{id}": "lookup",
   "POST /contacts/client": "create",
   "PUT /contacts/client/{id}": "update",
   "GET /contacts/{id}/labels": "labelRead",
@@ -179,7 +186,7 @@ test("[BR15][3.20] the line carries only names, IDs, codes and counts: no field 
   // The values did go to CentralReach and the staff and Care Coordinator names were read, so the
   // test means something: they are in the requests, and not in the line.
   const requests = JSON.stringify(cr.calls);
-  for (const value of [DISTINCT.firstName, DISTINCT.email, DISTINCT.street, DISTINCT.staff, DISTINCT.careCoordinator]) {
+  for (const value of [DISTINCT.firstName, DISTINCT.email, DISTINCT.street, DISTINCT.staff, "Ottoline Brightwater"]) {
     assert.equal(requests.includes(value), true, value);
   }
   const line = JSON.stringify(onlySummary(logs).meta);
@@ -189,7 +196,7 @@ test("[BR15][3.20] the line carries only names, IDs, codes and counts: no field 
   assert.equal(line.includes("Haverford"), false);
 });
 
-test("[BR15][3.20] success on an update of a linked Case: crCalls equals the request log, lookup 200 then update", async () => {
+test("[BR15][3.20] success on an update of a linked Case: crCalls equals the request log, lookup 200, the client read (B21), then update", async () => {
   const { cr } = setup();
   const record = linkedCase(cr, distinctiveCase());
   const logs = [];
@@ -199,7 +206,8 @@ test("[BR15][3.20] success on an update of a linked Case: crCalls equals the req
   assert.equal(line.meta.outcome, "success");
   assert.equal(line.meta.operation, "update");
   assert.deepEqual(line.meta.crCalls, requestLogAsCalls(cr));
-  assert.deepEqual(line.meta.crCalls.slice(0, 2), [
+  assert.deepEqual(line.meta.crCalls.slice(0, 3), [
+    { kind: "lookup", status: 200 },
     { kind: "lookup", status: 200 },
     { kind: "update", status: 200 }
   ]);
@@ -239,8 +247,16 @@ test("[BR15][3.20] a label POST that the read-back confirms: the POST and each r
   const kinds = line.meta.crCalls.map((call) => call.kind);
   const post = kinds.indexOf("labelPost");
   assert.equal(post > 0, true);
-  // lookup, update, label read, catalog read, POST, read-back
-  assert.deepEqual(kinds.slice(0, post + 2), ["lookup", "update", "labelRead", "labelRead", "labelPost", "labelRead"]);
+  // lookup, client read (B21), update, label read, catalog read, POST, read-back
+  assert.deepEqual(kinds.slice(0, post + 2), [
+    "lookup",
+    "lookup",
+    "update",
+    "labelRead",
+    "labelRead",
+    "labelPost",
+    "labelRead"
+  ]);
   assert.deepEqual(line.meta.crCalls, requestLogAsCalls(cr));
   assert.deepEqual(line.meta.labels.postedLabelIds.length > 0, true);
   assert.equal(line.meta.labels.confirmed, true);
@@ -253,8 +269,9 @@ test("[BR15][3.20] a failed update after a found lookup is listed as update with
   const logs = [];
   await runClientSyncWorkflow(input(), caseDeps({ record, logs, staff: staffWithDistinctNames() }));
   const line = onlySummary(logs);
-  assert.deepEqual(line.meta.crCalls, requestLogAsCalls(cr, { 1: 400 }));
+  assert.deepEqual(line.meta.crCalls, requestLogAsCalls(cr, { 2: 400 }));
   assert.deepEqual(line.meta.crCalls, [
+    { kind: "lookup", status: 200 },
     { kind: "lookup", status: 200 },
     { kind: "update", status: 400 }
   ]);
@@ -342,7 +359,10 @@ test("[BR15][3.20] the observer gets only a kind and a status: no URL, body or h
     existingContactId: "2001",
     onCall: (call) => seen.push(call)
   });
-  assert.deepEqual(seen, [{ kind: "update", status: 200 }]);
+  assert.deepEqual(seen, [
+    { kind: "lookup", status: 200 },
+    { kind: "update", status: 200 }
+  ]);
   assert.equal(JSON.stringify(seen).includes(DISTINCT.firstName), false);
   assert.equal(record !== null, true);
 });
@@ -411,6 +431,63 @@ test("[BR15][3.20] skipped: the gate decides, the reason code is the skip reason
   assert.deepEqual(record.writes, []);
 });
 
+// Item 24: two gate properties, one per path (production's settings, D18 d).
+const CREATES = "centralreach_creates_only";
+const UPDATES = "centralreach_updates_only";
+const TWO_GATES = { recordGateProperty: null, createGateProperty: CREATES, updateGateProperty: UPDATES };
+
+test("[BR15][3.20] a record_gate skip line has exactly the keys plus gate, the path whose box was not true", async () => {
+  for (const [linked, gate] of [[false, "create"], [true, "update"]]) {
+    const { cr } = setup();
+    const record = linked
+      ? linkedCase(cr, { [CREATES]: "true", [UPDATES]: null })
+      : stage3Case({ [CREATES]: null, [UPDATES]: "true" });
+    const logs = [];
+    const config = workflowConfig({ sync: TWO_GATES });
+    const result = await runClientSyncWorkflow(input(), caseDeps({ record, logs, getConfig: () => config }));
+    assert.equal(result.reason, "record_gate", gate);
+
+    const line = onlySummary(logs);
+    assert.deepEqual(Object.keys(line.meta).sort(), [...SUMMARY_KEYS, "gate"].sort(), gate);
+    assert.equal(line.meta.outcome, "skipped");
+    assert.equal(line.meta.reasonCode, "record_gate");
+    assert.equal(line.meta.gate, gate);
+    assert.deepEqual(cr.calls, []);
+  }
+});
+
+test("[BR15][3.20] a test_record skip with two gates set logs exactly the keys, with no gate key", async () => {
+  setup();
+  const record = stage3Case({ test_record: "true", [CREATES]: "true", [UPDATES]: "true" });
+  const logs = [];
+  const config = workflowConfig({ sync: TWO_GATES });
+  const result = await runClientSyncWorkflow(input(), caseDeps({ record, logs, getConfig: () => config }));
+  assert.equal(result.reason, "test_record");
+
+  const line = onlySummary(logs);
+  assert.deepEqual(Object.keys(line.meta).sort(), SUMMARY_KEYS);
+  assert.equal(line.meta.reasonCode, "test_record");
+});
+
+test("[BR15][3.20] an excluded_stage skip logs exactly the keys, with no gate key and no CentralReach call", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, {
+    dealstage: CASE_EXCLUDED_STAGE_IDS[0],
+    [CREATES]: "true",
+    [UPDATES]: "true"
+  });
+  const logs = [];
+  const config = workflowConfig({ sync: TWO_GATES });
+  const result = await runClientSyncWorkflow(input(), caseDeps({ record, logs, getConfig: () => config }));
+  assert.equal(result.reason, "excluded_stage");
+
+  const line = onlySummary(logs);
+  assert.deepEqual(Object.keys(line.meta).sort(), SUMMARY_KEYS);
+  assert.equal(line.meta.outcome, "skipped");
+  assert.equal(line.meta.reasonCode, "excluded_stage");
+  assert.deepEqual(cr.calls, []);
+});
+
 test("[BR15][3.20] error decided by the worker (an unreadable date): outcome error, a reason code, no CentralReach call, the error status written", async () => {
   const { cr } = setup();
   const record = linkedCase(cr, distinctiveCase({ ongoing_auth_period_start_date: "2026-02-30" }));
@@ -422,6 +499,7 @@ test("[BR15][3.20] error decided by the worker (an unreadable date): outcome err
   assert.equal(result.status, "error");
 
   const line = onlySummary(logs);
+  assert.deepEqual(Object.keys(line.meta).sort(), SUMMARY_KEYS);
   assert.equal(line.level, "warn");
   assert.equal(line.meta.outcome, "error");
   assert.equal(line.meta.reasonCode, "UNREADABLE_DATE");
@@ -446,6 +524,7 @@ test("[BR15][3.20] error from a CentralReach rejection (400): the failed call is
   assert.equal(line.meta.outcome, "error");
   assert.equal(line.meta.reasonCode, "CR_HTTP_400");
   assert.deepEqual(line.meta.crCalls, [
+    { kind: "lookup", status: 200 },
     { kind: "lookup", status: 200 },
     { kind: "update", status: 400 }
   ]);
@@ -703,6 +782,11 @@ test("[BR15][3.20] helper: an outcome, an operation or a call kind outside the l
   assert.throws(() => summary.setOutcome("done"), /outcome/);
   assert.throws(() => summary.setOperation("delete"), /operation/);
   assert.throws(() => summary.addCrCall("getEverything"), /call kind/);
+  assert.throws(() => summary.setGate("other"), /gate/);
+  assert.equal("gate" in summary.build(), false);
+  assert.deepEqual([...RUN_GATES], ["create", "update"]);
+  summary.setGate("update");
+  assert.equal(summary.build().gate, "update");
   assert.deepEqual([...RUN_OUTCOMES], ["success", "noop", "waiting", "error", "skipped"]);
   assert.deepEqual([...CR_CALL_KINDS], ["lookup", "create", "update", "metadata", "labelRead", "labelPost"]);
 

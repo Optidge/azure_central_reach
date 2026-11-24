@@ -20,9 +20,11 @@ import {
   timeoutError
 } from "./stage2Fakes.mjs";
 import {
+  BCBA_LINK,
   BT_LINK,
   CASE_LINK,
   setup,
+  stage3Bcba,
   stage3Bt,
   stage3Case,
   testClock
@@ -72,7 +74,7 @@ test("[BR3][3.15] BT/RBT: a create that timed out, lookup 404 one minute later: 
   // The create is sent and its answer never arrives. CentralReach does not show the employee.
   cr.fail(EMPLOYEE_POST, timeoutError());
   await assert.rejects(runBt(record, clock), unknownCreate);
-  assert.equal(link(container, BT_LINK).pendingCreateExternalId, "WD1");
+  assert.equal(link(container, BT_LINK).pendingCreateExternalId, "1000001");
   assert.equal(link(container, BT_LINK).pendingCreateSentAt, START);
 
   clock.advanceSeconds(60);
@@ -84,7 +86,7 @@ test("[BR3][3.15] BT/RBT: a create that timed out, lookup 404 one minute later: 
   assert.equal(classifyFailure(thrown), FAILURE_KINDS.TEMPORARY);
   assert.equal(cr.count(EMPLOYEE_POST), 1);
   // The marker and its time stay; HubSpot keeps its status while the retries run.
-  assert.equal(link(container, BT_LINK).pendingCreateExternalId, "WD1");
+  assert.equal(link(container, BT_LINK).pendingCreateExternalId, "1000001");
   assert.equal(link(container, BT_LINK).pendingCreateSentAt, START);
   assert.equal(statusWrites(record).length, 0);
 
@@ -160,6 +162,37 @@ test("[BR3][3.15] BT/RBT: a create still pending on the last attempt ends as err
   assert.equal(cr.count(EMPLOYEE_POST), 1);
   assert.equal(record.properties.last_sync_status, "error");
   assert.equal(record.properties.last_sync_error, RETRIES_USED_UP);
+});
+
+// BCBA-049: the BCBA runs the same worker, so one case shows the window holds for it too.
+test("[BR3][3.15] BCBA: a create that timed out, lookup 404 one minute later: no second create and the run is retried; at 15 minutes one create is sent", async () => {
+  const { container, cr } = setup();
+  const clock = testClock(START);
+  const record = stage3Bcba({ employee_id: "", email: "pat@example.com" });
+  const runBcba = () =>
+    runEmployeeSyncWorkflow(
+      { recordId: "HS2", employeeType: "bcba" },
+      { ...employeeWorkflowDeps({ record }), now: clock.now }
+    );
+
+  cr.fail(EMPLOYEE_POST, timeoutError());
+  await assert.rejects(runBcba(), unknownCreate);
+  assert.equal(link(container, BCBA_LINK).pendingCreateExternalId, "1000002");
+  assert.equal(link(container, BCBA_LINK).pendingCreateSentAt, START);
+
+  clock.advanceSeconds(60);
+  await assert.rejects(runBcba(), stillPending);
+  assert.equal(cr.count(EMPLOYEE_POST), 1);
+  assert.equal(link(container, BCBA_LINK).pendingCreateExternalId, "1000002");
+  assert.equal(statusWrites(record).length, 0);
+
+  clock.advanceSeconds(14 * 60);
+  const result = await runBcba();
+  assert.equal(result.operation, "create");
+  assert.equal(result.status, "success");
+  assert.equal(cr.count(EMPLOYEE_POST), 2);
+  assert.equal(cr.employees.size, 1);
+  assert.equal(link(container, BCBA_LINK).pendingCreateExternalId, null);
 });
 
 // --- Clients ---

@@ -11,9 +11,14 @@ import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs
 
 const PORTAL = "52311591";
 
+// coordinator_export_status no_owner: the Care Coordinator is sent blank (C10, item 6) unless a
+// test sets the status.
 function mapCase(properties, inputs = {}) {
   return buildClientMetadata({
-    deal: { id: "9001", properties: { hs_object_id: "9001", ...properties } },
+    deal: {
+      id: "9001",
+      properties: { hs_object_id: "9001", coordinator_export_status: "no_owner", ...properties }
+    },
     portalId: PORTAL,
     ...inputs
   });
@@ -31,17 +36,19 @@ function payload(properties) {
 test("[C8][4.1] address line 1 is street_address only, never the alternate-address property", () => {
   const both = payload({
     street_address: "123 Main St",
-    if_services_will_be_in_more_than_one_location__list_the_other_addres: "9 Other Rd"
+    if_services_will_be_in_more_than_one_location__list_the_other_address: "9 Other Rd"
   });
   assert.equal(both.AddressLine1, "123 Main St");
 
   const alternateOnly = payload({
-    if_services_will_be_in_more_than_one_location__list_the_other_addres: "9 Other Rd"
+    if_services_will_be_in_more_than_one_location__list_the_other_address: "9 Other Rd"
   });
   assert.equal(alternateOnly.AddressLine1, null);
 });
 
-test("[C8][4.1] the state comes from stateregion, not from location or location_central_reach", () => {
+// Item 5 ("use hte fall back"): a blank stateregion falls back to the Case location. It used to
+// send no state.
+test("[C8][4.1] the state comes from stateregion, else location, never location_central_reach", () => {
   const mapped = payload({
     stateregion: "New Jersey",
     location: "New York",
@@ -50,7 +57,10 @@ test("[C8][4.1] the state comes from stateregion, not from location or location_
   assert.equal(mapped.StateProvince, "NJ");
 
   const blankState = payload({ location: "New York", location_central_reach: "Colorado" });
-  assert.equal(blankState.StateProvince, null);
+  assert.equal(blankState.StateProvince, "NY");
+
+  const neither = payload({ location_central_reach: "Colorado" });
+  assert.equal(neither.StateProvince, null);
 });
 
 test("[C8][4.1] line 2, city, zip and cell phone read home_apt, location_city, postal_code and phone", () => {
@@ -103,7 +113,7 @@ test("[C27][4.2] Maladaptive Behaviors sends the stored options of maladaptive_b
 test("[C28][4.3] Important information - Parent reads important_information into field 138378, and Severity Level stays", () => {
   const values = meta({ important_information: "Dog in the home", severity_level_clinical: "Level 2" });
   assert.equal(values[138378], "Dog in the home");
-  assert.equal(values[133826], "Level 2");
+  assert.equal(values[133826], "2"); // package item 8: the digit alone
   assert.equal(meta({})[138378], null);
 });
 
@@ -133,19 +143,27 @@ test("[C17][4.4] the old schedule properties and the Location #2 variants (C18, 
 
 // --- 4.5, C19: Client Availability ---
 
-test("[C19][4.5] Client Availability is the text, then the weekly hours when filled", () => {
+// Item 7 (CF §9.3): the text alone, as CentralReach holds it; the weekly hours are not appended.
+test("[C19][4.5] Client Availability is the availability text alone, trimmed, with the weekly hours not appended", () => {
   assert.equal(
     meta({
-      finalized_client_service_hours_post_assessment: "Weekdays after 3 PM",
-      client_service_hours_total: "15"
+      finalized_client_service_hours_post_assessment: "  Mon-Fri 3-6 Sat 10-2 ",
+      client_service_hours_total: "20"
     })[126209],
-    "Weekdays after 3 PM, 15"
+    "Mon-Fri 3-6 Sat 10-2"
   );
   assert.equal(
     meta({ finalized_client_service_hours_post_assessment: "Weekdays after 3 PM" })[126209],
     "Weekdays after 3 PM"
   );
-  assert.equal(meta({ client_service_hours_total: 15 })[126209], "15");
+});
+
+test("[C19][4.5] Client Availability is blank when the text is blank, even with the weekly hours filled", () => {
+  assert.equal(meta({ client_service_hours_total: "20" })[126209], null);
+  assert.equal(
+    meta({ finalized_client_service_hours_post_assessment: "  ", client_service_hours_total: 20 })[126209],
+    null
+  );
 });
 
 test("[C19][4.5] Client Availability is blank when both sources are blank, and client_availability_completed is not read", () => {
@@ -241,17 +259,18 @@ test("[C23][4.8] Auth Period never reads auth_start_date, auth_end_date or the _
 
 // --- 4.9, C26: Known Allergies ---
 
-test("[C26][4.9] allergies Confirmed sends \"Yes\" plus the explanation", () => {
+// Package item 3 (CF §10.3): real CentralReach holds the allergen text alone and "None".
+test("[C26][4.9] allergies Confirmed sends the explanation alone, or \"Yes\" when it is blank", () => {
   assert.equal(
     meta({ allergies: "Confirmed", allergies__yes__explain: "Peanuts and tree nuts" })[126214],
-    "Yes, Peanuts and tree nuts"
+    "Peanuts and tree nuts"
   );
   assert.equal(meta({ allergies: "Confirmed" })[126214], "Yes");
 });
 
-test("[C26][4.9] allergies Denial sends \"No\", without the explanation", () => {
-  assert.equal(meta({ allergies: "Denial" })[126214], "No");
-  assert.equal(meta({ allergies: "Denial", allergies__yes__explain: "left over" })[126214], "No");
+test("[C26][4.9] allergies Denial sends \"None\", without the explanation", () => {
+  assert.equal(meta({ allergies: "Denial" })[126214], "None");
+  assert.equal(meta({ allergies: "Denial", allergies__yes__explain: "left over" })[126214], "None");
 });
 
 test("[C26][4.9] Known Allergies is blank when allergies is blank or not a stored option", () => {
@@ -335,38 +354,123 @@ test("[C34][4.12] most_recent_asd_diagnosis_date_2 is not read", () => {
 
 // --- 4.13, C24: Service Location Address ---
 
+// Item 5 (CF §12.4, §12.5): CentralReach's two-line form, "<street> <apt>\n<City> <ST> <ZIP>",
+// built from the parts. full_home_address is no longer read.
+const HOME_ADDRESS = {
+  street_address: "101 Main St",
+  home_apt: "Apt 1A",
+  location_city: "New York",
+  location: "New York",
+  postal_code: "10001"
+};
 const SERVICE_ADDRESS = {
-  full_home_address: "123 Main St, Apt 1E, Albany, NY 12207",
-  service__street_address: "50 School Rd",
-  service__apt: "Room 4",
-  service__city: "Troy",
-  service__postal_code: "12180",
+  service__street_address: "200 Service Rd",
+  service__apt: "Suite 2",
+  service__city: "Denver",
+  service__stateregion_2: "Colorado",
+  service__postal_code: "80202",
   service_address__other: "50 School Rd, Room 4, Troy 12180"
 };
+const home = (properties) =>
+  meta({ ...HOME_ADDRESS, specific_home_location: "Child's House", ...properties })[137697];
+const other = (properties) =>
+  meta({ ...SERVICE_ADDRESS, specific_home_location: "Other Location", ...properties })[137697];
 
-test("[C24][4.13] specific_home_location Child's House sends full_home_address to field 137697", () => {
+test("[C24][4.13] Child's House and More Than One Location send the home address in two lines, the state from location when stateregion is blank", () => {
+  for (const location of ["Child's House", "More Than One Location"]) {
+    assert.equal(
+      meta({ ...HOME_ADDRESS, specific_home_location: location })[137697],
+      "101 Main St Apt 1A\nNew York NY 10001",
+      location
+    );
+  }
+  assert.equal(home({ home_apt: "" }), "101 Main St\nNew York NY 10001");
+});
+
+test("[C24][4.13] a filled stateregion wins over location; an unreadable one falls back to location; both blank leaves the state out", () => {
+  assert.equal(home({ stateregion: "NJ" }), "101 Main St Apt 1A\nNew York NJ 10001");
+  assert.equal(home({ stateregion: "Brooklyn" }), "101 Main St Apt 1A\nNew York NY 10001");
+  assert.equal(home({ location: "" }), "101 Main St Apt 1A\nNew York 10001");
+});
+
+test("[C24][4.13] a placeholder apartment is blank and any other apartment is sent as stored, marker included", () => {
+  for (const placeholder of ["NA", "n/a", "None", "no.", "-"]) {
+    assert.equal(home({ home_apt: placeholder }), "101 Main St\nNew York NY 10001", placeholder);
+  }
+  assert.equal(home({ home_apt: "Unit 9" }), "101 Main St Unit 9\nNew York NY 10001");
+  assert.equal(home({ home_apt: "#9" }), "101 Main St #9\nNew York NY 10001");
+});
+
+test("[C24][4.13] a blank street sends nothing, even with the city, state and ZIP filled", () => {
+  assert.equal(home({ street_address: "" }), null);
+  assert.equal(home({ street_address: "   " }), null);
+  assert.equal(other({ service__street_address: "" }), null);
+});
+
+test("[C24][4.13] city, state and ZIP all blank: line 1 alone with no line break", () => {
+  assert.equal(home({ location_city: "", location: "", postal_code: "" }), "101 Main St Apt 1A");
+});
+
+test("[C24][4.13] parts are trimmed and runs of spaces collapsed; no commas are added", () => {
   assert.equal(
-    meta({ ...SERVICE_ADDRESS, specific_home_location: "Child's House" })[137697],
-    "123 Main St, Apt 1E, Albany, NY 12207"
+    home({ street_address: "  101   Main St ", home_apt: " Apt  1A ", location_city: " New  York " }),
+    "101 Main St Apt 1A\nNew York NY 10001"
   );
 });
 
-test("[C24][4.13] specific_home_location More Than One Location sends full_home_address to field 137697", () => {
+test("[C24][4.13] full_home_address is not read: filled with the parts blank sends nothing", () => {
   assert.equal(
-    meta({ ...SERVICE_ADDRESS, specific_home_location: "More Than One Location" })[137697],
-    "123 Main St, Apt 1E, Albany, NY 12207"
+    meta({
+      specific_home_location: "Child's House",
+      full_home_address: "123 Main St,\nApt# 1E, Albany, New York 12207"
+    })[137697],
+    null
   );
 });
 
-test("[C24][4.13] specific_home_location Other Location sends the service address parts to field 137697", () => {
+test("[C24][4.13] Other Location sends the service address parts in two lines, the state from Service -State", () => {
+  assert.equal(other({}), "200 Service Rd Suite 2\nDenver CO 80202");
+});
+
+test("[C24][4.13] Other Location with Service -State blank or unreadable uses the Case state (stateregion, else location)", () => {
+  assert.equal(other({ service__stateregion_2: "", location: "Colorado" }), "200 Service Rd Suite 2\nDenver CO 80202");
+  assert.equal(other({ service__stateregion_2: "Mars", stateregion: "NJ" }), "200 Service Rd Suite 2\nDenver NJ 80202");
+  assert.equal(other({ service__stateregion_2: "" }), "200 Service Rd Suite 2\nDenver 80202");
+});
+
+test("[C24][4.13] a service street that holds a whole one-line address gives both lines, and the separate city and ZIP are not added", () => {
   assert.equal(
-    meta({ ...SERVICE_ADDRESS, specific_home_location: "Other Location" })[137697],
-    "50 School Rd, Room 4, Troy, 12180"
+    other({ service__street_address: "12-34 56th Ave, Queens, NY 11356", service__apt: "" }),
+    "12-34 56th Ave\nQueens NY 11356"
+  );
+  assert.equal(
+    other({ service__street_address: "12-34 56th Ave, Queens, NY 11356" }),
+    "12-34 56th Ave Suite 2\nQueens NY 11356"
+  );
+});
+
+test("[C24][4.13] a street is taken as a whole address only when a state name or code comes directly before the ZIP; the state is kept as typed", () => {
+  assert.equal(
+    other({ service__street_address: "12-34 56th Ave, Queens, New York 11356", service__apt: "" }),
+    "12-34 56th Ave\nQueens New York 11356"
+  );
+  assert.equal(
+    other({ service__street_address: "12 Oak St, Albany NY, 12207-1234", service__apt: "" }),
+    "12 Oak St\nAlbany NY 12207-1234"
+  );
+  // A comma and a five-digit ending with no state before it: a street; the parts give line 2.
+  assert.equal(
+    other({ service__street_address: "100 Main St, Suite 10001", service__apt: "" }),
+    "100 Main St, Suite 10001\nDenver CO 80202"
+  );
+  assert.equal(
+    other({ service__street_address: "PO Box, 12345", service__apt: "" }),
+    "PO Box, 12345\nDenver CO 80202"
   );
 });
 
 test("[C24][4.13] Service Location Address is blank when specific_home_location is blank, and the field is a TextArea", () => {
-  assert.equal(meta({ ...SERVICE_ADDRESS })[137697], null);
+  assert.equal(meta({ ...HOME_ADDRESS, ...SERVICE_ADDRESS })[137697], null);
   assert.equal(CENTRAL_REACH_METADATA_FIELD_TYPES[137697], "TextArea");
 });
 
@@ -377,6 +481,17 @@ test("[C25][4.22] More Than One Location sends service_address__other to field 1
     meta({ ...SERVICE_ADDRESS, specific_home_location: "More Than One Location" })[138091],
     "50 School Rd, Room 4, Troy 12180"
   );
+});
+
+test("[C25][4.22] Address 2 that, without its commas, is empty or only a state name or code is null; a real address is sent as stored, trimmed", () => {
+  const address2 = (value, location = "More Than One Location") =>
+    meta({ specific_home_location: location, service_address__other: value })[138091];
+  for (const junk of [",  , New York ", ", , NY", " , , ", "new york,", "N.Y."]) {
+    assert.equal(address2(junk), null, junk);
+  }
+  assert.equal(address2(" 12 Oak St, Albany, NY 12207 "), "12 Oak St, Albany, NY 12207");
+  assert.equal(address2("Albany, New York"), "Albany, New York");
+  assert.equal(address2(",  , New York ", "Child's House"), null);
 });
 
 test("[C25][4.22] Service Location Address 2 is blank for any other specific_home_location value", () => {
@@ -391,7 +506,19 @@ test("[C25][4.22] Service Location Address 2 is blank for any other specific_hom
 
 // --- 4.14, mapper side (contract P.5 b): staff names are inputs ---
 
-const NO_STAFF = { initialAssessmentBcba: [], reEvaluationBcba: [], primaryBt1: [], primaryBt2: [] };
+// Items 9 and 10 add the Outgoing BT and the four supervising roles to the worker's staffNames.
+const NO_STAFF = {
+  initialAssessmentBcba: [],
+  reEvaluationBcba: [],
+  primaryBt1: [],
+  primaryBt2: [],
+  outgoingBt1: [],
+  outgoingBt2: [],
+  supervisingBcba: [],
+  subBcba: [],
+  outgoingSubBcba: [],
+  outgoingSupervisingBcba: []
+};
 const TEXT_STAFF_PROPERTIES = {
   initial_assessment_bcba: "Text IA",
   supervising_bcba: "Text Supervising",
@@ -468,32 +595,37 @@ test("[BR16][4.14] a role missing from staffNames leaves only that role's field 
 
 // --- 4.15, C12: Supervising BCBA ---
 
-test("[C12][4.15] Supervising BCBA is the typed text of ongoing_central_reach_provider_supplier, never supervising_bcba", () => {
-  const values = meta({
-    ongoing_central_reach_provider_supplier: "  Dana Supplier, BCBA ",
-    supervising_bcba: "Text Supervising"
-  });
+test("[C12][4.15] with no BCBA in a supervising role, Supervising BCBA is the typed text of ongoing_central_reach_provider_supplier, never supervising_bcba", () => {
+  // Item 9: the supplier is now the fallback when none of the four supervising roles holds a
+  // BCBA. Text that already holds "BCBA" is sent as typed.
+  const values = meta(
+    {
+      ongoing_central_reach_provider_supplier: "  Dana Supplier, BCBA ",
+      supervising_bcba: "Text Supervising"
+    },
+    { staffNames: NO_STAFF }
+  );
   assert.equal(values[131308], "Dana Supplier, BCBA");
-  assert.equal(meta({ supervising_bcba: "Text Supervising" })[131308], null);
+  // A blank supplier sends nothing (insert E): the key is left out, never a clear.
+  const blank = meta({ supervising_bcba: "Text Supervising" }, { staffNames: NO_STAFF });
+  assert.equal(Object.prototype.hasOwnProperty.call(blank, 131308), false);
 });
 
-// --- 4.16, C10: Care Coordinator (decision 39: the Case property care_coordinator_name) ---
+// --- 4.16, C10: Care Coordinator (item 6: the coordinator workflow's fields; was decision 39) ---
 
-test("[C10][4.16] Care Coordinator is the trimmed text of care_coordinator_name, in field 138851; hubspot_owner_id is not read", () => {
-  assert.equal(meta({ care_coordinator_name: "  Casey Jordan " })[138851], "Casey Jordan");
-  assert.equal(meta({ hubspot_owner_id: "77" })[138851], null);
+const READY_COORDINATOR = Object.freeze({
+  coordinator_export_status: "ready",
+  care_coordinator_first_name: " Casey ",
+  care_coordinator_last_name: "Jordan "
 });
 
-test("[C10][4.16] a blank care_coordinator_name (null or \"\") sends a blank Care Coordinator, with its key present", () => {
-  for (const blank of [null, ""]) {
-    const values = meta({ care_coordinator_name: blank });
-    assert.equal(has(values, 138851), true);
-    assert.equal(values[138851], null);
-  }
+test("[C10][4.16] Care Coordinator is \"<first> <last>\" in field 138851 when the status is ready; care_coordinator_name and hubspot_owner_id are not read", () => {
+  assert.equal(meta(READY_COORDINATOR)[138851], "Casey Jordan");
+  assert.equal(meta({ care_coordinator_name: "Riley Chen", hubspot_owner_id: "77" })[138851], null);
 });
 
-test("[BR16][4.16] field 138851 named in omitFieldIds is left out even when care_coordinator_name is filled", () => {
-  const values = meta({ care_coordinator_name: "Casey Jordan" }, { omitFieldIds: [138851] });
+test("[BR16][4.16] field 138851 named in omitFieldIds is left out even when the Care Coordinator is ready", () => {
+  const values = meta(READY_COORDINATOR, { omitFieldIds: [138851] });
   assert.equal(has(values, 138851), false);
 });
 
@@ -509,23 +641,23 @@ const physicianFor = (insuranceType) =>
   meta({ ...PHYSICIANS, n1_what_type_of_insurance: insuranceType })[131151];
 
 test("[C31][4.23] Medicaid FFS uses the Medicaid physician and NPI", () => {
-  assert.equal(physicianFor("Medicaid FFS"), "Dr Medicaid, 1112223334");
+  assert.equal(physicianFor("Medicaid FFS"), "Dr Medicaid 1112223334");
 });
 
 test("[C31][4.23] Medicaid FFS - NJ uses the Medicaid physician and NPI", () => {
-  assert.equal(physicianFor("Medicaid FFS - NJ"), "Dr Medicaid, 1112223334");
+  assert.equal(physicianFor("Medicaid FFS - NJ"), "Dr Medicaid 1112223334");
 });
 
 test("[C31][4.23] Medicaid FFS - CO uses the Medicaid physician and NPI", () => {
-  assert.equal(physicianFor("Medicaid FFS - CO"), "Dr Medicaid, 1112223334");
+  assert.equal(physicianFor("Medicaid FFS - CO"), "Dr Medicaid 1112223334");
 });
 
 test("[C31][4.23] Commercial Enrolled uses the commercial physician and NPI", () => {
-  assert.equal(physicianFor("Commercial Enrolled"), "Dr Commercial, 5556667778");
+  assert.equal(physicianFor("Commercial Enrolled"), "Dr Commercial 5556667778");
 });
 
 test("[C31][4.23] Commercial OON uses the commercial physician and NPI", () => {
-  assert.equal(physicianFor("Commercial OON"), "Dr Commercial, 5556667778");
+  assert.equal(physicianFor("Commercial OON"), "Dr Commercial 5556667778");
 });
 
 test("[C31][4.23] Unsure sends a blank referring physician", () => {
@@ -536,6 +668,49 @@ test("[C31][4.23] a blank insurance type, or a value that is not one of the six,
   assert.equal(physicianFor(""), null);
   assert.equal(meta({ ...PHYSICIANS })[131151], null);
   assert.equal(physicianFor("Medicaid"), null);
+});
+
+// Item 4 (CF §5.1, §9.3): "<name> <npi>" with one space and no comma, as CentralReach holds it.
+test("[C31][4.23] the physician and NPI are joined by one space with no comma, for the Medicaid and the commercial pair", () => {
+  assert.equal(
+    meta({ n1_what_type_of_insurance: "Medicaid FFS", physician_name: "Dr. Ann Lee", npi_number: "1234567890" })[131151],
+    "Dr. Ann Lee 1234567890"
+  );
+  assert.equal(
+    meta({
+      n1_what_type_of_insurance: "Commercial OON",
+      physician_name__commercial: "Bo Kim MD",
+      npi_number__commercial: "1098765432"
+    })[131151],
+    "Bo Kim MD 1098765432"
+  );
+});
+
+test("[C31][4.23] a trailing comma typed after the physician name is dropped", () => {
+  assert.equal(
+    meta({ n1_what_type_of_insurance: "Medicaid FFS - CO", physician_name: "Dr. Ann Lee,", npi_number: "1234567890" })[131151],
+    "Dr. Ann Lee 1234567890"
+  );
+  // Trailing commas and spaces in any mix; a name of only commas and spaces is blank.
+  assert.equal(
+    meta({ n1_what_type_of_insurance: "Medicaid FFS - CO", physician_name: "Dr. Ann Lee, ,", npi_number: "1234567890" })[131151],
+    "Dr. Ann Lee 1234567890"
+  );
+  assert.equal(
+    meta({ n1_what_type_of_insurance: "Medicaid FFS - CO", physician_name: " , ,", npi_number: "1234567890" })[131151],
+    "1234567890"
+  );
+});
+
+test("[C31][4.23] the physician name alone or the NPI alone is sent as that part only", () => {
+  assert.equal(
+    meta({ n1_what_type_of_insurance: "Medicaid FFS", physician_name: "Dr. Ann Lee", npi_number: "" })[131151],
+    "Dr. Ann Lee"
+  );
+  assert.equal(
+    meta({ n1_what_type_of_insurance: "Medicaid FFS", physician_name: "", npi_number: "1234567890" })[131151],
+    "1234567890"
+  );
 });
 
 // --- The primary insurance row is unchanged (C29) ---
@@ -645,7 +820,7 @@ test("[C23][4.8] rule 5.7: a blank date stays a blank with its key present, and 
 test("[BR16][4.16] omitFieldIds null or undefined is an empty list, not a crash", () => {
   for (const omitFieldIds of [null, undefined]) {
     const values = meta(
-      { referral_source: "Pediatrician", care_coordinator_name: "Casey Jordan" },
+      { referral_source: "Pediatrician", ...READY_COORDINATOR },
       { omitFieldIds }
     );
     assert.equal(values[126222], "Pediatrician");

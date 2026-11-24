@@ -49,7 +49,7 @@ describe("employee External System ID", () => {
       first_name: "Pat",
       last_name: "Morgan",
       email: "pat@work.test",
-      dob: "10/20/1990"
+      date_of_birth: "10/20/1990"
     });
     const result = validateEmployeePayload(payload, { linked: false, emailField: "email" });
     assert.equal(result.isValid, true);
@@ -156,11 +156,12 @@ describe("BT/RBT Active Case Count", () => {
 });
 
 // Central Reach requires a date of birth to create an employee. BT/RBT reads date_of_birth
-// (Zeke, 2026-11-16). BCBA reads dob (decision 48, 2026-11-21; pending United Care, O-10).
+// (Zeke, 2026-11-16). BCBA reads date_of_birth too (item 1, O-10; Zeke 2026-11-23, replacing the
+// `dob` of decision 48).
 describe("employee date of birth", () => {
-  it("[B5][1.4] BCBA reads dob and BT/RBT reads date_of_birth", () => {
+  it("[B5][1.4] BCBA and BT/RBT both read date_of_birth", () => {
     assert.equal(
-      mapEmployee("bcba", { bcba_name: "Pat Morgan", dob: "10/20/1990" }).dateOfBirth,
+      mapEmployee("bcba", { bcba_name: "Pat Morgan", date_of_birth: "10/20/1990" }).dateOfBirth,
       "1990-10-20"
     );
     assert.equal(
@@ -169,9 +170,9 @@ describe("employee date of birth", () => {
     );
   });
 
-  it("[B5][1.4] BCBA does not read date_of_birth", () => {
+  it("[B5][1.4] BCBA does not read dob", () => {
     assert.equal(
-      mapEmployee("bcba", { bcba_name: "Pat Morgan", date_of_birth: "1990-10-20" }).dateOfBirth,
+      mapEmployee("bcba", { bcba_name: "Pat Morgan", dob: "1990-10-20" }).dateOfBirth,
       null
     );
   });

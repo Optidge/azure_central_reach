@@ -79,18 +79,22 @@ Partners Enterprise API auth is only:
 - `CR_BASE_URL`
 - `CR_TOKEN_URL`
 
-### Portal and record gate settings (required)
+### Portal and record gate settings
 
-Both are in `REQUIRED_ENV_NAMES` in `src/lib/config.mjs`. The app does not start a run without them.
+`HUBSPOT_PORTAL_ID` and `SYNC_RECORD_GATE_PROPERTY` are in `REQUIRED_ENV_NAMES` in `src/lib/config.mjs`. The app does not start a run without `HUBSPOT_PORTAL_ID`, nor without `SYNC_RECORD_GATE_PROPERTY` unless both path settings below are set. The path settings are required in production (`50317927`) and optional in the sandbox.
 
-- `HUBSPOT_PORTAL_ID` — required. The HubSpot portal this app serves: sandbox `52311591` or production `50317927`. Any other value is invalid configuration. It builds the HubSpot record links, and every queue message must carry the same portal ID. The HubSpot token must belong to this portal. Before any HubSpot call the app reads `GET /account-info/v3/details` once (the answer is cached) and compares the portal ID. If they differ, the run ends with the error code `HUBSPOT_PORTAL_MISMATCH`, which names both portal IDs; no CRM call is made, and the message is retried and then dead-lettered like any configuration failure. The private app needs access to the account-info endpoint.
-- `SYNC_RECORD_GATE_PROPERTY` — required. The HubSpot checkbox property a record must have set to true before it syncs. The sandbox value is `sandbox_test_field`. The value `none` turns the gate off.
+- `HUBSPOT_PORTAL_ID` — always required. The HubSpot portal this app serves: sandbox `52311591` or production `50317927`. Any other value is invalid configuration. It builds the HubSpot record links, and every queue message must carry the same portal ID. The HubSpot token must belong to this portal. Before any HubSpot call the app reads `GET /account-info/v3/details` once (the answer is cached) and compares the portal ID. If they differ, the run ends with the error code `HUBSPOT_PORTAL_MISMATCH`, which names both portal IDs; no CRM call is made, and the message is retried and then dead-lettered like any configuration failure. The private app needs access to the account-info endpoint.
+- `SYNC_RECORD_GATE_PROPERTY` — required unless both path settings below are set (then it is not read and may be left out). The HubSpot checkbox property a record must have set to true before it syncs. The sandbox value is `sandbox_test_field`. The value `none` turns the gate off (sandbox only; invalid in production).
+- `SYNC_CREATE_GATE_PROPERTY`, `SYNC_UPDATE_GATE_PROPERTY` — the gate of each path; required in production, optional in the sandbox. A record whose HubSpot CR ID is blank is on the create path; a filled CR ID puts it on the update path. The record's property for its path must be true, or the run is skipped with reason `record_gate` (the `Sync run summary.` line then carries `gate`: `create` or `update`). Both properties are read on every run; a key missing from HubSpot's answer is a failed read.
+  - **Fallback (sandbox `52311591`):** a path setting that is not set uses `SYNC_RECORD_GATE_PROPERTY`. The sandbox sets neither, so both paths read `sandbox_test_field`.
+  - **Production (`50317927`):** both are required and must be exactly `SYNC_CREATE_GATE_PROPERTY` = `centralreach_creates_only` and `SYNC_UPDATE_GATE_PROPERTY` = `centralreach_updates_only` (case-sensitive, trimmed). A missing, swapped or misspelt name, `SYNC_RECORD_GATE_PROPERTY` = `none`, or `INCLUDE_TEST_RECORDS` = `true` (matched in any case, trimmed) is invalid configuration: every run fails before any HubSpot or CentralReach call.
+  - `none` in either path setting is invalid configuration on every portal.
 
 ### Optional settings this repo reads (not in required lists)
 
 These are used in code but are not required by `config.mjs` validation:
 
-- `INCLUDE_TEST_RECORDS` — `true` lets records with `test_record` = true sync, for a deliberate end-to-end test run only. Anything else, or not set, skips them.
+- `INCLUDE_TEST_RECORDS` — `true` (matched in any case, trimmed) lets records with `test_record` = true sync, for a deliberate end-to-end test run only (sandbox only; invalid in production). Anything else, or not set, skips them.
 - `HS_BCBA_OBJECT_TYPE_ID`, `HS_BT_RBT_OBJECT_TYPE_ID` — may be left out. The object type IDs come from the portal table in `config.mjs`; a value that differs from the table is invalid configuration.
 - `HUBSPOT_EMPLOYEE_ID_PROPERTY`, `ALLOW_EMPLOYEE_CREATE`, `PUT_ONLY_MODE` — employee sync behavior (`config.mjs` runtime flags)
 - `INTAKE_POLLER_SCHEDULE`: optional six-field NCRONTAB schedule for the intake poller; hourly (`0 0 * * * *`) when not set

@@ -58,12 +58,23 @@ const CASE_VALUES = Object.freeze({
   guardian_first_name: "Mortimer",
   guardian_last_name: "Fenwickson",
   policy_holder_name: "Wilhelmina Fitzgibbon",
-  care_coordinator_name: "Ottoline Brightwater",
+  care_coordinator_first_name: "Ottoline",
+  care_coordinator_last_name: "Brightwater",
   insurance_id_1: "INS-7Q4X9Z",
   insurance_id_2: "INS-2R8K5W",
   referring_provider_medicaid_id: "MCD-6T3V1B",
   physician_name: "Balthazar Quillfeather",
-  npi_number: "1093847562"
+  npi_number: "1093847562",
+  // C36: free text that may name a person; sent when referral_source is Other.
+  referral_other: "Referred by Gwendolyn Featherstonehaugh"
+});
+
+// The Case record: the values above, with the Care Coordinator ready so its name is sent (C10),
+// and the referral source Other so the referral text is sent (C36).
+const CASE_RECORD = Object.freeze({
+  ...CASE_VALUES,
+  coordinator_export_status: "ready",
+  referral_source: "Other"
 });
 
 // What an update changes: new values, also distinctive. The old ones stay in the list too.
@@ -93,7 +104,7 @@ const BAD_DATE = "Gloamingdale-13/45";
 const BCBA_VALUES = Object.freeze({
   first_name: "Evangelina",
   last_name: "Marchbanks",
-  dob: "7/23/1984",
+  date_of_birth: "7/23/1984",
   email: "evangelina.march@ucaba.example",
   address: "88 Larkspur Lane",
   apartment__home: "Unit 5K",
@@ -305,18 +316,19 @@ function echoingBody(values) {
 test("[BR21][3.9] Case run, create: no person value in any log, status or message", async () => {
   const { cr } = setup();
   const sink = newSink();
-  const record = stage3Case(CASE_VALUES);
+  const record = stage3Case(CASE_RECORD);
   const result = await runCase(sink, record);
   assert.equal(result.status, "success");
   assert.equal(result.operation, "create");
   assertValuesWereSent(cr, withForms([CASE_VALUES.phi_first_name__cloned_, CASE_VALUES.street_address]));
+  assertValuesWereSent(cr, [CASE_VALUES.referral_other]);
   assertNoValues(sink, record, [...caseValues(CASE_VALUES), ...withForms(STAFF_VALUES)]);
 });
 
 test("[BR21][3.9] Case run, update that changes many fields (found by the poller): the changed-fields line names fields only", async () => {
   const { cr } = setup();
   const sink = newSink();
-  const record = linkedCase(cr, CASE_VALUES);
+  const record = linkedCase(cr, CASE_RECORD);
   const first = await runCase(sink, record, { source: "hubspotWorkflow" });
   assert.equal(first.status, "success");
 
@@ -340,7 +352,7 @@ test("[BR21][3.9] Case run, update that changes many fields (found by the poller
 test("[BR21][3.9] Case run, mapper warning (a staff record with no name): the warning names the role, never a staff name", async () => {
   const { cr } = setup();
   const sink = newSink();
-  const record = linkedCase(cr, CASE_VALUES);
+  const record = linkedCase(cr, CASE_RECORD);
   const result = await runCase(sink, record, { staff: staffOnCase({ nameless: true }) });
   assert.equal(result.status, "success");
   const warning = sink.logs.find((entry) => entry.message === "Client metadata mapper warning.");
@@ -352,7 +364,7 @@ test("[BR21][3.9] Case run, mapper warning (a staff record with no name): the wa
 test("[BR21][3.9] Case run, decided error (an answer without a requested key; an unreadable date): reasons name properties only", async () => {
   const { cr } = setup();
   const sink = newSink();
-  const record = linkedCase(cr, CASE_VALUES);
+  const record = linkedCase(cr, CASE_RECORD);
   const missingKey = await runCase(sink, record, {
     overrides: {
       getDealById: async (dealId, names) => {
@@ -383,7 +395,7 @@ test("[BR21][3.9] Case run, CentralReach failure: a 400 that echoes values, and 
   const { cr } = setup();
   const sink = newSink();
   const echoed = [CASE_VALUES.phi_first_name__cloned_, CASE_VALUES.email, CASE_VALUES.street_address];
-  const record = linkedCase(cr, CASE_VALUES);
+  const record = linkedCase(cr, CASE_RECORD);
 
   cr.fail("PUT /contacts/client/{id}", httpError(400, { data: echoingBody(echoed) }));
   const refused = await runCase(sink, record);
@@ -402,7 +414,7 @@ test("[BR21][3.9] Case run, label step: a refused label POST that echoes values,
   const { cr } = setup();
   const sink = newSink();
   const echoed = [CASE_VALUES.phi_last_name, CASE_VALUES.guardian_first_name];
-  const record = linkedCase(cr, CASE_VALUES);
+  const record = linkedCase(cr, CASE_RECORD);
 
   cr.fail("POST /contacts/{id}/labels", httpError(400, { data: echoingBody(echoed) }));
   const refused = await runCase(sink, record);
@@ -498,7 +510,7 @@ test("[BR21][3.9] BCBA run, decided error (a missing key; an unreadable date)", 
   });
   assert.equal(missingKey.status, "error");
 
-  record.write({ dob: BAD_DATE });
+  record.write({ date_of_birth: BAD_DATE });
   const unreadable = await runEmployee(sink, record, HUBSPOT_EMPLOYEE_TYPES.BCBA, {
     overrides: bcbaContact()
   });

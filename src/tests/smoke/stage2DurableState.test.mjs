@@ -58,7 +58,7 @@ function setup() {
   return { container, cr };
 }
 
-function linkedEmployee(cr, contactId = "7001", externalSystemId = "WD1") {
+function linkedEmployee(cr, contactId = "7001", externalSystemId = "1000001") {
   cr.employees.set(contactId, {
     contactId,
     externalSystemId,
@@ -106,7 +106,7 @@ test("[2.1] a successful employee run writes the link record with no expiry", as
   assert.equal(link.ttl, LINK_TTL_NEVER);
   assert.equal(LINK_TTL_NEVER, -1);
   assert.equal(link.data.crContactId, "7001");
-  assert.equal(link.data.externalSystemId, "WD1");
+  assert.equal(link.data.externalSystemId, "1000001");
   assert.equal(link.data.clean, true);
   assert.equal(Object.keys(link.data.fieldHashes).length > 0, true);
   for (const entry of linkWrites(container, EMPLOYEE_LINK_PK)) {
@@ -219,7 +219,7 @@ test("[2.1] saveLinkRecord reads the record first and keeps the fields the calle
       crContactId: "7001",
       fieldHashes: { "employee.firstName": "abc" },
       hashesContactId: "7001",
-      pendingCreateExternalId: "WD1",
+      pendingCreateExternalId: "1000001",
       clean: true
     }
   });
@@ -238,7 +238,7 @@ test("[2.1] saveLinkRecord reads the record first and keeps the fields the calle
   assert.equal(link.data.crContactId, "7001");
   assert.deepEqual(link.data.fieldHashes, { "employee.firstName": "abc" });
   assert.equal(link.data.hashesContactId, "7001");
-  assert.equal(link.data.pendingCreateExternalId, "WD1");
+  assert.equal(link.data.pendingCreateExternalId, "1000001");
 });
 
 test("[2.1] a run that ends waiting but whose CentralReach writes all succeeded is clean and saves its hashes", async () => {
@@ -343,7 +343,7 @@ test("[2.2] hashesContactId is written only when hashes are saved, so old hashes
 
 test("[2.3] a create that timed out, then workday_id edited: the retry finds the first employee and does not create", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   // CentralReach creates the employee, but the answer never arrives.
   cr.fail(EMPLOYEE_POST, timeoutError(), { afterHandling: true });
 
@@ -351,17 +351,17 @@ test("[2.3] a create that timed out, then workday_id edited: the retry finds the
 
   assert.equal(cr.count(EMPLOYEE_POST), 1);
   const pending = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID);
-  assert.equal(pending.data.pendingCreateExternalId, "WD1");
+  assert.equal(pending.data.pendingCreateExternalId, "1000001");
   assert.equal(pending.ttl, -1);
   assert.equal(record.properties.employee_id, "");
 
-  record.properties.workday_id = "WD2";
+  record.properties.workday_id = "1000002";
   const callsBeforeRetry = cr.calls.length;
   const result = await runBt(record);
 
   const retryCalls = cr.calls.slice(callsBeforeRetry);
   assert.equal(retryCalls[0].name, EMPLOYEE_LOOKUP);
-  assert.equal(retryCalls[0].url.endsWith("ExternalSystemId=WD1"), true);
+  assert.equal(retryCalls[0].url.endsWith("ExternalSystemId=1000001"), true);
   assert.equal(cr.count(EMPLOYEE_POST), 1);
   assert.equal(cr.employees.size, 1);
   const created = Array.from(cr.employees.values())[0];
@@ -377,7 +377,7 @@ test("[2.3] a create that timed out, then workday_id edited: the retry finds the
 
 test("[2.3] the pending External System ID is saved before the create is sent", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   let pendingAtCreate;
   cr.onRequest = (name) => {
     if (name === EMPLOYEE_POST) {
@@ -387,12 +387,12 @@ test("[2.3] the pending External System ID is saved before the create is sent", 
 
   await runBt(record);
 
-  assert.equal(pendingAtCreate, "WD1");
+  assert.equal(pendingAtCreate, "1000001");
 });
 
 test("[2.3a] if saving the pending ID fails, no create is sent", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   container.beforeWrite = (operation, doc) => {
     if (doc?.data?.pendingCreateExternalId) {
       throw Object.assign(new Error("Cosmos answered 503"), { code: 503 });
@@ -407,7 +407,7 @@ test("[2.3a] if saving the pending ID fails, no create is sent", async () => {
 
 test("[2.3b] an employee found by the pending ID is linked and updated, not created again", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   cr.fail(EMPLOYEE_POST, timeoutError(), { afterHandling: true });
   await assert.rejects(runBt(record));
 
@@ -426,15 +426,15 @@ test("[2.3b] an employee found by the pending ID is linked and updated, not crea
 
 test("[2.3b] a pending Workday ID whose CentralReach employee another HubSpot record holds is an error, not a link", async () => {
   const { container, cr } = setup();
-  linkedEmployee(cr, "7007", "WD1");
+  linkedEmployee(cr, "7007", "1000001");
   await putState({
     pk: EMPLOYEE_LINK_PK,
     id: BT_LINK_ID,
     type: "link",
     ttlSeconds: -1,
-    data: { pendingCreateExternalId: "WD1" }
+    data: { pendingCreateExternalId: "1000001" }
   });
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
 
   const result = await runBt(record, { holders: [{ id: "OTHER", objectTypeId: "2-72890322" }] });
 
@@ -447,7 +447,7 @@ test("[2.3b] a pending Workday ID whose CentralReach employee another HubSpot re
 
 test("[2.3c] the pending ID is cleared when the CR ID is saved", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
 
   const result = await runBt(record);
 
@@ -456,13 +456,13 @@ test("[2.3c] the pending ID is cleared when the CR ID is saved", async () => {
   const link = container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data;
   assert.equal(link.pendingCreateExternalId, null);
   assert.equal(typeof link.crContactId, "string");
-  assert.equal(link.externalSystemId, "WD1");
+  assert.equal(link.externalSystemId, "1000001");
 });
 
 for (const status of [400, 409]) {
   test(`[2.3c] the pending ID is cleared when CentralReach rejects the create (${status})`, async () => {
     const { container, cr } = setup();
-    const record = btRecord({ workday_id: "WD1" });
+    const record = btRecord({ workday_id: "1000001" });
     cr.fail(EMPLOYEE_POST, httpError(status));
 
     const result = await runBt(record);
@@ -487,7 +487,7 @@ test("[2.3c] the pending ID is cleared when its lookup answers 404, 15 minutes o
       pendingCreateSentAt: new Date(Date.now() - 16 * 60 * 1000).toISOString()
     }
   });
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
 
   // Create is turned off, so this run saves no new pending ID.
   const result = await runBt(record, {
@@ -503,17 +503,17 @@ test("[2.3c] the pending ID is cleared when its lookup answers 404, 15 minutes o
 
 test("[2.3c] a temporary failure keeps the pending ID, and the next run still does not create", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   cr.fail(EMPLOYEE_POST, timeoutError(), { afterHandling: true });
   await assert.rejects(runBt(record));
 
   // The retry cannot reach CentralReach for the lookup: nothing is cleared, nothing is created.
   cr.fail(EMPLOYEE_LOOKUP, timeoutError());
   await assert.rejects(runBt(record));
-  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.pendingCreateExternalId, "WD1");
+  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.pendingCreateExternalId, "1000001");
   assert.equal(cr.count(EMPLOYEE_POST), 1);
 
-  record.properties.workday_id = "WD2";
+  record.properties.workday_id = "1000002";
   await runBt(record);
   assert.equal(cr.count(EMPLOYEE_POST), 1);
   assert.equal(cr.employees.size, 1);
@@ -524,7 +524,7 @@ test("[2.3d] an employee create that returns no contact ID is an unknown create"
   cr.answer(EMPLOYEE_POST, {});
   await assert.rejects(
     createOrUpdateEmployee({
-      payload: { externalSystemId: "WD1", firstName: "Alex", lastName: "Rivera" },
+      payload: { externalSystemId: "1000001", firstName: "Alex", lastName: "Rivera" },
       employeeType: "bt_rbt",
       allowEmployeeCreate: true,
       putOnlyMode: false
@@ -765,7 +765,7 @@ test("[2.5] release deletes with IfMatch, and a release with no etag deletes not
 
 test("[2.5] both employee leases use the configured length and are released with their own etag", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
 
   await runBt(record);
 

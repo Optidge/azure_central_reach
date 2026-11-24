@@ -120,6 +120,29 @@ export function readStateCode(value) {
   return code ? { status: "value", value: code } : UNREADABLE;
 }
 
+// Item 5 (Zeke, 2026-11-23: "use hte fall back"; on an unreadable stateregion: "confirmed"): the
+// Case state is `stateregion`, else the Case `location`, else none. Answers { code, warning }.
+// An unreadable `stateregion` falls back to `location` and returns a warning code (never the
+// value); it does not end the run as `error`, so readStateCode is called directly, not through
+// createValueReader. Used by the core StateProvince and by line 2 of the service address (C24).
+export const CASE_STATE_WARNINGS = Object.freeze({
+  USED_LOCATION: "state_unreadable_used_location",
+  NO_FALLBACK: "state_unreadable_no_fallback"
+});
+
+export function readCaseStateCode(properties) {
+  const state = readStateCode(properties?.stateregion);
+  if (state.status === "value") {
+    return { code: state.value, warning: null };
+  }
+  const location = readStateCode(properties?.location);
+  const code = location.status === "value" ? location.value : null;
+  if (state.status === "blank") {
+    return { code, warning: null };
+  }
+  return { code, warning: code ? CASE_STATE_WARNINGS.USED_LOCATION : CASE_STATE_WARNINGS.NO_FALLBACK };
+}
+
 // male / female, and m / f when allowInitials (the employee side accepted initials before F-1).
 export function readGender(value, { allowInitials = false } = {}) {
   const text = filledText(value).toLowerCase();

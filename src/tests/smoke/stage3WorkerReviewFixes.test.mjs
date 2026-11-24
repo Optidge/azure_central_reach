@@ -163,7 +163,7 @@ test("[BR16][3.8] Case: the written value is still cleared when a second run fai
 
 test("[BR16][3.13] BT/RBT: a core value written by a run that then failed is sent blank when HubSpot is blank again, not sent back from CentralReach", async () => {
   const { container, cr } = setup();
-  seedStoredEmployee(cr, "5001", "WD1");
+  seedStoredEmployee(cr, "5001", "1000001");
   const record = stage3Bt({ employee_id: "5001", home_apt: "" });
   await runBt(record);
   assert.equal(lastBody(cr, EMPLOYEE_PUT).addressLine2, STORED_EMPLOYEE.addressLine2);
@@ -202,12 +202,12 @@ test("[BR16][3.13] BT/RBT: a core value sent by a create whose run then failed i
 
 test("[BR16][3.13] BT/RBT: in-progress hashes of one CR ID do not count for another", async () => {
   const { cr } = setup();
-  seedStoredEmployee(cr, "5001", "WD1");
+  seedStoredEmployee(cr, "5001", "1000001");
   const record = stage3Bt({ employee_id: "5001", home_apt: "Apt 9" });
   await assert.rejects(runBt(record, failingEmployeeWriteback));
 
   // Staff point the record at another employee. The integration wrote nothing there.
-  seedStoredEmployee(cr, "7777", "WD1", { addressLine2: "Suite 12" });
+  seedStoredEmployee(cr, "7777", "1000001", { addressLine2: "Suite 12" });
   record.properties.employee_id = "7777";
   record.properties.home_apt = "";
   await runBt(record);
@@ -218,12 +218,12 @@ test("[BR16][3.13] BT/RBT: in-progress hashes of one CR ID do not count for anot
 
 test("[BR16][3.13] an employee read that carries no contact object sends no update and ends as error with no retry", async () => {
   const { cr } = setup();
-  seedStoredEmployee(cr, "5001", "WD1");
+  seedStoredEmployee(cr, "5001", "1000001");
   const record = stage3Bt({ employee_id: "5001", home_apt: "" });
   // The fields sit at the top level only. The reader in centralReachClient.mjs accepts that.
   cr.answer("GET /contacts/employee/{id}", {
     contactId: "5001",
-    externalSystemId: "WD1",
+    externalSystemId: "1000001",
     primaryEmail: "stored@example.com",
     ...STORED_EMPLOYEE
   });
@@ -275,7 +275,7 @@ test("[BR16][3.7] Case: after a mapping version change every field is sent once,
 
 test("[BR16][3.7] BT/RBT: after a mapping version change a core field the integration wrote and HubSpot now leaves blank is sent blank", async () => {
   const { container, cr } = setup();
-  seedStoredEmployee(cr, "5001", "WD1");
+  seedStoredEmployee(cr, "5001", "1000001");
   const record = stage3Bt({ employee_id: "5001", home_apt: "Unit 9" });
   await runBt(record);
 
@@ -312,7 +312,7 @@ test("[BR16][3.7] Case: an omitted field keeps its saved hash across a mapping v
 test("[BR14][3.7] an unlinked waiting BT/RBT is not written again while its status and reason stay the same; a new reason is written", async () => {
   const { cr } = setup();
   // An employee already in CentralReach holds this Workday ID, and no HubSpot record holds it.
-  seedEmployee(cr, "6001", "WD1");
+  seedEmployee(cr, "6001", "1000001");
   const record = stage3Bt();
 
   await runBt(record);
@@ -487,14 +487,14 @@ async function seedMarkerWithoutTime(container, key, externalSystemId) {
 test("[BR3][3.15] BT/RBT: a pending marker with no readable time is stamped with the current time and held for 15 minutes from there", async () => {
   const { container, cr } = setup();
   const clock = testClock("2026-11-20T15:00:00.000Z");
-  await seedMarkerWithoutTime(container, BT_LINK, "WD1");
+  await seedMarkerWithoutTime(container, BT_LINK, "1000001");
   const record = stage3Bt();
   const run = () => runBt(record, { now: clock.now });
   const pending = (error) => error.code === "CR_CREATE_PENDING";
 
   await assert.rejects(run(), pending);
   assert.equal(cr.count("POST /contacts/employee"), 0);
-  assert.equal(link(container, BT_LINK).pendingCreateExternalId, "WD1");
+  assert.equal(link(container, BT_LINK).pendingCreateExternalId, "1000001");
   assert.equal(link(container, BT_LINK).pendingCreateSentAt, "2026-11-20T15:00:00.000Z");
 
   clock.advanceSeconds(14 * 60 + 59);

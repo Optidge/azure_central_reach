@@ -196,8 +196,8 @@ test("[BR5][P.1] the employee worker asks HubSpot for the listed properties plus
         first_name: "Sam",
         last_name: "Lee",
         email: "sam@example.com",
-        dob: "2/3/1988",
-        workday_id: "WD2",
+        date_of_birth: "2/3/1988",
+        workday_id: "1000002",
         sandbox_test_field: "true"
       }),
       reader: "getBcbaRecordById"

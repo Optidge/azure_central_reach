@@ -12,6 +12,9 @@
  *
  * Optional, read outside this file: INTAKE_POLLER_SCHEDULE (src/functions/intakePoller.mjs), the
  * poller's six-field NCRONTAB schedule. Hourly when it is not set.
+ * Optional, read here: SYNC_CREATE_GATE_PROPERTY and SYNC_UPDATE_GATE_PROPERTY (item 24), the gate
+ * of the create path and of the update path. Required in production (exact names); with both set,
+ * SYNC_RECORD_GATE_PROPERTY is not required.
  * See README.md → Configuration Notes for optional keys that are read elsewhere in src/.
  */
 const REQUIRED_ENV_NAMES = [
@@ -84,6 +87,13 @@ export function getOptionalEnv(name, defaultValue = "") {
  * excludedStaffingAssociationTypeIds: Case -> BCBA / BT/RBT association types that must not
  * sync (unlabeled BCBA, unlabeled BT/RBT, Potential IA, Potential Supervising, Potential BT 1,
  * Potential BT 2, Previous IA).
+ *
+ * staffingRoleAssociationTypeIds: the Case -> BCBA / BT/RBT role labels the Case worker reads
+ * (items 9 and 10, GP §8.3 and §8.4). onLeaveBcba is named only and never read: the label itself
+ * says "inactive" (GP §4.3). 236 is On Leave BCBA in production and Outgoing BT 2 in the sandbox.
+ *
+ * gradPermitSupervisorAssociationTypeId: the BCBA -> BCBA label "Grad Permit Supervisor
+ * (supervises this BCBA)", read from the Grad Permit holder's side (item 9 rule 3, GP §8.1).
  */
 export const HUBSPOT_PORTALS = Object.freeze({
   // Sandbox
@@ -96,8 +106,15 @@ export const HUBSPOT_PORTALS = Object.freeze({
       initialAssessmentBcba: 223,
       reEvaluationBcba: 229,
       primaryBt1: 238,
-      primaryBt2: 240
-    })
+      primaryBt2: 240,
+      subBcba: 217,
+      outgoingSubBcba: 221,
+      outgoingSupervisingBcba: 253,
+      onLeaveBcba: 233,
+      outgoingBt1: 244,
+      outgoingBt2: 236
+    }),
+    gradPermitSupervisorAssociationTypeId: 227
   }),
   // Production
   "50317927": Object.freeze({
@@ -109,8 +126,15 @@ export const HUBSPOT_PORTALS = Object.freeze({
       initialAssessmentBcba: 86,
       reEvaluationBcba: 145,
       primaryBt1: 76,
-      primaryBt2: 143
-    })
+      primaryBt2: 143,
+      subBcba: 234,
+      outgoingSubBcba: 288,
+      outgoingSupervisingBcba: 135,
+      onLeaveBcba: 236,
+      outgoingBt1: 131,
+      outgoingBt2: 166
+    }),
+    gradPermitSupervisorAssociationTypeId: 151
   })
 });
 
@@ -120,6 +144,16 @@ const PORTAL_OBJECT_TYPE_ENV_NAMES = Object.freeze({
   HS_BCBA_OBJECT_TYPE_ID: "bcbaObjectTypeId",
   HS_BT_RBT_OBJECT_TYPE_ID: "btRbtObjectTypeId"
 });
+
+// Production portal only (items 14 and 24, D18): each path's gate setting must name exactly this
+// property, so a missing, swapped or misspelt name refuses to run. The sandbox may name any
+// property, or neither (then both paths fall back to SYNC_RECORD_GATE_PROPERTY).
+const PRODUCTION_PORTAL_ID = "50317927";
+export const PRODUCTION_GATE_PROPERTIES = Object.freeze({
+  SYNC_CREATE_GATE_PROPERTY: "centralreach_creates_only",
+  SYNC_UPDATE_GATE_PROPERTY: "centralreach_updates_only"
+});
+const PATH_GATE_ENV_NAMES = Object.freeze(Object.keys(PRODUCTION_GATE_PROPERTIES));
 
 function invalidConfiguration(name) {
   return new Error(`Invalid configuration: ${name}`);
@@ -166,21 +200,98 @@ export function hubspotPortalId() {
 
 // Guide: skip test_record = true in normal processing. Set INCLUDE_TEST_RECORDS=true only for a
 // deliberate end-to-end test run.
-export function includeTestRecords() {
-  return getOptionalEnv("INCLUDE_TEST_RECORDS", "false").toLowerCase() === "true";
+function isTrueSetting(value) {
+  return String(value ?? "").trim().toLowerCase() === "true";
 }
 
-// Required app setting. "none" turns the gate off on purpose. Anything else is the
-// HubSpot checkbox property a record must have set to true.
-export function syncRecordGateProperty(value = process.env.SYNC_RECORD_GATE_PROPERTY) {
-  const raw = String(value ?? "").trim();
+export function includeTestRecords() {
+  return isTrueSetting(process.env.INCLUDE_TEST_RECORDS);
+}
+
+function settingValue(value) {
+  return String(value ?? "").trim();
+}
+
+function isNoneSetting(value) {
+  return settingValue(value).toLowerCase() === "none";
+}
+
+// Both path settings are set: SYNC_RECORD_GATE_PROPERTY is then not read and may be left out.
+function pathGatesSet(env) {
+  return PATH_GATE_ENV_NAMES.every((name) => settingValue(env[name]) !== "");
+}
+
+// Required app setting, unless both path settings are set. "none" turns the gate off on purpose.
+// Anything else is the HubSpot checkbox property a record must have set to true.
+export function syncRecordGateProperty(
+  value = process.env.SYNC_RECORD_GATE_PROPERTY,
+  { optional = false } = {}
+) {
+  const raw = settingValue(value);
   if (!raw) {
+    if (optional) {
+      return null;
+    }
     throw new Error("Missing required environment variable: SYNC_RECORD_GATE_PROPERTY");
   }
-  if (raw.toLowerCase() === "none") {
+  if (isNoneSetting(raw)) {
     return null;
   }
   return raw;
+}
+
+// SYNC_CREATE_GATE_PROPERTY or SYNC_UPDATE_GATE_PROPERTY (item 24). Not set → null: that path
+// falls back to SYNC_RECORD_GATE_PROPERTY (syncEligibility.gateProperties). "none" is invalid on
+// every portal: the only off switch is SYNC_RECORD_GATE_PROPERTY = none, sandbox only.
+export function syncPathGateProperty(name, value = process.env[name]) {
+  const raw = settingValue(value);
+  if (!raw) {
+    return null;
+  }
+  if (isNoneSetting(raw)) {
+    throw invalidConfiguration(name);
+  }
+  return raw;
+}
+
+// The raw gate settings. The fallback of a path to the record gate is not done here.
+function gateSettings(env = process.env) {
+  return {
+    recordGateProperty: syncRecordGateProperty(env.SYNC_RECORD_GATE_PROPERTY, {
+      optional: pathGatesSet(env)
+    }),
+    createGateProperty: syncPathGateProperty(
+      "SYNC_CREATE_GATE_PROPERTY",
+      env.SYNC_CREATE_GATE_PROPERTY
+    ),
+    updateGateProperty: syncPathGateProperty(
+      "SYNC_UPDATE_GATE_PROPERTY",
+      env.SYNC_UPDATE_GATE_PROPERTY
+    )
+  };
+}
+
+// Items 14 and 24 (R-28, row 3.12): settings that would open a gate. A path setting of "none" is
+// invalid everywhere. In production, each path setting must be exactly its production name, and
+// SYNC_RECORD_GATE_PROPERTY = none and INCLUDE_TEST_RECORDS = true are invalid. The sandbox keeps
+// both options.
+function invalidGateEnvNames(env) {
+  const invalid = PATH_GATE_ENV_NAMES.filter((name) => isNoneSetting(env[name]));
+  if (settingValue(env.HUBSPOT_PORTAL_ID) !== PRODUCTION_PORTAL_ID) {
+    return invalid;
+  }
+  for (const [name, exactName] of Object.entries(PRODUCTION_GATE_PROPERTIES)) {
+    if (settingValue(env[name]) !== exactName && !invalid.includes(name)) {
+      invalid.push(name);
+    }
+  }
+  if (isNoneSetting(env.SYNC_RECORD_GATE_PROPERTY)) {
+    invalid.push("SYNC_RECORD_GATE_PROPERTY");
+  }
+  if (isTrueSetting(env.INCLUDE_TEST_RECORDS)) {
+    invalid.push("INCLUDE_TEST_RECORDS");
+  }
+  return invalid;
 }
 
 // Central Reach has no sandbox, so an employee create is always a production write. It needs both
@@ -223,11 +334,16 @@ function invalidLeaseEnvNames(env) {
   return outlivesTheRun ? [] : ["LEASE_TTL_SECONDS"];
 }
 
+// SYNC_RECORD_GATE_PROPERTY is required only while one of the two path settings is not set.
+function requiredEnvNames(names, env) {
+  return pathGatesSet(env) ? names.filter((name) => name !== "SYNC_RECORD_GATE_PROPERTY") : names;
+}
+
 function validateEnvNames(requiredNames) {
   const missing = [];
   const placeholders = [];
 
-  requiredNames.forEach((name) => {
+  requiredEnvNames(requiredNames, process.env).forEach((name) => {
     const value = process.env[name];
     if (!value || value.trim() === "") {
       missing.push(name);
@@ -240,7 +356,11 @@ function validateEnvNames(requiredNames) {
   });
 
   // Set, but with a value the integration must not run with.
-  const invalid = [...invalidPortalEnvNames(process.env), ...invalidLeaseEnvNames(process.env)];
+  const invalid = [
+    ...invalidPortalEnvNames(process.env),
+    ...invalidLeaseEnvNames(process.env),
+    ...invalidGateEnvNames(process.env)
+  ];
 
   return {
     isValid: missing.length === 0 && placeholders.length === 0 && invalid.length === 0,
@@ -289,10 +409,9 @@ export function getIntakePollerConfig() {
       crContactIdProperty: getOptionalEnv("HUBSPOT_CR_CONTACT_ID_PROPERTY", "client_id_number"),
       employeeIdProperty: getOptionalEnv("HUBSPOT_EMPLOYEE_ID_PROPERTY", "employee_id")
     },
-    sync: {
-      // The poller and the daily sweep search inside the record gate (BUILD-PLAN row 3.4).
-      recordGateProperty: syncRecordGateProperty()
-    },
+    // The poller and the daily sweep search inside the record gate (BUILD-PLAN row 3.4), one
+    // gate per path (item 24).
+    sync: gateSettings(),
     ttl: {
       leaseTtlSeconds: Number(getRequiredEnv("LEASE_TTL_SECONDS"))
     },
@@ -333,7 +452,7 @@ export function getConfig() {
     },
     sync: {
       includeTestRecords: includeTestRecords(),
-      recordGateProperty: syncRecordGateProperty()
+      ...gateSettings()
     },
     ttl: {
       leaseTtlSeconds: Number(getRequiredEnv("LEASE_TTL_SECONDS")),

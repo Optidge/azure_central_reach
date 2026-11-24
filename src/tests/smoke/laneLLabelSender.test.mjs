@@ -48,6 +48,8 @@ const NY_EMPLOYEE = 1132655;
 const BT_NY = 1052630;
 const RBT_NY = 1052631;
 const BILLING_HOLD = 1103437;
+const BCBA_LBA_NY = 1052629;
+const GRAD_STUDENT_LBA_NY = 1092164;
 
 // The Case managed list of section 9.2: CL1 to CL4, with the three retired staffing IDs.
 const CLIENT_MANAGED = [
@@ -279,6 +281,31 @@ test("[BR19][TL3][L.2] a BT who becomes an RBT in New York: Behavior Technician 
     sorted(cr.labels.get(EMPLOYEE)),
     sorted([ALL_EMPLOYEES, CLINICAL, NY_EMPLOYEE, RBT_NY])
   );
+});
+
+// LBL-024 and LBL-060, the reverse direction: each swap is one POST with the old label left out.
+test("[BR19][L.2] an RBT who becomes a BT in New York, and a BCBA whose licence goes from Yes to Grad Permit, each get one POST with the old label out", async () => {
+  const bt = fakeCentralReach();
+  bt.labels.set(EMPLOYEE, [ALL_EMPLOYEES, CLINICAL, NY_EMPLOYEE, RBT_NY]);
+  const btRequired = [ALL_EMPLOYEES, CLINICAL, NY_EMPLOYEE, BT_NY];
+  const btSummary = await sendLabels(EMPLOYEE, {
+    labelIds: btRequired,
+    managedLabelIds: [NY_EMPLOYEE, BT_NY, RBT_NY]
+  });
+  assert.equal(bt.count(LABELS_POST), 1);
+  assert.deepEqual(sorted(btSummary.labelResult.postedLabelIds), sorted(btRequired));
+  assert.deepEqual(sorted(bt.labels.get(EMPLOYEE)), sorted(btRequired));
+
+  const bcba = fakeCentralReach();
+  bcba.labels.set(EMPLOYEE, [ALL_EMPLOYEES, CLINICAL, BCBA_HEADER, NY_EMPLOYEE, BCBA_LBA_NY]);
+  const bcbaRequired = [ALL_EMPLOYEES, CLINICAL, BCBA_HEADER, NY_EMPLOYEE, GRAD_STUDENT_LBA_NY];
+  const bcbaSummary = await sendLabels(EMPLOYEE, {
+    labelIds: bcbaRequired,
+    managedLabelIds: [NY_EMPLOYEE, BCBA_LBA_NY, GRAD_STUDENT_LBA_NY]
+  });
+  assert.equal(bcba.count(LABELS_POST), 1);
+  assert.deepEqual(sorted(bcbaSummary.labelResult.postedLabelIds), sorted(bcbaRequired));
+  assert.deepEqual(sorted(bcba.labels.get(EMPLOYEE)), sorted(bcbaRequired));
 });
 
 test("[BR19][L.2] a staff label the integration does not map is kept", async () => {

@@ -3,7 +3,7 @@ import {
   CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS
 } from "../../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../../constants/hubspot.mjs";
-import { readDate, readTextDate } from "../../lib/dates.mjs";
+import { readTextDate } from "../../lib/dates.mjs";
 import {
   createValueReader,
   readEmail,
@@ -30,14 +30,14 @@ export function externalSystemIdForCreate(properties, recordId) {
   return String(recordId ?? "").trim();
 }
 
-// The HubSpot property each employee type reads its date of birth from.
-// BT/RBT `date_of_birth` is a date picker (a property sync from the Contact): `readDate`.
-// BCBA: `dob`, single-line text typed as M/D/YYYY in production (decision 48, 2026-11-21).
-// Pending United Care's confirmation whether the BCBA date of birth lives in `dob` or
-// `date_of_birth` (O-10). Switching back is this one line. `readTextDate` converts the typed
-// forms to YYYY-MM-DD, the format sent to CentralReach `dateOfBirth`.
+// The HubSpot property each employee type reads its date of birth from. Both are `date_of_birth`
+// and both are text in production (EMP §1, 2026-11-23): the BT/RBT one is a property sync from the
+// Contact's text `date_of_birth` (item 16), the BCBA one plain text (item 1, O-10; Zeke 2026-11-23
+// "use date_of_birth", replacing `dob` of decision 48). `readTextDate` converts the typed forms to
+// YYYY-MM-DD, the format sent to CentralReach `dateOfBirth`. Blank on a create sends the
+// placeholder (centralReachClient.mjs, create only).
 export const BT_RBT_DATE_OF_BIRTH_PROPERTY = "date_of_birth";
-export const BCBA_DATE_OF_BIRTH_PROPERTY = "dob";
+export const BCBA_DATE_OF_BIRTH_PROPERTY = "date_of_birth";
 
 // B4 (decision 49, 2026-11-21): the BCBA CentralReach primaryEmail is the BCBA record's own
 // `email`, not `ucaba_email_address`.
@@ -48,11 +48,11 @@ export const BCBA_PRIMARY_EMAIL_PROPERTY = "email";
 // BT/RBT. The primary email stays on `email`.
 export const EMPLOYEE_PERSONAL_EMAIL_PROPERTY = "personal_email";
 
-function employeeDateFields(properties, property, readValue = readDate) {
+function employeeDateFields(properties, property) {
   if (!Object.prototype.hasOwnProperty.call(properties || {}, property)) {
     return { dateOfBirth: null, dateOfBirthStatus: "missing" };
   }
-  const read = readValue(properties[property]);
+  const read = readTextDate(properties[property]);
   if (read === "blank" || read === "unreadable") {
     return { dateOfBirth: null, dateOfBirthStatus: read };
   }
@@ -85,7 +85,8 @@ function multiCheckboxValues(value) {
 }
 
 // Contract P.5 (d). The Work State(s) options of HubSpot `location` that have a code today.
-// New Mexico and Virginia have no HubSpot value yet, so they are not here (BL3, TL2; O-6).
+// New Mexico and Virginia are `location` options too, but their mapping is deferred until the
+// client starts work in these states (package item 11), so they are not here (BL3, TL2; O-6).
 const WORK_STATE_CODES = {
   Colorado: "CO",
   "New Jersey": "NJ",
@@ -122,9 +123,10 @@ const ALL_ROLE_LABEL_IDS = Object.freeze([
 ]);
 
 // Decision 35 (row 5.12): the six role labels are managed only when bt_rbt_type is BT or RBT.
-// A type that is blank, or any other value (production also has "BT to RBT"), manages no role
-// label, so a role label the person already holds in CentralReach is left alone. The state
-// labels are always managed.
+// A type that is blank, or any other value (such as "BT to RBT": a sandbox option, and a hidden
+// option in production too; the production read of 2026-11-24 found 1 record holding it),
+// manages no role label, so a role label the person already holds in CentralReach is left alone.
+// The state labels are always managed.
 function managedBtRbtLabels(btRbtType) {
   const stateLabelIds = Object.values(STATE_LABELS);
   return Object.hasOwn(ROLE_LABELS, btRbtType ?? "")
@@ -287,7 +289,7 @@ function buildBtRbtPayload({ record, config }) {
 function buildBcbaPayload({ record, config }) {
   const properties = record?.properties || {};
   const recordId = properties.hs_object_id || record?.id;
-  const dateFields = employeeDateFields(properties, BCBA_DATE_OF_BIRTH_PROPERTY, readTextDate);
+  const dateFields = employeeDateFields(properties, BCBA_DATE_OF_BIRTH_PROPERTY);
   // B7, row 5.2: the mailing address reads the Contact mirrors. The Work States (`location`) drive
   // the labels.
   const { valueOf, unreadableValueProperties } = createValueReader(properties);

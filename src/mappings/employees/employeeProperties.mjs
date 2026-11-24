@@ -76,7 +76,7 @@ export const BCBA_PROPERTIES = Object.freeze({
     "workday_id",
     "first_name",
     "last_name",
-    // Date of birth (B5): BCBA_DATE_OF_BIRTH_PROPERTY, `dob` until United Care confirms (O-10).
+    // Date of birth (B5): BCBA_DATE_OF_BIRTH_PROPERTY, `date_of_birth` (item 1, O-10). `dob` is not read.
     BCBA_DATE_OF_BIRTH_PROPERTY,
     "gender_new",
     // primaryEmail (B4, decision 49) reads `email`; personal email, Meta 138069 (B9, row 6.4,

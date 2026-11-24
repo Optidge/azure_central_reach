@@ -112,6 +112,23 @@ test("Requirement 1: a clear 404 on the external-id lookup allows one create", a
 test("Requirement 1: an external-id match updates and never creates", async () => {
   const cr = fakeCentralReach({
     "GET /contacts/client/byExternalSystemId?ExternalSystemId=deal-1": () => ({ contact: { contactId: 55 } }),
+    // Item B21: the client read before the update, in the recorded shape.
+    "GET /contacts/client/55": () => ({
+      contact: {
+        contactId: 55,
+        gender: "",
+        dateOfBirth: "",
+        primaryEmail: "",
+        phoneCell: "",
+        addressLine1: "",
+        addressLine2: "",
+        city: "",
+        stateProvince: "",
+        zipPostalCode: "",
+        guardianFirstName: "",
+        guardianLastName: ""
+      }
+    }),
     "PUT /contacts/client/55": () => ({})
   });
   const result = await createOrUpdateClient({ payload: { ExternalSystemId: "deal-1" } });

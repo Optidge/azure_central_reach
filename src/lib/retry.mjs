@@ -15,6 +15,10 @@ export const MAX_RETRIES = RETRY_DELAYS_SECONDS.length;
 // No retry is scheduled further out than this, whatever Retry-After says (HubSpot's longest
 // Retry-After is 24 hours). A provider that is still busy then costs one more attempt.
 export const MAX_RETRY_DELAY_SECONDS = 24 * 3600;
+// Rule 5.6: a CentralReach label read can be about two minutes behind a write (label test of
+// 2026-11-20). For this long after a label POST no new POST is made for the contact
+// (centralReachClient.mjs), and the first retry of an unconfirmed POST waits as long (item 12).
+export const LABEL_POST_WINDOW_SECONDS = 150;
 
 export const FAILURE_KINDS = Object.freeze({
   TEMPORARY: "temporary",
@@ -34,7 +38,8 @@ export const FAILURE_KINDS = Object.freeze({
 //     CR_LABEL_READ_EMPTY         the label read came back empty for a contact this run did not
 //                                 create: nothing is posted (row L.2)
 //     CR_LABEL_POST_UNCONFIRMED   the read does not show the posted set yet. Set by the worker,
-//                                 after it saved the label POST in the link record (row L.3)
+//                                 after it saved the label POST in the link record (row L.3).
+//                                 Its first retry waits LABEL_POST_WINDOW_SECONDS (item 12)
 //   Label sender, permanent (`error` on the record, no retry):
 //     CR_LABEL_NOT_SENDABLE       a required label is outside CENTRAL_REACH_SENDABLE_LABEL_IDS,
 //                                 a code defect: nothing is posted (row L.1)
@@ -70,6 +75,7 @@ const PERMANENT_CODES = new Set([
   "CR_EXTERNAL_ID_REQUIRED",
   // CentralReach answered in a shape the code cannot read.
   "CR_EMPLOYEE_READ_FAILED",
+  "CR_CLIENT_READ_FAILED",
   "CR_LABEL_READ_FAILED",
   "CR_LOOKUP_UNREADABLE",
   "CR_LABEL_CATALOG_UNREADABLE",
@@ -158,10 +164,12 @@ export function metadataWriteFailedError(summary) {
 }
 
 // Row L.3: a label POST that the read does not show yet. The worker throws this after it saved
-// the POST in the link record; the run is retried on the normal schedule.
+// the POST in the link record; the run is retried on the normal schedule. Item 12: the retry
+// waits at least the label window, so the first one no longer lands inside CentralReach's lag.
 export function labelPostUnconfirmedError() {
   const error = new Error("LabelPostUnconfirmed");
   error.code = "CR_LABEL_POST_UNCONFIRMED";
+  error.retryAfterSeconds = LABEL_POST_WINDOW_SECONDS;
   return error;
 }
 
@@ -181,9 +189,14 @@ function readRetryAfterHeader(error) {
   );
 }
 
-// Retry-After as whole seconds from now, read from seconds or from an HTTP date. null when the
-// failure carries none.
+// Retry-After as whole seconds from now: the wait this integration set on the error (item 12),
+// else the longest wait of its failed fields, else the HTTP header read from seconds or from a
+// date. null when the failure carries none.
 export function retryAfterSeconds(error, now = Date.now()) {
+  const ownWait = error?.retryAfterSeconds;
+  if (Number.isFinite(ownWait) && ownWait >= 0) {
+    return ownWait;
+  }
   if (Array.isArray(error?.failedFields)) {
     const waits = error.failedFields
       .map((field) => field?.retryAfterSeconds)

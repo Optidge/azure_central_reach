@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { buildClientPayload } from "../../mappings/client/buildClientPayload.mjs";
 import { buildEmployeePayload } from "../../mappings/employees/buildEmployeePayload.mjs";
 import { CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS } from "../../constants/centralReach.mjs";
+import { WAITING_FOR_WORKDAY_ID } from "../../constants/syncReasons.mjs";
+import { employeeSyncEligibility } from "../../lib/syncEligibility.mjs";
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import {
@@ -15,10 +17,12 @@ import {
   employeeWorkflowDeps
 } from "./stage2Fakes.mjs";
 import {
+  BT_LINK,
   METADATA_PUT,
   linkedBcba,
   linkedBt,
   linkedCase,
+  seedEmployee,
   setup,
   stage3Bcba,
   stage3Bt,
@@ -150,6 +154,165 @@ for (const entered of ["Yes - Generic", "No- Made Inactive"]) {
     assert.equal(cr.count("POST /contacts/employee"), 0);
   });
 }
+
+// --- BR5 and BR12: every pipeline stage syncs; only the four Case Cleanup stages are skipped ---
+// Stage IDs from the production read of 2026-11-24 (requirements-review-2026-11-24/
+// prod-reads-output-2026-11-24.md); the sandbox BCBA and BT/RBT pipelines hold the same IDs.
+const BCBA_STAGE_IDS = Object.freeze({
+  Applied: "1275899417",
+  Contacted: "1275899418",
+  "Sent Application": "1275697157",
+  "Hiring In Process": "1275697158",
+  Hired: "1363901493",
+  Paused: "1275697162",
+  Disqualified: "1275697163",
+  Resigned: "1344955696",
+  Terminated: "1344955697",
+  "Possibility (Apploi)": "1331112264",
+  "Apploi from Link": "1467178927"
+});
+const BT_RBT_STAGE_IDS = Object.freeze({
+  Applied: "1216616245",
+  Contacted: "1216616246",
+  "Sent Application": "1263122061",
+  "Hiring In Process": "1263122062",
+  Hired: "1275661880",
+  Paused: "1216507227",
+  Disqualified: "1263175081",
+  Resigned: "1299798139",
+  Terminated: "1299798140",
+  "Apploi Possibility": "1331052049",
+  "Apploi Responded": "1432363113",
+  "Apploi Candidate": "1445425691",
+  "Apploi from Link": "1466375189"
+});
+
+test("[BR5][1] every BCBA and BT/RBT pipeline stage is eligible, linked or unlinked with the entry property Yes", () => {
+  for (const stageId of [...Object.values(BCBA_STAGE_IDS), ...Object.values(BT_RBT_STAGE_IDS)]) {
+    for (const linked of [true, false]) {
+      const decision = employeeSyncEligibility({
+        properties: { hs_pipeline_stage: stageId, entered_in_centralreach: "Yes" },
+        linked,
+        hubspotHasCrId: linked
+      });
+      assert.deepEqual(decision, { eligible: true, reason: null }, `${stageId}, linked ${linked}`);
+    }
+  }
+});
+
+// The only CentralReach writes an employee update may make: no create, no contact delete, and no
+// active or inactive value of its own in any body. BR16 (2026-11-24): the update PUT sends the
+// read back, so it carries `isActive` exactly as the read held it (heldIsActive; absent when the
+// read held none), never changed. Any other active or inactive text, or an isActive that differs
+// from the read, fails.
+function assertUpdateWritesOnly(cr, heldIsActive) {
+  const allowed = new Set([
+    "PUT /contacts/employee/{id}",
+    "POST /contacts/{id}/labels",
+    METADATA_PUT,
+    "DELETE /contacts/{id}/metadata/{fieldId}"
+  ]);
+  for (const call of cr.writes()) {
+    assert.equal(allowed.has(call.name), true, call.name);
+    const body = { ...(call.body ?? {}) };
+    if (call.name === "PUT /contacts/employee/{id}") {
+      assert.equal(body.isActive, heldIsActive);
+      delete body.isActive;
+    }
+    assert.equal(/inactive|deactivat|active/i.test(JSON.stringify(body)), false);
+  }
+  assert.equal(cr.count("POST /contacts/employee"), 0);
+}
+
+for (const [employeeType, stageName, stageId] of [
+  ["bt_rbt", "Resigned", BT_RBT_STAGE_IDS.Resigned],
+  ["bt_rbt", "Terminated", BT_RBT_STAGE_IDS.Terminated],
+  ["bcba", "Paused", BCBA_STAGE_IDS.Paused],
+  ["bcba", "Resigned", BCBA_STAGE_IDS.Resigned],
+  ["bcba", "Terminated", BCBA_STAGE_IDS.Terminated]
+]) {
+  test(`[BR5][BR12][1] a linked ${employeeType} in the ${stageName} stage keeps getting field updates, and nothing deactivates them`, async () => {
+    // Every live employee read holds isActive: active and inactive employees both keep theirs.
+    for (const heldIsActive of [true, false]) {
+      const { cr } = setup();
+      const run = employeeType === "bcba" ? runBcba : runBt;
+      const linked = employeeType === "bcba" ? linkedBcba : linkedBt;
+      const record = linked(cr, { hs_pipeline_stage: stageId });
+      const contactId = employeeType === "bcba" ? "5002" : "5001";
+      cr.employees.get(contactId).isActive = heldIsActive;
+      assert.equal((await run(record)).status, "success");
+      record.properties.last_name = "Changed";
+      const result = await run(record);
+
+      assert.equal(result.status, "success");
+      assert.equal(result.operation, "update");
+      const puts = cr.calls.filter((call) => call.name === "PUT /contacts/employee/{id}");
+      assert.equal(puts.length, 2);
+      assert.equal(puts[1].body.lastName, "Changed");
+      assertUpdateWritesOnly(cr, heldIsActive);
+      assert.equal(cr.employees.get(contactId).isActive, heldIsActive);
+    }
+  });
+}
+
+// Client Pipeline stages that are not one of the four Cleanup exclusions (BR6).
+for (const [stageName, stageId] of [
+  ["Paused", "1344955718"],
+  ["Discharged", "1315313037"],
+  ["Disqualified", "1136629070"],
+  ["Closed Lost", "closedlost"]
+]) {
+  test(`[BR5][BR6][1] a linked Case in the ${stageName} stage is not excluded and still gets its update`, async () => {
+    const { cr } = setup();
+    const record = linkedCase(cr, { dealstage: stageId });
+    assert.equal((await runCase(record)).status, "success");
+    record.properties.phi_last_name = "Rivera-Smith";
+    const result = await runCase(record);
+
+    assert.equal(result.status, "success");
+    assert.equal(result.operation, "update");
+    const puts = cr.calls.filter((call) => call.name === "PUT /contacts/client/{id}");
+    assert.equal(puts.length, 2);
+    assert.equal(puts[1].body.LastName, "Rivera-Smith");
+  });
+}
+
+// --- BR10 with TL3: a waiting record still gets its label changes (LBL-075) ---
+
+test("[BR10][TL3][BR19] a waiting BT/RBT (CentralReach holds the temporary ID) whose type changes from BT to RBT still gets one label POST: RBT NY replaces Behavior Technician NY, and the status stays waiting", async () => {
+  const BT_NY = 1052630;
+  const RBT_NY = 1052631;
+  const { container, cr } = setup();
+  seedEmployee(cr, "5001", "HS1");
+  const record = stage3Bt({
+    employee_id: "5001",
+    workday_id: "",
+    bt_rbt_type: "BT",
+    location: "New York"
+  });
+  const runWaiting = () =>
+    runEmployeeSyncWorkflow(
+      { recordId: "HS1", employeeType: "bt_rbt", source: "hubspotWorkflow" },
+      { ...employeeWorkflowDeps({ record }), labelReadBackDelayMs: 0 }
+    );
+  const first = await runWaiting();
+  assert.equal(first.status, "waiting");
+  assert.equal(cr.labels.get("5001").includes(BT_NY), true);
+
+  // The edit comes later than the 150-second hold of the first POST (decision 59).
+  const link = container.get(BT_LINK.pk, BT_LINK.id).data;
+  link.lastLabelPost = { ...link.lastLabelPost, postedAt: new Date(Date.now() - 600_000).toISOString() };
+  record.properties.bt_rbt_type = "RBT";
+  const posts = cr.count("POST /contacts/{id}/labels");
+  const second = await runWaiting();
+
+  assert.equal(second.status, "waiting");
+  assert.equal(record.properties.last_sync_error, WAITING_FOR_WORKDAY_ID);
+  assert.equal(cr.count("POST /contacts/{id}/labels"), posts + 1);
+  assert.equal(cr.labels.get("5001").includes(RBT_NY), true);
+  assert.equal(cr.labels.get("5001").includes(BT_NY), false);
+  assertUpdateWritesOnly(cr);
+});
 
 // --- C1 to C7: the Case core fields ---
 

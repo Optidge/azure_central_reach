@@ -7,14 +7,30 @@ import { clientWorkflowDeps, httpError } from "./stage2Fakes.mjs";
 // Sandbox IDs (BUILD-PLAN section 3, config.mjs): the object types and the role association types.
 export const SANDBOX_BCBA_TYPE = "2-72890322";
 export const SANDBOX_BT_TYPE = "2-72890325";
-export const ROLE_TYPE = Object.freeze({ ia: 223, re: 229, bt1: 238, bt2: 240 });
+export const ROLE_TYPE = Object.freeze({
+  ia: 223,
+  re: 229,
+  bt1: 238,
+  bt2: 240,
+  // Items 9 and 10 (sandbox IDs, package item 10 table).
+  supervising: 247,
+  sub: 217,
+  outgoingSub: 221,
+  outgoingSupervising: 253,
+  onLeave: 233,
+  outgoingBt1: 244,
+  outgoingBt2: 236,
+  gradPermitSupervisor: 227
+});
 
 export const FIELD = Object.freeze({
   ia: CENTRAL_REACH_CLIENT_METADATA_FIELDS.INITIAL_ASSESSMENT_BCBA,
   re: CENTRAL_REACH_CLIENT_METADATA_FIELDS.REASSESSMENT_BCBA,
   bt1: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_1_NAME,
   bt2: CENTRAL_REACH_CLIENT_METADATA_FIELDS.BT_2_NAME,
-  careCoordinator: CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR
+  careCoordinator: CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR,
+  supervising: CENTRAL_REACH_CLIENT_METADATA_FIELDS.SUPERVISING_BCBA,
+  gradPermit: CENTRAL_REACH_CLIENT_METADATA_FIELDS.GRAD_PERMIT_HOLDER
 });
 
 // One association row, as listAssociations returns it, in the USER_DEFINED category.
@@ -29,21 +45,38 @@ export function roleRow(toObjectId, ...typeIds) {
 //   bcbaRows, btRows  the association rows by object type
 //   names             { recordId: { first_name, last_name } }; a record that is not here is not
 //                     answered by the batch read
+//   bcbaLinks         { holderRecordId: rows }: the BCBA -> BCBA association rows (item 9)
+//   licenceKey        true: a BCBA answer without lba_licensure__ny gets it as a null key, as
+//                     HubSpot answers a blank; false: the key is left out (a failed read)
 // `calls` shows what the worker asked for.
-export function caseStaff({ bcbaRows = [], btRows = [], names = {} } = {}) {
-  const calls = { associations: [], batch: [] };
+export function caseStaff({
+  bcbaRows = [],
+  btRows = [],
+  names = {},
+  bcbaLinks = {},
+  licenceKey = true
+} = {}) {
+  const calls = { associations: [], batch: [], bcbaLinks: [] };
   return {
     calls,
     deps: {
-      listAssociations: async ({ toObjectType }) => {
+      listAssociations: async ({ fromObjectType, fromId, toObjectType }) => {
+        if (fromObjectType === SANDBOX_BCBA_TYPE) {
+          calls.bcbaLinks.push({ fromId, toObjectType });
+          return bcbaLinks[fromId] || [];
+        }
         calls.associations.push(toObjectType);
         return toObjectType === SANDBOX_BCBA_TYPE ? bcbaRows : btRows;
       },
       readObjectsBatch: async ({ objectTypeId, ids, properties }) => {
         calls.batch.push({ objectTypeId, ids: [...ids], properties: [...properties] });
+        const withLicence = licenceKey && properties.includes("lba_licensure__ny");
         return ids
           .filter((id) => Object.hasOwn(names, id))
-          .map((id) => ({ id, properties: names[id] }));
+          .map((id) => ({
+            id,
+            properties: withLicence ? { lba_licensure__ny: null, ...names[id] } : names[id]
+          }));
       }
     }
   };

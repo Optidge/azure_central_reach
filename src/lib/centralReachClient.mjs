@@ -1,5 +1,5 @@
 import axios from "axios";
-import { retryAfterSeconds, withRetry } from "./retry.mjs";
+import { LABEL_POST_WINDOW_SECONDS, retryAfterSeconds, withRetry } from "./retry.mjs";
 import { CR_CALL_KINDS } from "./syncRunSummary.mjs";
 import { unreadableAnswerError } from "./unreadableAnswer.mjs";
 import {
@@ -9,7 +9,17 @@ import {
 } from "../constants/centralReach.mjs";
 import { HUBSPOT_EMPLOYEE_TYPES } from "../constants/hubspot.mjs";
 import { EMPLOYEE_CREATE_TURNED_OFF } from "../constants/syncReasons.mjs";
-import { clientWritePlan } from "./mappedState.mjs";
+import {
+  CLIENT_CORE_FIELDS,
+  clientCoreReadKey,
+  clientPutKey,
+  clientWritePlan,
+  keepHeldClientCoreFields,
+  mappedKeysMatchRead,
+  unusableHeldClientCoreField,
+  unsendableSsnKey,
+  updateBodyFromRead
+} from "./mappedState.mjs";
 
 let centralReachHttpClient = null;
 let centralReachConfig = null;
@@ -270,7 +280,8 @@ async function crRequest(path, options) {
 // actually sent, in the order sent, including the in-process retries of withRetry. `status` is the
 // HTTP status of the answer, success or failure, and null when there was no answer (a timeout, the
 // network). It gets no URL, body or header. `kind` is one of CR_CALL_KINDS (src/lib/syncRunSummary.mjs):
-//   lookup     GET by External System ID (client or employee), and GET employee by contact ID
+//   lookup     GET by External System ID (client or employee), GET employee by contact ID, and
+//              GET /contacts/client/{id} (the client read before an update, item B21)
 //   create     POST /contacts/client and POST /contacts/employee
 //   update     PUT /contacts/client/{id} and PUT /contacts/employee/{id}
 //   metadata   PUT and DELETE of a metadata field, including the second route after a 404
@@ -345,17 +356,32 @@ async function crSend(path, { method = "GET", body, suppressRetry = false, kind,
 // blank, so no lookup and no create can be made. It never creates after an unclear lookup.
 // Row 3.14 (rule 5.5): with no CR ID it looks the client up by payload.ExternalSystemId with the
 // read-only GET. 404: one POST with the whole payload. Found: one PUT by the CR ID found. With a
-// CR ID: one PUT by that ID and no lookup; the worker compares the IDs of a linked Case before it
-// calls. There is no client-create switch (decision 18): the record gate is the only control.
-// What an update PUT carries (BR22, review fix L-R2):
+// CR ID: one PUT by that ID and no lookup by External System ID; the worker compares the IDs of a
+// linked Case before it calls. Every PUT follows the client read of item B21 (below). There is
+// no client-create switch (decision 18): the record gate is the only control.
+// What an update PUT carries (BR22, review fix L-R2; BR16, 2026-11-24):
 //   ContactForm       never.
-//   ExternalSystemId  only when CentralReach is known to hold that same value: the lookup inside
-//                     this call found the client (its own earlier create), or
-//                     externalSystemIdHeld is true. Sending back the value CentralReach holds
-//                     changes nothing, and it protects the ID if the client PUT clears a field
-//                     that is left out (not tested, O-35). In every other case it is left out:
-//                     the client read does not show what CentralReach holds, so the update could
-//                     overwrite an ID it cannot see. A blank value is never sent.
+//   Every read key    (updateBodyFromRead) the client PUT blanks a text key it leaves out (live
+//                     check 2026-11-24), so the body is the client read below, key for key with
+//                     a capital first letter, and the mapped keys laid over it. When no mapped key
+//                     differs from the read (mappedKeysMatchRead) no PUT is sent at all; the
+//                     answer is the same { operation: "update", crContactId }.
+//   ssn               (the SSN guard, checkHeldSsnSendable) only blank or a full 9-digit SSN
+//                     is sent back; anything else is CR_CLIENT_READ_FAILED (permanent,
+//                     reason field contact.ssn) and no PUT is sent. Not checked when no PUT is.
+//   ExternalSystemId  the payload's value only when CentralReach is known to hold that same
+//                     value: the lookup inside this call found the client (its own earlier
+//                     create), or externalSystemIdHeld is true. Otherwise the value the client
+//                     read holds is sent back as read, and when the read holds none (the key is
+//                     absent) the key is left out. A blank value is never sent.
+//   Core fields       (item B21, BR16, row 3.13) all 11 of CLIENT_CORE_FIELDS: before the PUT
+//                     the client is read (GET /contacts/client/{id}, kind lookup) and a core
+//                     field that is blank in the payload carries the value that read holds
+//                     (keepHeldClientCoreFields), so an update never clears one. A read that
+//                     cannot be used is CR_CLIENT_READ_FAILED (permanent) and no PUT is sent.
+//                     This covers every update: the linked Case, the pending-create Case whose
+//                     lookup found its client, and the lookup inside this call. A create sends
+//                     the payload as it is and makes no client read.
 export async function createOrUpdateClient(payloadOrOptions) {
   const isOptionsObject =
     payloadOrOptions &&
@@ -391,9 +417,21 @@ export async function createOrUpdateClient(payloadOrOptions) {
     if (!externalSystemIdHeld || String(updatePayload.ExternalSystemId ?? "").trim() === "") {
       delete updatePayload.ExternalSystemId;
     }
+    // Item B21: every update path ends here, so no client PUT is sent without this read.
+    const heldClient = await getClientByContactId(plan.crContactId, {
+      onCall,
+      payload: updatePayload
+    });
+    const mappedBody = keepHeldClientCoreFields(updatePayload, heldClient);
+    // BR16 (2026-11-24): no PUT when CentralReach already holds every mapped value; otherwise
+    // the whole read goes back with the mapped keys laid over it (updateBodyFromRead).
+    if (mappedKeysMatchRead(mappedBody, heldClient, clientCoreReadKey)) {
+      return { operation: "update", crContactId: plan.crContactId };
+    }
+    checkHeldSsnSendable("client", heldClient);
     await crRequest(`/contacts/client/${plan.crContactId}`, {
       method: "PUT",
-      body: updatePayload,
+      body: updateBodyFromRead(mappedBody, heldClient, clientPutKey),
       kind: "update",
       onCall
     });
@@ -440,6 +478,62 @@ function readEmployeeContactId(data) {
     }
   }
   return null;
+}
+
+// Item B21: the client read before an update. Returns `contact` of the answer. A failed read is
+// no update (CR_CLIENT_READ_FAILED, permanent, logged by field names and types only): an answer
+// that does not show this client (no contactId, or another one), that lacks any of the 11 core
+// keys, or that holds a value the update would send back but cannot (options.payload is the
+// update body: for each core field blank there, the held value must be text or null and a filled
+// dateOfBirth must start with YYYY-MM-DD; with no payload every core field counts as blank).
+// A missing key is never read as "CentralReach holds nothing": a field left out of the PUT may
+// be cleared (O-35).
+export async function getClientByContactId(contactId, options = {}) {
+  const normalizedId = String(contactId || "").trim();
+  if (!normalizedId) {
+    throw new Error("CentralReach client contactId is required");
+  }
+
+  const response = await crSend(`/contacts/client/${normalizedId}`, {
+    method: "GET",
+    kind: "lookup",
+    onCall: options?.onCall
+  });
+  const answer = response?.data ?? null;
+  const failedField = unreadableClientField(answer?.contact, normalizedId, options?.payload);
+  if (failedField) {
+    throw unreadableAnswerError({
+      code: "CR_CLIENT_READ_FAILED",
+      call: "GET /contacts/client/{id}",
+      status: response?.status,
+      expected: "the requested client under contact, with its contactId and the 11 core fields",
+      expectedFields: [
+        "contact",
+        "contact.contactId",
+        ...CLIENT_CORE_FIELDS.map((field) => `contact.${clientCoreReadKey(field)}`)
+      ],
+      reasonField: failedField,
+      answer
+    });
+  }
+  return answer.contact;
+}
+
+// The first field that makes the client read unusable, or null when it can be used.
+function unreadableClientField(contact, requestedId, payload) {
+  if (!contact || typeof contact !== "object" || Array.isArray(contact)) {
+    return "contact";
+  }
+  if (readContactIdValue(contact.contactId) !== requestedId) {
+    return "contact.contactId";
+  }
+  for (const field of CLIENT_CORE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(contact, clientCoreReadKey(field))) {
+      return `contact.${clientCoreReadKey(field)}`;
+    }
+  }
+  const unusableKey = unusableHeldClientCoreField(payload, contact);
+  return unusableKey ? `contact.${unusableKey}` : null;
 }
 
 export async function getEmployeeByContactId(contactId, options = {}) {
@@ -526,15 +620,71 @@ export function buildEmployeePayloadForContactId(payload, existingEmployee = {})
   };
 }
 
-async function updateEmployeeByContactId(contactId, payload, onCall) {
+// BR16, row 3.13 (live check 2026-11-24): the employee PUT blanks a text key it leaves out, so
+// an update is built from the read of the same run (heldContact: `contact` of
+// GET /contacts/employee/{id}). That read must be a plain object whose contactId is this
+// employee; anything else is CR_EMPLOYEE_READ_FAILED (permanent) and no PUT is sent. When no
+// mapped key differs from the read, no PUT is sent (the same answer, no `update` call);
+// otherwise the read's SSN must pass the SSN guard (checkHeldSsnSendable) and the body is the
+// whole read with the mapped keys laid over it (updateBodyFromRead). The employee worker runs
+// both checks itself before it marks the record in progress (review finding 7); they stay here
+// so that a direct call is just as safe.
+export function heldEmployeeContact(heldContact, contactId) {
+  const usable =
+    heldContact &&
+    typeof heldContact === "object" &&
+    !Array.isArray(heldContact) &&
+    readContactIdValue(heldContact.contactId) === String(contactId ?? "").trim();
+  if (!usable) {
+    throw unreadableAnswerError({
+      code: "CR_EMPLOYEE_READ_FAILED",
+      call: "GET /contacts/employee/{id}",
+      status: null,
+      expected: "the requested employee under contact, with its contactId",
+      expectedFields: ["contact", "contact.contactId"],
+      reasonField: "contact.contactId",
+      answer: { contact: heldContact }
+    });
+  }
+  return heldContact;
+}
+
+// The SSN guard (BR16, row 3.13; unsendableSsnKey in mappedState.mjs), run only when a core PUT
+// is about to be sent. A read SSN the PUT may not send back is a failed read of the same kind as
+// the other values a read cannot supply (CR_EMPLOYEE_READ_FAILED / CR_CLIENT_READ_FAILED:
+// permanent, no retry, HubSpot `error`), so the run summary and the log queries see the codes
+// they already know. The reason sentence names the field (contact.ssn); the logged shape holds
+// field names and types only. The value is never logged, hashed, saved or put in the error.
+export function checkHeldSsnSendable(entity, heldContact) {
+  const ssnKey = unsendableSsnKey(heldContact);
+  if (!ssnKey) {
+    return;
+  }
+  throw unreadableAnswerError({
+    code: entity === "client" ? "CR_CLIENT_READ_FAILED" : "CR_EMPLOYEE_READ_FAILED",
+    call: `GET /contacts/${entity}/{id}`,
+    status: null,
+    expected: `the ${entity}'s ssn under contact, blank or a full 9 digits (dashes 3-2-4 allowed)`,
+    expectedFields: ["contact", `contact.${ssnKey}`],
+    reasonField: `contact.${ssnKey}`,
+    answer: { contact: heldContact }
+  });
+}
+
+async function updateEmployeeByContactId(contactId, payload, heldContact, onCall) {
   const normalizedId = String(contactId || "").trim();
   if (!normalizedId) {
     throw new Error("CentralReach employee contactId is required");
   }
+  const held = heldEmployeeContact(heldContact, normalizedId);
+  if (mappedKeysMatchRead(payload, held)) {
+    return { operation: "update", crContactId: normalizedId };
+  }
+  checkHeldSsnSendable("employee", held);
 
   await crRequest(`/contacts/employee/${normalizedId}`, {
     method: "PUT",
-    body: payload,
+    body: updateBodyFromRead(payload, held),
     kind: "update",
     onCall
   });
@@ -660,8 +810,9 @@ function readLabelIds(data) {
 }
 
 // Rule 5.6: for this long after a saved label POST no new label POST is made for the contact. A
-// label read can be about two minutes behind a write (label test of 2026-11-20).
-const LABEL_POST_WINDOW_MS = 150 * 1000;
+// label read can be about two minutes behind a write (label test of 2026-11-20). The same window
+// is the first wait before an unconfirmed POST is retried (retry.mjs, item 12).
+const LABEL_POST_WINDOW_MS = LABEL_POST_WINDOW_SECONDS * 1000;
 // After a POST the labels are read back this many times, this far apart (row L.3).
 const LABEL_READ_BACK_TRIES = 3;
 const LABEL_READ_BACK_DELAY_MS = 5000;
@@ -1113,7 +1264,12 @@ export async function createOrUpdateEmployee(payload) {
   }
 
   if (existingContactId) {
-    return updateEmployeeByContactId(existingContactId, employeePayload, options.onCall);
+    return updateEmployeeByContactId(
+      existingContactId,
+      employeePayload,
+      options.heldContact,
+      options.onCall
+    );
   }
 
   // A lookup or create with no External System ID could match or duplicate the wrong employee.

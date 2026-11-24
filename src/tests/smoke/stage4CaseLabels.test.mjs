@@ -166,6 +166,28 @@ test("[CL4][4.21] the three retired staffing IDs are managed, so they are remove
   assert.deepEqual(byNumber(CENTRAL_REACH_REMOVE_ONLY_LABEL_IDS), RETIRED_STAFFING);
 });
 
+// CLB-040: the labels come from case_status and staffing_status, never from the pipeline stage.
+// Client Pipeline stage IDs from the production read of 2026-11-24.
+test("[CL3][CL4][4.21] a dealstage change with case_status and staffing_status unchanged requires and manages the same labels", () => {
+  const base = {
+    location: "New York",
+    specific_home_location: "Child's House",
+    case_status: "Warm",
+    staffing_status: "Staffed 97153"
+  };
+  const ongoing = mapCase({ ...base, dealstage: "1310034488" });
+  assert.deepEqual(
+    byNumber(ongoing.requiredLabelIds),
+    byNumber([ALL_CLIENTS, HOME, NY_CLIENT, ACTIVE_CLIENT, STAFFED_97153])
+  );
+  // Paused, Discharged, Disqualified, Closed Lost, Contact Client.
+  for (const dealstage of ["1344955718", "1315313037", "1136629070", "closedlost", "1136629064"]) {
+    const moved = mapCase({ ...base, dealstage });
+    assert.deepEqual(moved.requiredLabelIds, ongoing.requiredLabelIds, dealstage);
+    assert.deepEqual(moved.managedLabelIds, ongoing.managedLabelIds, dealstage);
+  }
+});
+
 // --- CL5, CL6 and the contract (P.5 a) ---
 
 test("[CL6][4.21] All Clients 1052619 is required on every client and is never managed", () => {

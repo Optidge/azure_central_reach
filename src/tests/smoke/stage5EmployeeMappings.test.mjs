@@ -168,7 +168,8 @@ test("[BL2][5.4] the BCBA state label no longer comes from home_state or state_h
 test("[BL3][5.4] the NM Employee and VA Employee constants exist, and no BCBA mapping requires or manages them", () => {
   assert.equal(CENTRAL_REACH_EMPLOYEE_LABELS.NM_EMPLOYEE, NM_EMPLOYEE);
   assert.equal(CENTRAL_REACH_EMPLOYEE_LABELS.VA_EMPLOYEE, VA_EMPLOYEE);
-  // "New Mexico" and "Virginia" are not HubSpot stored values (guide [G19]: none exists yet).
+  // "New Mexico" and "Virginia" are `location` options, but their mapping is deferred (package
+  // item 11).
   const mapped = bcba({ location: "New York;New Mexico;Virginia" });
   for (const id of [NM_EMPLOYEE, VA_EMPLOYEE]) {
     assert.equal(mapped.requiredLabelIds.includes(id), false, `${id} is not required`);
@@ -234,7 +235,7 @@ test("[BL5][5.6] NY Medicaid is managed and is not required without MCD FFS-NY",
 test("[BL6][5.6] the other credential options send nothing: Aetna, Cigna, Carelon and CO Medicaid are never required or managed", () => {
   const mapped = bcba({
     ny_insurance_labels: "MCD FFS-NY;Aetna-NY;Cigna-NY;Carelon-NY",
-    co_insurance_labels: "Aetna-CO;Cigna-CO;Carelon-CO",
+    co_insurance_labels: "MCD-CO;Aetna-CO;Cigna-CO;Carelon-CO",
     nj_insurance_labels: "MCD-NJ;Horizon-NJ"
   });
   for (const id of BL6_NOT_BUILT) {
@@ -455,8 +456,9 @@ test("[TL3][5.12] a BT or RBT with a blank Work State requires no role label, an
 });
 
 // Decision 35 (O-36): a type that is blank or is not BT or RBT manages no role label, so a role
-// label the person already holds in CentralReach is left alone. "BT to RBT" is the third option
-// of bt_rbt_type in production.
+// label the person already holds in CentralReach is left alone. "BT to RBT" is an option of
+// bt_rbt_type in the sandbox, and a hidden option in production too (production read of
+// 2026-11-24: 1 record holds it).
 for (const [type, name] of [
   ["", "a blank bt_rbt_type"],
   ["BT to RBT", "bt_rbt_type BT to RBT"]
@@ -566,6 +568,32 @@ test("[BR19][5.12] every label an employee can require is sendable, base labels 
     }
     for (const id of [ALL_EMPLOYEES, CLINICAL, BCBA_HEADER]) {
       assert.equal(mapped.managedLabelIds.includes(id), false, `${id} is a base label`);
+    }
+  }
+});
+
+// CLB-155, LBL-013: the three staffing labels are client labels (CL4). No employee mapping
+// requires or manages them, even when a staff record holds a staffing_status of its own.
+test("[CL4][BR19] no BCBA or BT/RBT mapping requires or manages a staffing label (1156743, 1156746, 1156747)", () => {
+  const STAFFING_LABELS = [1156743, 1156746, 1156747];
+  const shared = { location: "New York;New Jersey;Colorado", staffing_status: "Staffed 97153" };
+  const mapped = [
+    ...["BT", "RBT", ""].map((type) => bt({ ...shared, bt_rbt_type: type })),
+    ...["Yes", "Grad Permit", ""].map((lba) =>
+      bcba({
+        ...shared,
+        lba_licensure__ny: lba,
+        assign_states: "Assign CO;Assign NJ",
+        ny_insurance_labels: "MCD FFS-NY",
+        work_status: "Salaried",
+        cr_billing_hold_label: "Yes"
+      })
+    )
+  ];
+  for (const { requiredLabelIds, managedLabelIds } of mapped) {
+    for (const id of STAFFING_LABELS) {
+      assert.equal(requiredLabelIds.includes(id), false, `${id} is not required`);
+      assert.equal(managedLabelIds.includes(id), false, `${id} is not managed`);
     }
   }
 });

@@ -30,16 +30,36 @@ export function isTestRecord(value) {
   return value === true || String(value ?? "").trim().toLowerCase() === "true";
 }
 
+// Item 24 (D18): the gate property of each path. A path setting that is not set falls back to
+// the record gate, so with neither set (the sandbox) both paths read SYNC_RECORD_GATE_PROPERTY.
+// The one place the fallback lives; both workers and the poller use it.
+export function gateProperties(sync) {
+  return {
+    create: sync?.createGateProperty ?? sync?.recordGateProperty ?? null,
+    update: sync?.updateGateProperty ?? sync?.recordGateProperty ?? null
+  };
+}
+
+// The gate properties a worker must read: both paths', whichever path the record is on.
+export function gatePropertyNames(gates) {
+  return [...new Set([gates?.create, gates?.update].filter(Boolean))];
+}
+
+// The path follows the HubSpot CR ID, not the link record (D18 b): CR ID blank → create, filled →
+// update. `linked` keeps its meaning for the entry rule.
 function decide({
   properties,
   linked,
+  hubspotHasCrId,
   includeTestRecords,
   excludedStage,
   entryIsYes,
-  recordGateProperty = null
+  gates = null
 }) {
-  if (recordGateProperty && !isTestRecord(properties?.[recordGateProperty])) {
-    return { eligible: false, reason: SKIP_REASONS.RECORD_GATE };
+  const path = hubspotHasCrId ? "update" : "create";
+  const gateProperty = gates?.[path] || null;
+  if (gateProperty && !isTestRecord(properties?.[gateProperty])) {
+    return { eligible: false, reason: SKIP_REASONS.RECORD_GATE, gate: path };
   }
   if (!includeTestRecords && isTestRecord(properties?.[TEST_RECORD_PROPERTY])) {
     return { eligible: false, reason: SKIP_REASONS.TEST_RECORD };
@@ -58,14 +78,16 @@ function decide({
 export function caseSyncEligibility({
   properties,
   linked,
+  hubspotHasCrId = false,
   includeTestRecords = false,
-  recordGateProperty = null
+  gates = null
 }) {
   return decide({
     properties,
     linked,
+    hubspotHasCrId,
     includeTestRecords,
-    recordGateProperty,
+    gates,
     excludedStage: EXCLUDED_STAGES.has(String(properties?.dealstage ?? "").trim()),
     entryIsYes: caseEntryIsYes(properties?.[CASE_ENTRY_PROPERTY])
   });
@@ -75,14 +97,16 @@ export function caseSyncEligibility({
 export function employeeSyncEligibility({
   properties,
   linked,
+  hubspotHasCrId = false,
   includeTestRecords = false,
-  recordGateProperty = null
+  gates = null
 }) {
   return decide({
     properties,
     linked,
+    hubspotHasCrId,
     includeTestRecords,
-    recordGateProperty,
+    gates,
     excludedStage: false,
     entryIsYes: employeeEntryIsYes(properties?.[EMPLOYEE_ENTRY_PROPERTY])
   });

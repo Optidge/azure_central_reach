@@ -60,7 +60,7 @@ const BCBA_PERSON = {
   apartment__home: "Suite 3R",
   city_home: "Tarrytown",
   postal_code_home: "10591",
-  dob: "1981-11-05",
+  date_of_birth: "1981-11-05",
   medicaid_id__ny: "NY77221"
 };
 const CONTACT_EMAIL = "philippa.personal@example.org";
@@ -130,14 +130,14 @@ const TYPES = [
     employeeType: HUBSPOT_EMPLOYEE_TYPES.BT_RBT,
     recordId: "HS1",
     contactId: "5001",
-    workdayId: "WD1",
+    workdayId: "1000001",
     record: (properties) => stage3Bt({ ...BT_PERSON, ...properties })
   },
   {
     employeeType: HUBSPOT_EMPLOYEE_TYPES.BCBA,
     recordId: "HS2",
     contactId: "5002",
-    workdayId: "WD2",
+    workdayId: "1000002",
     record: (properties) => stage3Bcba({ ...BCBA_PERSON, ...properties })
   }
 ];
@@ -259,11 +259,39 @@ for (const type of TYPES) {
 
     assert.equal(result.status, "skipped");
     const { meta } = onlyLine(logs);
+    // Only a record_gate skip carries gate (item 24); this line keeps exactly the keys.
+    assert.deepEqual(Object.keys(meta), SUMMARY_KEYS);
     assert.equal(meta.outcome, "skipped");
     assert.equal(meta.reasonCode, "test_record");
     assert.deepEqual(meta.crCalls, []);
     assert.deepEqual(cr.calls, []);
     assert.deepEqual(meta.writeback, { written: false, status: null });
+  });
+
+  test(`[BR15][3.20] ${name}: a record_gate skip logs exactly the keys plus gate, the path whose box was not true`, async () => {
+    const creates = "centralreach_creates_only";
+    const updates = "centralreach_updates_only";
+    const config = workflowConfig({
+      sync: { recordGateProperty: null, createGateProperty: creates, updateGateProperty: updates }
+    });
+    for (const [crId, gate] of [["", "create"], [type.contactId, "update"]]) {
+      const { cr } = setup();
+      // The open box is the other path's, so this path's gate skips the record.
+      const record = type.record({
+        employee_id: crId,
+        [creates]: gate === "create" ? null : "true",
+        [updates]: gate === "update" ? null : "true"
+      });
+      const logs = [];
+      const result = await run(type, record, { logs, extra: { getConfig: () => config } });
+
+      assert.equal(result.reason, "record_gate", gate);
+      const { meta } = onlyLine(logs);
+      assert.deepEqual(Object.keys(meta), [...SUMMARY_KEYS, "gate"], gate);
+      assert.equal(meta.reasonCode, "record_gate");
+      assert.equal(meta.gate, gate);
+      assert.deepEqual(cr.calls, []);
+    }
   });
 
   test(`[BR15][3.20] ${name}: an error decided on purpose logs its code after the status write`, async () => {

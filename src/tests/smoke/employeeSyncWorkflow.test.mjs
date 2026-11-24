@@ -53,8 +53,15 @@ function buildDeps(overrides = {}) {
     validateEmployeePayload: () => ({ isValid: true, errors: [] }),
     hashPayload: () => "hash-2",
     // The live read holds the employee under `contact`. A read without it sends no update
-    // (lane B review fix B-R2, row 3.13).
-    getEmployeeByContactId: async () => ({ contact: { primaryEmail: "a@test.com" } }),
+    // (lane B review fix B-R2, row 3.13), with its own contactId, which the worker checks before
+    // the record is marked in progress (BR16, review finding 7).
+    getEmployeeByContactId: async () => ({
+      contact: {
+        contactId: 100,
+        primaryEmail: "a@test.com",
+        dateOfBirth: "1990-10-20T00:00:00.0000000Z"
+      }
+    }),
     findEmployeeByExternalSystemId: async () => ({ found: false, crContactId: null }),
     buildEmployeePayloadForContactId: (payload) => ({ payload }),
     createOrUpdateEmployee: async () => ({ operation: "update", crContactId: "100" }),

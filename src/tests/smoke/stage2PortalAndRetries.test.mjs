@@ -18,9 +18,11 @@ import {
 import { useStateContainer } from "../../lib/cosmosState.mjs";
 import {
   FAILURE_KINDS,
+  LABEL_POST_WINDOW_SECONDS,
   MAX_RETRIES,
   RETRY_DELAYS_SECONDS,
   classifyFailure,
+  labelPostUnconfirmedError,
   planRetry,
   retryAfterSeconds,
   withRetry
@@ -113,6 +115,13 @@ const REQUIRED_ENV = {
   HS_BT_RBT_OBJECT_TYPE_ID: undefined
 };
 
+// Items 14 and 24: production runs only with the exact two path gate settings.
+const PRODUCTION_GATES = {
+  SYNC_CREATE_GATE_PROPERTY: "centralreach_creates_only",
+  SYNC_UPDATE_GATE_PROPERTY: "centralreach_updates_only"
+};
+const gatesFor = (portalId) => (portalId === PRODUCTION_PORTAL ? PRODUCTION_GATES : {});
+
 function withEnv(values, run) {
   const previous = {};
   for (const [name, value] of Object.entries(values)) {
@@ -143,7 +152,7 @@ function setup() {
   return { container, cr };
 }
 
-function linkedEmployee(cr, contactId = "7001", externalSystemId = "WD1") {
+function linkedEmployee(cr, contactId = "7001", externalSystemId = "1000001") {
   cr.employees.set(contactId, { contactId, externalSystemId, primaryEmail: "stored@example.com" });
   cr.labels.set(contactId, [1052618]);
 }
@@ -225,7 +234,7 @@ for (const portalId of ["50850427", "246184070", "1", "constructor"]) {
 
 for (const portalId of [SANDBOX_PORTAL, PRODUCTION_PORTAL]) {
   test(`[2.6] portal ${portalId} is valid and its object types come from the table`, () => {
-    withEnv({ ...REQUIRED_ENV, HUBSPOT_PORTAL_ID: portalId }, () => {
+    withEnv({ ...REQUIRED_ENV, ...gatesFor(portalId), HUBSPOT_PORTAL_ID: portalId }, () => {
       assert.equal(validateConfig().isValid, true);
       const config = getConfig();
       assert.equal(config.hubspot.hubspotPortalId, portalId);
@@ -248,8 +257,15 @@ test("[2.6] the portal table holds object types, excluded association types and 
     initialAssessmentBcba: 223,
     reEvaluationBcba: 229,
     primaryBt1: 238,
-    primaryBt2: 240
+    primaryBt2: 240,
+    subBcba: 217,
+    outgoingSubBcba: 221,
+    outgoingSupervisingBcba: 253,
+    onLeaveBcba: 233,
+    outgoingBt1: 244,
+    outgoingBt2: 236
   });
+  assert.equal(sandbox.gradPermitSupervisorAssociationTypeId, 227);
 
   const production = hubspotPortalSettings(PRODUCTION_PORTAL);
   assert.equal(production.bcbaObjectTypeId, "2-48354212");
@@ -260,8 +276,15 @@ test("[2.6] the portal table holds object types, excluded association types and 
     initialAssessmentBcba: 86,
     reEvaluationBcba: 145,
     primaryBt1: 76,
-    primaryBt2: 143
+    primaryBt2: 143,
+    subBcba: 234,
+    outgoingSubBcba: 288,
+    outgoingSupervisingBcba: 135,
+    onLeaveBcba: 236,
+    outgoingBt1: 131,
+    outgoingBt2: 166
   });
+  assert.equal(production.gradPermitSupervisorAssociationTypeId, 151);
 });
 
 for (const name of ["HS_BCBA_OBJECT_TYPE_ID", "HS_BT_RBT_OBJECT_TYPE_ID"]) {
@@ -301,7 +324,7 @@ test("[2.6] the portal table is read when a function runs, not when a module loa
   withEnv({ ...REQUIRED_ENV, HUBSPOT_PORTAL_ID: SANDBOX_PORTAL }, () => {
     assert.equal(getConfig().hubspot.btRbtObjectTypeId, "2-72890325");
   });
-  withEnv({ ...REQUIRED_ENV, HUBSPOT_PORTAL_ID: PRODUCTION_PORTAL }, () => {
+  withEnv({ ...REQUIRED_ENV, ...PRODUCTION_GATES, HUBSPOT_PORTAL_ID: PRODUCTION_PORTAL }, () => {
     assert.equal(getConfig().hubspot.btRbtObjectTypeId, "2-48354559");
   });
 });
@@ -541,7 +564,7 @@ for (const queue of QUEUES) {
 
 test("[2.6] Cosmos keys carry the portal ID: the link, the attempt record and both leases", async () => {
   const { container, cr } = setup();
-  const employee = btRecord({ workday_id: "WD1" });
+  const employee = btRecord({ workday_id: "1000001" });
   const deal = caseRecord();
 
   await runBt(employee);
@@ -555,7 +578,7 @@ test("[2.6] Cosmos keys carry the portal ID: the link, the attempt record and bo
     .filter((entry) => entry.operation === "create" && entry.doc.type === "lease")
     .map((entry) => `${entry.doc.pk}|${entry.doc.id}`);
   assert.deepEqual(leaseIds.sort(), [
-    `create-lock:employee|${SANDBOX_PORTAL}:WD1`,
+    `create-lock:employee|${SANDBOX_PORTAL}:1000001`,
     `sync-lock:client|${SANDBOX_PORTAL}:deal-1`,
     `sync-lock:employee|${SANDBOX_PORTAL}:bt_rbt:HS1`
   ]);
@@ -707,7 +730,7 @@ test("[2.7] employee worker, permanent: a CentralReach 400 on an update is error
 
 test("[2.7] employee worker, unknown create: thrown for a retry, HubSpot unchanged, the pending ID kept", async () => {
   const { container, cr } = setup();
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   cr.fail(EMPLOYEE_POST, timeoutError());
 
   await assert.rejects(runBt(record), (error) => {
@@ -717,7 +740,7 @@ test("[2.7] employee worker, unknown create: thrown for a retry, HubSpot unchang
 
   assert.equal(cr.count(EMPLOYEE_POST), 1);
   assert.equal(record.writes.length, 0);
-  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.pendingCreateExternalId, "WD1");
+  assert.equal(container.get(EMPLOYEE_LINK_PK, BT_LINK_ID).data.pendingCreateExternalId, "1000001");
 });
 
 test("[2.7] Case worker, temporary: the run is thrown for a retry and HubSpot keeps its last status", async () => {
@@ -789,7 +812,7 @@ test("[2.7] a metadata failure keeps its status code, so a 400 on every failed f
 test("[2.7] a lookup answer that is not 200 or 404 is temporary, whatever its status", async () => {
   const cr = fakeCentralReach();
   cr.fail("GET /contacts/employee/byExternalSystemId", httpError(400));
-  await assert.rejects(findEmployeeByExternalSystemId("WD1"), (error) => {
+  await assert.rejects(findEmployeeByExternalSystemId("1000001"), (error) => {
     assert.equal(error.code, "CR_LOOKUP_UNKNOWN");
     assert.equal(classifyFailure(error), FAILURE_KINDS.TEMPORARY);
     return true;
@@ -896,7 +919,7 @@ test("[2.7 decision 4] the three readers throw a permanent error that carries th
   assert.equal(cr.count("POST /contacts/{id}/labels"), 0);
 
   cr.answer("GET /contacts/employee/byExternalSystemId", { contact: { name: "Alex Rivera" } });
-  await assert.rejects(findEmployeeByExternalSystemId("WD1"), (error) => {
+  await assert.rejects(findEmployeeByExternalSystemId("1000001"), (error) => {
     assert.equal(error.code, "CR_LOOKUP_UNREADABLE");
     assert.equal(error.answerShape.call, "GET /contacts/employee/byExternalSystemId");
     assert.equal(error.answerShape.expectedFieldTypes["contact.contactId"], "missing");
@@ -970,7 +993,7 @@ test("[2.7 decision 4] a Case lookup that answers 200 with no contact ID is erro
 test("[2.7 decision 4] an employee lookup that answers 200 with no contact ID never creates", async () => {
   const { cr } = setup();
   linkedEmployee(cr, "7009", "HS1");
-  const record = btRecord({ workday_id: "WD1" });
+  const record = btRecord({ workday_id: "1000001" });
   cr.answer("GET /contacts/employee/byExternalSystemId", { contact: {} });
 
   const result = await runBt(record);
@@ -1563,6 +1586,44 @@ test("[2.10] the per-field metadata results keep the status and Retry-After, and
   });
   assert.equal(scheduled.length, 1);
   assert.equal(scheduled[0].scheduledEnqueueTimeUtc.getTime() - startedAt >= 900 * 1000, true);
+});
+
+// Item 12 (build package 2026-11-23): CentralReach's label read can lag a POST by about 150 s, so
+// the first retry of an unconfirmed label POST waits that long instead of 60 s.
+test("[BR19][L.3] an unconfirmed label POST waits the 150 s label window before its first retry; the later steps are unchanged", () => {
+  assert.equal(LABEL_POST_WINDOW_SECONDS, 150);
+  const unconfirmed = labelPostUnconfirmedError();
+  assert.equal(unconfirmed.retryAfterSeconds, LABEL_POST_WINDOW_SECONDS);
+  assert.deepEqual(
+    [0, 1, 2, 3, 4].map((attempt) => planRetry({ attempt, error: unconfirmed })),
+    [
+      { attempt: 1, delaySeconds: 150 },
+      { attempt: 2, delaySeconds: 300 },
+      { attempt: 3, delaySeconds: 900 },
+      { attempt: 4, delaySeconds: 3600 },
+      { attempt: 5, delaySeconds: 14400 }
+    ]
+  );
+  assert.equal(planRetry({ attempt: 5, error: unconfirmed }), null);
+  assert.equal(classifyFailure(unconfirmed), FAILURE_KINDS.TEMPORARY);
+});
+
+test("[BR19][2.10] retryAfterSeconds reads the wait set on the error; a Retry-After header and failed fields read as before", () => {
+  const now = Date.parse("2026-11-18T10:00:00.000Z");
+  const own = (value) => Object.assign(new Error("x"), { retryAfterSeconds: value });
+  assert.equal(retryAfterSeconds(own(150), now), 150);
+  assert.equal(retryAfterSeconds(own(0), now), 0);
+  // A wait that is not a finite number of 0 or more is not a wait.
+  for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY, "150", null]) {
+    assert.equal(retryAfterSeconds(own(value), now), null, String(value));
+  }
+  assert.equal(retryAfterSeconds(httpError(429, { headers: { "retry-after": "120" } }), now), 120);
+  assert.equal(
+    retryAfterSeconds({ failedFields: [{ retryAfterSeconds: 900 }, { retryAfterSeconds: null }] }, now),
+    900
+  );
+  assert.equal(retryAfterSeconds({ failedFields: [{ retryAfterSeconds: null }] }, now), null);
+  assert.equal(retryAfterSeconds(timeoutError(), now), null);
 });
 
 // ---------------------------------------------------------------------------------------------

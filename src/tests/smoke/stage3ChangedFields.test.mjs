@@ -29,6 +29,7 @@ import {
 const SEVERITY = CENTRAL_REACH_CLIENT_METADATA_FIELDS.SEVERITY_LEVEL;
 const POLICY_HOLDER = CENTRAL_REACH_CLIENT_METADATA_FIELDS.POLICY_HOLDER_NAME;
 const ACTIVE_CASES = CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.ACTIVE_CASE_COUNT;
+const ADDRESS_2 = CENTRAL_REACH_CLIENT_METADATA_FIELDS.SERVICE_LOCATION_ADDRESS_2;
 
 function runCase(record, { source = "hubspotWorkflow", logs = [] } = {}) {
   return runClientSyncWorkflow({ dealId: "deal-1", source }, clientWorkflowDeps({ record, logs }));
@@ -70,7 +71,8 @@ test("[BR14][3.8] a Case with no saved copy gets every filled metadata field; th
   assert.deepEqual(fieldIdsOf(done.crCalls, METADATA_PUT), [SEVERITY]);
   assert.deepEqual(fieldIdsOf(done.crCalls, METADATA_DELETE), []);
   const put = done.crCalls.find((call) => call.name === METADATA_PUT);
-  assert.equal(JSON.stringify(put.body).includes("Level 2"), true);
+  // Package item 8: Severity is sent as the digit alone.
+  assert.deepEqual(put.body, { inputValue: "2" });
 });
 
 test("[BR16][3.8] a Case metadata field that is blanked in HubSpot sends one clear and no other metadata call", async () => {
@@ -86,6 +88,36 @@ test("[BR16][3.8] a Case metadata field that is blanked in HubSpot sends one cle
 
   assert.deepEqual(fieldIdsOf(done.crCalls, METADATA_DELETE), [SEVERITY]);
   assert.deepEqual(fieldIdsOf(done.crCalls, METADATA_PUT), []);
+});
+
+// Item 5, question 7 (decided 2026-11-24): a junk Address 2 (only commas and a state) is null.
+test("[C25][4.22] a junk Service Location Address 2 clears the value the integration wrote before, and sends no clear when nothing was written", async () => {
+  const junk = ",  , New York ";
+  const written = setup();
+  const record = linkedCase(written.cr, {
+    specific_home_location: "More Than One Location",
+    service_address__other: "12 Oak St, Albany, NY 12207"
+  });
+  const count = counters({ container: written.container, cr: written.cr, record });
+  const first = count.mark();
+  await runCase(record);
+  assert.equal(fieldIdsOf(count.since(first).crCalls, METADATA_PUT).includes(ADDRESS_2), true);
+  record.properties.service_address__other = junk;
+  const start = count.mark();
+  await runCase(record);
+  assert.deepEqual(fieldIdsOf(count.since(start).crCalls, METADATA_DELETE), [ADDRESS_2]);
+
+  const fresh = setup();
+  const junkRecord = linkedCase(fresh.cr, {
+    specific_home_location: "More Than One Location",
+    service_address__other: junk
+  });
+  const freshCount = counters({ container: fresh.container, cr: fresh.cr, record: junkRecord });
+  const freshStart = freshCount.mark();
+  await runCase(junkRecord);
+  const done = freshCount.since(freshStart).crCalls;
+  assert.equal(fieldIdsOf(done, METADATA_DELETE).includes(ADDRESS_2), false);
+  assert.equal(fieldIdsOf(done, METADATA_PUT).includes(ADDRESS_2), false);
 });
 
 test("[BR17][3.8] after a Case run that failed halfway, every metadata field is sent again, also a field that was changed back", async () => {

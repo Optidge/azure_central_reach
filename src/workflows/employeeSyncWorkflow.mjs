@@ -14,6 +14,8 @@ import {
   findEmployeeByExternalSystemId,
   getEmployeeByContactId,
   buildEmployeePayloadForContactId,
+  checkHeldSsnSendable,
+  heldEmployeeContact,
   updateClientMetadata
 } from "../lib/centralReachClient.mjs";
 import { findHubSpotRecordsByEmployeeId } from "../lib/hubspotClient.mjs";
@@ -32,7 +34,9 @@ import {
   isStateClientUnavailable,
   keepOmittedFieldHashes,
   keepUnwrittenCoreFields,
+  mappedKeysMatchRead,
   metadataClearFieldIds,
+  unusableHeldEmployeeDateOfBirth,
   writtenFieldHashes
 } from "../lib/mappedState.mjs";
 import {
@@ -93,10 +97,21 @@ import {
   unreadableValue,
   WAITING_FOR_WORKDAY_ID,
   WORKDAY_ALREADY_IN_CENTRALREACH,
-  WORKDAY_ID_MISMATCH
+  WORKDAY_ID_MISMATCH,
+  WORKDAY_ID_NOT_SEVEN_DIGITS
 } from "../constants/syncReasons.mjs";
-import { checklistTicked, employeeCreateLookupDecision, linkedEmployeeIdentity } from "../lib/syncDecisions.mjs";
-import { employeeSyncEligibility } from "../lib/syncEligibility.mjs";
+import {
+  checklistTicked,
+  employeeCreateLookupDecision,
+  linkedEmployeeIdentity,
+  workdayIdIsValid
+} from "../lib/syncDecisions.mjs";
+import {
+  SKIP_REASONS,
+  employeeSyncEligibility,
+  gateProperties,
+  gatePropertyNames
+} from "../lib/syncEligibility.mjs";
 
 // The link record never expires. Attempt details (last error, invocation) are a second record
 // that may expire. Both ids start with the portal ID.
@@ -115,7 +130,8 @@ const DECIDED_CODES = Object.freeze({
   CONFLICTING_EXTERNAL_IDS: "CONFLICTING_EXTERNAL_IDS",
   WORKDAY_ALREADY_IN_CENTRALREACH: "WORKDAY_ALREADY_IN_CENTRALREACH",
   EMPLOYEE_CREATE_TURNED_OFF: "EMPLOYEE_CREATE_TURNED_OFF",
-  CR_CREATE_REJECTED: "CR_CREATE_REJECTED"
+  CR_CREATE_REJECTED: "CR_CREATE_REJECTED",
+  WORKDAY_ID_INVALID: "WORKDAY_ID_INVALID"
 });
 
 // Rule 5.4: the code of each identity check sentence (src/lib/syncDecisions.mjs).
@@ -356,7 +372,8 @@ export async function runEmployeeSyncWorkflow(
   let portalId = null;
   let objectTypeId = null;
   let employeeIdProperty = "employee_id";
-  let recordGateProperty = null;
+  // Item 24: the gate of each path; both are read on every run.
+  let gates = gateProperties(null);
   let checklistProperty = null;
   let properties = [];
   let stateId = null;
@@ -370,14 +387,16 @@ export async function runEmployeeSyncWorkflow(
         ? config.hubspot.btRbtObjectTypeId
         : config.hubspot.bcbaObjectTypeId;
     employeeIdProperty = config.hubspot.employeeIdProperty || "employee_id";
-    recordGateProperty = config.sync?.recordGateProperty || null;
+    gates = gateProperties(config.sync);
     checklistProperty =
       normalizedEmployeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT
         ? BT_RBT_CHECKLIST_PROPERTY
         : BCBA_CHECKLIST_PROPERTY;
     properties = [...employeeRequestProperties(normalizedEmployeeType), employeeIdProperty];
-    if (recordGateProperty && !properties.includes(recordGateProperty)) {
-      properties.push(recordGateProperty);
+    for (const name of gatePropertyNames(gates)) {
+      if (!properties.includes(name)) {
+        properties.push(name);
+      }
     }
 
     initHubSpot(config);
@@ -486,7 +505,7 @@ export async function runEmployeeSyncWorkflow(
     // 5.1: the gate has not passed); the run is retried.
     const missingGateKeys = missingKeys(hubspotProps, [
       ...EMPLOYEE_GATE_AND_STATUS_PROPERTIES,
-      ...(recordGateProperty ? [recordGateProperty] : [])
+      ...gatePropertyNames(gates)
     ]);
     if (missingGateKeys.length > 0) {
       throw new HubSpotReadError(`employee:${missingGateKeys.join(",")}`);
@@ -502,11 +521,16 @@ export async function runEmployeeSyncWorkflow(
     const eligibility = employeeSyncEligibility({
       properties: hubspotProps,
       linked: Boolean(existingContactId),
+      hubspotHasCrId: hubspotHasContactId,
       includeTestRecords: Boolean(config.sync?.includeTestRecords),
-      recordGateProperty
+      gates
     });
     if (!eligibility.eligible) {
       // No Central Reach call and no HubSpot writeback for a skipped employee.
+      // Item 24: only a record_gate skip names its path; setGate throws for anything else.
+      if (eligibility.reason === SKIP_REASONS.RECORD_GATE) {
+        summary.setGate(eligibility.gate);
+      }
       summary.setOutcome("skipped", eligibility.reason);
       logger("info", "Employee sync skipped by eligibility gate.", {
         workflow: "employeeSync",
@@ -514,6 +538,7 @@ export async function runEmployeeSyncWorkflow(
         employeeType: normalizedEmployeeType,
         source: source || null,
         reason: eligibility.reason,
+        gate: eligibility.gate || null,
         linked: Boolean(existingContactId),
         invocationId: context?.invocationId || null
       });
@@ -662,6 +687,18 @@ export async function runEmployeeSyncWorkflow(
       });
     }
 
+    // Item 15 (R-8, row 3.17): a filled workday_id must be exactly 7 digits. Pending final
+    // confirmation of the Workday ID format by United Care (O-8); the rule lives in workdayIdIsValid.
+    const workdayId = String(hubspotProps.workday_id ?? "").trim();
+    if (workdayId && !workdayIdIsValid(workdayId)) {
+      return await decided({
+        status: "error",
+        reason: WORKDAY_ID_NOT_SEVEN_DIGITS,
+        code: DECIDED_CODES.WORKDAY_ID_INVALID,
+        fail: true
+      });
+    }
+
     const validation = validatePayload(mapped.employeePayload, {
       linked: Boolean(existingContactId),
       emailField: mapped.emailField || "email"
@@ -676,6 +713,9 @@ export async function runEmployeeSyncWorkflow(
     }
 
     let outboundPayload = mapped.employeePayload;
+    // BR16, row 3.13: `contact` of the CentralReach read before an update. The update body is
+    // built from it (createOrUpdateEmployee). Never logged or saved.
+    let crContact = null;
     let identity = null;
     let syncResult = null;
     let createdThisRun = false;
@@ -1033,7 +1073,7 @@ export async function runEmployeeSyncWorkflow(
       // `contact` object would leave every blank core field out, and a field that is left out
       // is cleared in CentralReach. So no update is sent: the answer cannot be read (Stage 2
       // decision 4: permanent, logged by field names and types).
-      const crContact = existingCrEmployee?.contact;
+      crContact = existingCrEmployee?.contact;
       if (!crContact || typeof crContact !== "object" || Array.isArray(crContact)) {
         throw unreadableAnswerError({
           code: "CR_EMPLOYEE_READ_FAILED",
@@ -1045,6 +1085,10 @@ export async function runEmployeeSyncWorkflow(
           answer: existingCrEmployee
         });
       }
+      // BR16 (review finding 7): the update body is this read, so it must show this employee
+      // (its contactId). Checked here, before the record is marked in progress below, so a read
+      // that cannot be used leaves the saved hashes as they were.
+      heldEmployeeContact(crContact, existingContactId);
       const preserved = preserveIdentifiers(mapped.employeePayload, existingCrEmployee);
       // Row 3.13: a blank core field the integration did not write carries the value this read
       // holds. A copy: the mapped payload that the stale check hashes is not changed.
@@ -1082,6 +1126,26 @@ export async function runEmployeeSyncWorkflow(
       if (unchanged) {
         return await finishUnchanged({ status: identity.status, reason: identity.reason });
       }
+      // Rule 5.7 (item 1, option (a)): a blank HubSpot date of birth sends back the date this
+      // read holds. A read that cannot supply it is a failed read and no update is sent: a date
+      // left out of the PUT is cleared, and an update never sends the placeholder.
+      if (unusableHeldEmployeeDateOfBirth(mapped.employeePayload, crContact)) {
+        throw unreadableAnswerError({
+          code: "CR_EMPLOYEE_READ_FAILED",
+          call: "GET /contacts/employee/{id}",
+          status: null,
+          expected: "the employee's date of birth under contact, blank or starting with YYYY-MM-DD",
+          expectedFields: ["contact", "contact.dateOfBirth"],
+          reasonField: "contact.dateOfBirth",
+          answer: existingCrEmployee
+        });
+      }
+      // BR16, the SSN guard: a core PUT sends the read's SSN back, so it runs only when that PUT
+      // will be sent (a mapped key differs from the read), and before the in-progress save, so a
+      // failure leaves the saved hashes as they were. A run that sends no core PUT goes on.
+      if (!mappedKeysMatchRead(outboundPayload, crContact)) {
+        checkHeldSsnSendable("employee", crContact);
+      }
     }
 
     if (isBackupPathSource(source) && changedFields.length > 0) {
@@ -1107,8 +1171,13 @@ export async function runEmployeeSyncWorkflow(
           existingContactId
         )
       });
+      // BR16 (2026-11-24): the update body is this read with the mapped keys laid over it, and
+      // no PUT is sent when CentralReach already holds every mapped value: the answer is still
+      // an update, the summary's crCalls show no `update` call, and the run goes on to metadata
+      // and labels as usual.
       syncResult = await upsertEmployee({
         payload: outboundPayload,
+        heldContact: crContact,
         employeeType: normalizedEmployeeType,
         existingContactId,
         allowEmployeeCreate: Boolean(config.features?.allowEmployeeCreate),

@@ -42,6 +42,8 @@ export function stage3Case(properties = {}) {
     phi_gender: "male",
     severity_level_clinical: "Level 1",
     policy_holder_name: "Jordan Rivera",
+    // C10 (item 6): no Care Coordinator owner, so 138851 is a blank like any blank text field.
+    coordinator_export_status: "no_owner",
     last_sync_status: "",
     last_sync_error: "",
     ...properties
@@ -58,7 +60,7 @@ export function stage3Bt(properties = {}) {
     last_name: "Rivera",
     email: "alex@example.com",
     date_of_birth: "1990-10-20",
-    workday_id: "WD1",
+    workday_id: "1000001",
     active_cases_count: "2",
     btrbt_in_cr_checklist: "",
     last_sync_status: "",
@@ -75,9 +77,9 @@ export function stage3Bcba(properties = {}) {
     employee_id: "5002",
     first_name: "Pat",
     last_name: "Morgan",
-    // B5 (decision 48): the BCBA date of birth is `dob`, single-line text typed as M/D/YYYY.
-    dob: "3/2/1985",
-    workday_id: "WD2",
+    // B5 (item 1): the BCBA date of birth is `date_of_birth`, text typed as M/D/YYYY.
+    date_of_birth: "3/2/1985",
+    workday_id: "1000002",
     medicaid_id__ny: "",
     medicaid_id__nj: "",
     medicaid_id__co: "",
@@ -105,13 +107,14 @@ export function seedEmployee(cr, contactId, externalSystemId) {
 
 // Row 3.13: a CentralReach employee whose read holds all twelve core fields under `contact`, as
 // the live read does (API test of 2026-11-20). The shared fake answers GET /contacts/employee/{id}
-// with everything stored here, and its PUT does not change it, so a test can tell a value that
-// was sent back from the read apart from a value the worker made.
+// with everything stored here, and its PUT does not store the values sent (it only blanks a text
+// key the body leaves out, as the live PUT does), so a test can tell a value that was sent back
+// from the read apart from a value the worker made.
 export const STORED_EMPLOYEE = Object.freeze({
   firstName: "Stored",
   lastName: "Person",
   gender: "Female",
-  dateOfBirth: "1988-04-09T00:00:00",
+  dateOfBirth: "1988-04-09T00:00:00.0000000Z",
   addressLine1: "9 Stored Road",
   addressLine2: "Apt 4B",
   city: "Albany",
@@ -151,12 +154,12 @@ export function linkedCase(cr, properties = {}) {
 }
 
 export function linkedBt(cr, properties = {}) {
-  seedEmployee(cr, "5001", "WD1");
+  seedEmployee(cr, "5001", "1000001");
   return stage3Bt({ employee_id: "5001", ...properties });
 }
 
 export function linkedBcba(cr, properties = {}) {
-  seedEmployee(cr, "5002", "WD2");
+  seedEmployee(cr, "5002", "1000002");
   return stage3Bcba(properties);
 }
 

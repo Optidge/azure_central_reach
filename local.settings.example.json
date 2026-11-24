@@ -14,6 +14,8 @@
     "HS_BCBA_OBJECT_TYPE_ID": "2-72890322",
     "INCLUDE_TEST_RECORDS": "false",
     "SYNC_RECORD_GATE_PROPERTY": "sandbox_test_field",
+    "SYNC_CREATE_GATE_PROPERTY": "",
+    "SYNC_UPDATE_GATE_PROPERTY": "",
     "ALLOW_EMPLOYEE_CREATE": "false",
     "PUT_ONLY_MODE": "true",
     "HUBSPOT_CR_CONTACT_ID_PROPERTY": "change_me_property_name",

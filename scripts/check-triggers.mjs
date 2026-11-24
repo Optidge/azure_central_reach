@@ -10,7 +10,9 @@ import { filterWritebackProperties } from "../src/lib/writebackAllowlist.mjs";
 import { CASE_PROPERTIES } from "../src/mappings/client/clientProperties.mjs";
 import { BCBA_PROPERTIES, BT_RBT_PROPERTIES } from "../src/mappings/employees/employeeProperties.mjs";
 
-// The Contact workflow (Stage 6): a Guardian or BCBA Contact change reaches the linked record.
+// The Contact workflow (Stage 6): a Guardian Contact change reaches the linked Case. The BCBA half
+// is retired (decision 44). The Guardian fields are also Case property-sync fields read from the
+// Case, so whether a separate Contact workflow is still needed is open (O-21, pending Zeke).
 export const CONTACT_TRIGGER_PROPERTIES = Object.freeze(["firstname", "lastname", "email", "phone"]);
 
 // The CR ID property of each object. The workers read the name from configuration; these are the

@@ -35,7 +35,7 @@ import {
   sentValue,
   caseStaff
 } from "./laneDFakes.mjs";
-import { httpError, hubspotAnswer, workflowConfig } from "./stage2Fakes.mjs";
+import { httpError, hubspotAnswer, timeoutError, workflowConfig } from "./stage2Fakes.mjs";
 import {
   CASE_LINK,
   METADATA_DELETE,
@@ -46,6 +46,19 @@ import {
 } from "./stage3WorkerFakes.mjs";
 
 const SEVERITY = CENTRAL_REACH_CLIENT_METADATA_FIELDS.SEVERITY_LEVEL;
+// Every role the worker reads, nobody in it.
+const EMPTY_STAFF_NAMES = Object.freeze({
+  initialAssessmentBcba: [],
+  reEvaluationBcba: [],
+  supervisingBcba: [],
+  subBcba: [],
+  outgoingSubBcba: [],
+  outgoingSupervisingBcba: [],
+  primaryBt1: [],
+  primaryBt2: [],
+  outgoingBt1: [],
+  outgoingBt2: []
+});
 const run = (record, deps) => runClientSyncWorkflow({ dealId: "deal-1" }, deps);
 
 // --- 4.14: staff names ---
@@ -119,7 +132,7 @@ test("[C11][4.14] only a USER_DEFINED association type is a role: a HUBSPOT_DEFI
   assert.deepEqual(staff.calls.batch[0].ids, ["302"]);
 });
 
-test("[C11][4.14] one batch call per object type, asking only first_name and last_name, and none for a type with no staff on the Case", async () => {
+test("[C11][4.14] with no Grad Permit holder, one staff batch call per object type, asking first_name and last_name (and the BCBA's lba_licensure__ny), and none for a type with no staff on the Case", async () => {
   const { cr } = setup();
   const record = linkedCase(cr);
   const staff = caseStaff({
@@ -135,7 +148,8 @@ test("[C11][4.14] one batch call per object type, asking only first_name and las
     {
       objectTypeId: SANDBOX_BCBA_TYPE,
       ids: ["301", "302"],
-      properties: ["first_name", "last_name"]
+      // Item 9: the BCBA read has its own list with the Grad Permit holder test.
+      properties: ["first_name", "last_name", "lba_licensure__ny"]
     }
   ]);
   assert.equal(staff.calls.batch.some((call) => call.objectTypeId === SANDBOX_BT_TYPE), false);
@@ -284,7 +298,8 @@ test("[BR17][4.14] staffing is compared by record ID and role: a new record with
 
 test("[BR17][4.14] both mappings of one run get the same staffNames and omitFieldIds, so the run does not end as changed during the run", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr);
+  // A typed supplier, so 131308 is sent (a blank one with no BCBA is left out, insert E).
+  const record = linkedCase(cr, { ongoing_central_reach_provider_supplier: "Jane Doe" });
   const inputs = [];
   const staff = caseStaff({
     bcbaRows: [roleRow("301", ROLE_TYPE.ia), roleRow("302", ROLE_TYPE.re)],
@@ -319,14 +334,92 @@ test("[BR17][4.14] both mappings of one run get the same staffNames and omitFiel
   );
 });
 
-test("[BR16][4.14] when the staff cannot be read at all (no object types), the four staff fields are omitted, not sent blank", () => {
-  const omit = omitFieldIdsFor({ base: [], staffNames: undefined });
+// A Case reader whose second answer (the confirm read after the writes) holds `change`.
+function changedOnConfirmRead(record, change) {
+  let reads = 0;
+  return async (_id, requested) => {
+    reads += 1;
+    const answer = record.read();
+    if (reads === 2) {
+      Object.assign(answer.properties, change);
+    }
+    return hubspotAnswer(answer, requested);
+  };
+}
+
+test("[C12] a typed supplier filled in between the first read and the confirm read ends the run as changed during the run (SYNC_STALE), not success", async () => {
+  const { cr } = setup();
+  // No BCBA and a blank supplier: 131308 is left out on the first read (insert E).
+  const record = linkedCase(cr, { ongoing_central_reach_provider_supplier: null });
+  await assert.rejects(
+    run(
+      record,
+      caseDeps({
+        record,
+        getDealById: changedOnConfirmRead(record, {
+          ongoing_central_reach_provider_supplier: "Jane Doe"
+        })
+      })
+    ),
+    (error) => error.code === "SYNC_STALE"
+  );
+  assert.equal(metadataWriteCount(cr, FIELD.supervising, "PUT"), 0);
+});
+
+test("[C10] a Care Coordinator that turns ready between the first read and the confirm read ends the run as changed during the run (SYNC_STALE), not success", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Casey", "Jordan", "refreshing"));
+  await assert.rejects(
+    run(
+      record,
+      caseDeps({
+        record,
+        getDealById: changedOnConfirmRead(record, { coordinator_export_status: "ready" })
+      })
+    ),
+    (error) => error.code === "SYNC_STALE"
+  );
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), 0);
+});
+
+test("[BR16][4.14] when the staff cannot be read at all (no object types), the staff fields are omitted, not sent blank", () => {
+  // The Care Coordinator is sent (no_owner), so only the staff fields are in the list.
+  const noOwner = { properties: { coordinator_export_status: "no_owner" } };
+  const omit = omitFieldIdsFor({ base: [], staffNames: undefined, deal: noOwner });
+  // Item 9: Supervising BCBA 131308 and Grad Permit Holder 136052 are built from the staff too.
   assert.deepEqual(
     omit.map(Number).sort((a, b) => a - b),
-    [FIELD.ia, FIELD.re, FIELD.bt1, FIELD.bt2].sort((a, b) => a - b)
+    [FIELD.ia, FIELD.re, FIELD.bt1, FIELD.bt2, FIELD.supervising, FIELD.gradPermit].sort((a, b) => a - b)
   );
-  // Staff that were read add nothing; the seam's list is kept as it is.
-  assert.deepEqual(omitFieldIdsFor({ base: [111], staffNames: { primaryBt1: [] } }), ["111"]);
+  // Staff that were read add nothing; the seam's list is kept as it is. (The Case has a typed
+  // supplier: with none and no BCBA, 131308 is left out too, insert E.)
+  const deal = {
+    properties: { ongoing_central_reach_provider_supplier: "Jane Doe", coordinator_export_status: "no_owner" }
+  };
+  assert.deepEqual(omitFieldIdsFor({ base: [111], staffNames: EMPTY_STAFF_NAMES, deal }), ["111"]);
+});
+
+test("[C10][3.18] the omit list holds 138851 when the Care Coordinator is not ready, whether or not the staff were read, and not when it is ready or no_owner", () => {
+  const caseWith = (properties) => ({ properties });
+  const COORDINATOR = String(FIELD.careCoordinator);
+  for (const staffNames of [undefined, EMPTY_STAFF_NAMES]) {
+    for (const status of ["missing_match", "refreshing", null]) {
+      const deal = caseWith({ coordinator_export_status: status, care_coordinator_first_name: "Casey" });
+      assert.equal(omitFieldIdsFor({ staffNames, deal }).includes(COORDINATOR), true, String(status));
+    }
+    const readyNoName = caseWith({ coordinator_export_status: "ready" });
+    assert.equal(omitFieldIdsFor({ staffNames, deal: readyNoName }).includes(COORDINATOR), true);
+    for (const properties of [
+      { coordinator_export_status: "ready", care_coordinator_last_name: "Jordan" },
+      { coordinator_export_status: "no_owner" }
+    ]) {
+      assert.equal(
+        omitFieldIdsFor({ staffNames, deal: caseWith(properties) }).includes(COORDINATOR),
+        false,
+        JSON.stringify(properties)
+      );
+    }
+  }
 });
 
 test("[C11][4.14] staffRecordIdsByRole reads the portal's role IDs for a BCBA role and a BT/RBT role, in record-ID order", () => {
@@ -340,10 +433,11 @@ test("[C11][4.14] staffRecordIdsByRole reads the portal's role IDs for a BCBA ro
       primaryBt2: ROLE_TYPE.bt2
     }
   });
+  // Items 9 and 10: the new roles are listed too, empty here (no type ID passed for them).
   assert.deepEqual(idsByRole, {
+    ...EMPTY_STAFF_NAMES,
     initialAssessmentBcba: ["3"],
     reEvaluationBcba: ["3", "12"],
-    primaryBt1: [],
     primaryBt2: ["501"]
   });
 });
@@ -410,7 +504,7 @@ test("[C11][4.14] readStaffNames makes no call for a type with no staff and keep
   assert.deepEqual(staffNames.initialAssessmentBcba, []);
 });
 
-// --- 4.16: the Care Coordinator (decision 39: the Case property care_coordinator_name) ---
+// --- 4.16: the Care Coordinator (item 6: the coordinator workflow's fields; was decision 39) ---
 
 // HubSpot's answer to the Case read, every requested key there except `name`.
 function answerWithout(record, name) {
@@ -421,22 +515,30 @@ function answerWithout(record, name) {
   };
 }
 
-test("[C10][4.16] the Care Coordinator is the text of the Case property care_coordinator_name, trimmed and sent to field 138851", async () => {
+const coordinator = (first, last, status = "ready") => ({
+  care_coordinator_first_name: first,
+  care_coordinator_last_name: last,
+  coordinator_export_status: status
+});
+const savedCoordinatorHash = (container) =>
+  container.get(CASE_LINK.pk, CASE_LINK.id).data.fieldHashes[`metadata.${FIELD.careCoordinator}`];
+
+test("[C10][4.16] a ready Care Coordinator sends \"<first> <last>\", trimmed, to field 138851", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { care_coordinator_name: "  Casey Jordan  " });
+  const record = linkedCase(cr, coordinator("  Casey ", " Jordan  "));
   const result = await run(record, caseDeps({ record }));
 
   assert.equal(result.status, "success");
   assert.equal(sentValue(cr, FIELD.careCoordinator), "Casey Jordan");
 });
 
-test("[C10][4.16] a changed care_coordinator_name sends the new value to field 138851", async () => {
+test("[C10][4.16] a changed Care Coordinator name sends the new value to field 138851", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan" });
+  const record = linkedCase(cr, coordinator("Casey", "Jordan"));
   await run(record, caseDeps({ record }));
   const putsBefore = metadataWriteCount(cr, FIELD.careCoordinator, "PUT");
 
-  record.properties.care_coordinator_name = "Riley Chen";
+  Object.assign(record.properties, coordinator("Riley", "Chen"));
   const result = await run(record, caseDeps({ record }));
 
   assert.equal(result.status, "success");
@@ -444,24 +546,52 @@ test("[C10][4.16] a changed care_coordinator_name sends the new value to field 1
   assert.equal(sentValue(cr, FIELD.careCoordinator), "Riley Chen");
 });
 
-for (const blank of [null, ""]) {
-  test(`[C10][4.16] a blank care_coordinator_name (${JSON.stringify(blank)}) is a real blank: a name written before is cleared, like any mapped text field`, async () => {
-    const { cr } = setup();
-    const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan" });
-    await run(record, caseDeps({ record }));
-    assert.equal(sentValue(cr, FIELD.careCoordinator), "Casey Jordan");
-
-    record.properties.care_coordinator_name = blank;
-    const result = await run(record, caseDeps({ record }));
-
-    assert.equal(result.status, "success");
-    assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
-  });
-}
-
-test("[C10][4.16] a blank care_coordinator_name with no saved copy sends no clear", async () => {
+test("[C10][4.16] status no_owner is a real blank: a name written before is cleared", async () => {
   const { cr } = setup();
-  const record = linkedCase(cr, { care_coordinator_name: null });
+  const record = linkedCase(cr, coordinator("Casey", "Jordan"));
+  await run(record, caseDeps({ record }));
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Casey Jordan");
+
+  record.properties.coordinator_export_status = "no_owner";
+  const result = await run(record, caseDeps({ record }));
+
+  assert.equal(result.status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
+});
+
+test("[C10][3.18] a Care Coordinator that is not ready (missing_match) after a name was written: no write, no clear, the saved hash stays, the warning names the status only; a later no_owner still sends the clear", async () => {
+  const { container, cr } = setup();
+  const record = linkedCase(cr, coordinator("Casey", "Jordan"));
+  await run(record, caseDeps({ record }));
+  const savedHash = savedCoordinatorHash(container);
+  assert.ok(savedHash);
+
+  // The workflow is refreshing the coordinator: the names may be stale or blank.
+  Object.assign(record.properties, coordinator("Riley", null, "missing_match"));
+  const logs = [];
+  const writesBefore = cr.writes().length;
+  const result = await run(record, caseDeps({ record, logs }));
+
+  assert.equal(result.operation, "noop");
+  assert.equal(cr.writes().length, writesBefore);
+  assert.equal(savedCoordinatorHash(container), savedHash);
+  const warnings = logged(logs, "Client metadata mapper warning.");
+  assert.deepEqual(
+    warnings.map(({ meta }) => [meta.code, meta.property, meta.status]),
+    [["care_coordinator_not_ready", "coordinator_export_status", "missing_match"]]
+  );
+  assert.equal(/Riley|Casey|Jordan/.test(JSON.stringify(warnings)), false);
+
+  record.properties.coordinator_export_status = "no_owner";
+  const cleared = await run(record, caseDeps({ record }));
+  assert.equal(cleared.status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
+});
+
+test("[C10][3.18] a Case whose Care Coordinator was never written and is not ready (blank status) sends nothing to field 138851", async () => {
+  const { cr } = setup();
+  // care_coordinator_name (decision 39's source) is no longer read.
+  const record = linkedCase(cr, { ...coordinator("Casey", "Jordan", null), care_coordinator_name: "Casey Jordan" });
   const result = await run(record, caseDeps({ record }));
 
   assert.equal(result.status, "success");
@@ -469,21 +599,187 @@ test("[C10][4.16] a blank care_coordinator_name with no saved copy sends no clea
   assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 0);
 });
 
-test("[BR16][4.18] an answer without the care_coordinator_name key ends as error with no CentralReach call", async () => {
+test("[C10][3.18] a linked Case with no_owner and no saved copy of 138851 sends no PUT and no DELETE to 138851, so a value entered in CentralReach stays", async () => {
   const { container, cr } = setup();
-  const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan" });
+  // A clean run while the coordinator is not ready: a saved copy with no hash for 138851.
+  const record = linkedCase(cr, coordinator("Casey", "Jordan", "missing_match"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(savedCoordinatorHash(container), undefined);
+
+  record.properties.coordinator_export_status = "no_owner";
+  const result = await run(record, caseDeps({ record }));
+
+  assert.equal(result.status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), 0);
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 0);
+});
+
+const isStale = (error) => error.code === "SYNC_STALE";
+
+test("[C10][3.18] a name sent by a run that then went stale is sent again once the coordinator is ready, also when it is back to the last clean value", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Old", "One"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  // The run sends "New Two"; the confirm read finds the workflow refreshing the old name.
+  Object.assign(record.properties, coordinator("New", "Two"));
+  const refreshingOld = changedOnConfirmRead(record, coordinator("Old", "One", "refreshing"));
+  await assert.rejects(run(record, caseDeps({ record, getDealById: refreshingOld })), isStale);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "New Two");
+
+  // The retry while refreshing: 138851 is left out and the run ends clean.
+  Object.assign(record.properties, coordinator("Old", "One", "refreshing"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  const putsBefore = metadataWriteCount(cr, FIELD.careCoordinator, "PUT");
+
+  // Ready with the old name: CentralReach may still hold "New Two", so the name is sent.
+  record.properties.coordinator_export_status = "ready";
+  const result = await run(record, caseDeps({ record }));
+  assert.equal(result.status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), putsBefore + 1);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Old One");
+});
+
+test("[C10][3.18] a name first written by a run that then went stale is still cleared by a later no_owner, after a not-ready run in between", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("A", "B"));
+  const notReady = changedOnConfirmRead(record, { coordinator_export_status: "missing_match" });
+  await assert.rejects(run(record, caseDeps({ record, getDealById: notReady })), isStale);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "A B");
+
+  record.properties.coordinator_export_status = "missing_match";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  record.properties.coordinator_export_status = "no_owner";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
+});
+
+test("[C10][3.18] a no_owner run that failed before its clear was sent, then a not-ready run: a later no_owner still sends the clear", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Old", "One"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  record.properties.coordinator_export_status = "no_owner";
+  cr.fail("PUT /contacts/client/{id}", timeoutError());
+  await assert.rejects(run(record, caseDeps({ record })));
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 0);
+
+  record.properties.coordinator_export_status = "refreshing";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  record.properties.coordinator_export_status = "no_owner";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
+});
+
+test("[C10][3.18] two stale runs in a row (\"X One\", then \"Y Two\"), then a not-ready run: a later ready \"X One\" is sent again", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Old", "One"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  const refreshing = { coordinator_export_status: "refreshing" };
+  for (const [first, last] of [["X", "One"], ["Y", "Two"]]) {
+    Object.assign(record.properties, coordinator(first, last));
+    const getDealById = changedOnConfirmRead(record, refreshing);
+    await assert.rejects(run(record, caseDeps({ record, getDealById })), isStale);
+  }
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Y Two");
+
+  Object.assign(record.properties, refreshing);
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  Object.assign(record.properties, coordinator("X", "One"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "X One");
+});
+
+// keepOmittedFieldHashes (src/lib/mappedState.mjs) after an unfinished run: the unsettled hash
+// is kept only when the saved copy or the unfinished run holds a written value for 138851.
+test("[C10][3.18] 138851 never written: a no_owner run that goes stale, then a refreshing run that ends clean: a later no_owner sends no DELETE, so a value entered in CentralReach stays", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Casey", "Jordan", "missing_match"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  record.properties.coordinator_export_status = "no_owner";
+  const backToNotReady = changedOnConfirmRead(record, { coordinator_export_status: "missing_match" });
+  await assert.rejects(run(record, caseDeps({ record, getDealById: backToNotReady })), isStale);
+
+  record.properties.coordinator_export_status = "refreshing";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  record.properties.coordinator_export_status = "no_owner";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 0);
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), 0);
+});
+
+test("[C10][3.18] clean \"Old One\"; a no_owner run sends the DELETE and goes stale; a refreshing run ends clean: a later ready \"Old One\" is sent again", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Old", "One"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  const putsAfterFirst = metadataWriteCount(cr, FIELD.careCoordinator, "PUT");
+
+  record.properties.coordinator_export_status = "no_owner";
+  const backToReady = changedOnConfirmRead(record, { coordinator_export_status: "ready" });
+  await assert.rejects(run(record, caseDeps({ record, getDealById: backToReady })), isStale);
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "DELETE"), 1);
+
+  record.properties.coordinator_export_status = "refreshing";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  // CentralReach holds no name after the DELETE, so the ready name is sent again.
+  record.properties.coordinator_export_status = "ready";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), putsAfterFirst + 1);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Old One");
+});
+
+test("[C10][3.18] clean \"Old One\"; a stale run with 138851 omitted, then a stale run that sends \"New Two\", then a refreshing run that ends clean: a later ready \"Old One\" is sent again", async () => {
+  const { cr } = setup();
+  const record = linkedCase(cr, coordinator("Old", "One"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+
+  // Another field changed while the coordinator was refreshing; the confirm read turns ready.
+  Object.assign(record.properties, coordinator("Old", "One", "refreshing"), {
+    severity_level_clinical: "Level 2"
+  });
+  const turnsReady = changedOnConfirmRead(record, { coordinator_export_status: "ready" });
+  await assert.rejects(run(record, caseDeps({ record, getDealById: turnsReady })), isStale);
+
+  Object.assign(record.properties, coordinator("New", "Two"));
+  const refreshing = changedOnConfirmRead(record, { coordinator_export_status: "refreshing" });
+  await assert.rejects(run(record, caseDeps({ record, getDealById: refreshing })), isStale);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "New Two");
+
+  Object.assign(record.properties, coordinator("Old", "One", "refreshing"));
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  const putsBefore = metadataWriteCount(cr, FIELD.careCoordinator, "PUT");
+
+  record.properties.coordinator_export_status = "ready";
+  assert.equal((await run(record, caseDeps({ record }))).status, "success");
+  assert.equal(metadataWriteCount(cr, FIELD.careCoordinator, "PUT"), putsBefore + 1);
+  assert.equal(sentValue(cr, FIELD.careCoordinator), "Old One");
+});
+
+test("[BR16][4.18] an answer without the coordinator_export_status key ends as error with no CentralReach call", async () => {
+  const { container, cr } = setup();
+  const record = linkedCase(cr, coordinator("Casey", "Jordan"));
   const result = await run(
     record,
-    caseDeps({ record, getDealById: answerWithout(record, "care_coordinator_name") })
+    caseDeps({ record, getDealById: answerWithout(record, "coordinator_export_status") })
   );
 
   assert.equal(result.status, "error");
   assert.deepEqual(cr.calls, []);
-  assert.equal(record.properties.last_sync_error, "Missing from the HubSpot answer: care_coordinator_name");
+  assert.equal(
+    record.properties.last_sync_error,
+    "Missing from the HubSpot answer: coordinator_export_status"
+  );
   assert.equal(container.get(CASE_LINK.pk, CASE_LINK.id)?.data?.fieldHashes, undefined);
 });
 
-test("[C10][4.16] the Case run never calls the owners API (/crm/v3/owners) and requests neither hubspot_owner_id nor care_coordinator_email", async () => {
+test("[C10][4.16] the Case run never calls the owners API (/crm/v3/owners) and requests neither hubspot_owner_id, care_coordinator_name nor care_coordinator_email", async () => {
   const { cr } = setup();
   // Every HubSpot request the worker makes outside the fakes reaches this adapter.
   const hubspotRequests = [];
@@ -492,7 +788,7 @@ test("[C10][4.16] the Case run never calls the owners API (/crm/v3/owners) and r
     hubspotRequests.push(`${requestConfig.method} ${requestConfig.url}`);
     throw httpError(599);
   });
-  const record = linkedCase(cr, { care_coordinator_name: "Casey Jordan", hubspot_owner_id: "9001" });
+  const record = linkedCase(cr, { ...coordinator("Casey", "Jordan"), hubspot_owner_id: "9001" });
   const requested = [];
   const result = await run(
     record,
@@ -508,8 +804,9 @@ test("[C10][4.16] the Case run never calls the owners API (/crm/v3/owners) and r
   assert.equal(result.status, "success");
   assert.deepEqual(hubspotRequests, []);
   assert.equal(Object.hasOwn(hubspotClient, "getOwnerById"), false);
-  assert.equal(requested.includes("care_coordinator_name"), true);
+  assert.equal(requested.includes("coordinator_export_status"), true);
   assert.equal(requested.includes("hubspot_owner_id"), false);
+  assert.equal(requested.includes("care_coordinator_name"), false);
   assert.equal(requested.includes("care_coordinator_email"), false);
 });
 
@@ -752,8 +1049,8 @@ test("[BR16][3.18] dependencies.omitFieldIds still works with the new reads: the
   assert.equal(metadataWriteCount(cr, SEVERITY, "PUT"), 0);
 });
 
-test("[BR16][4.18] the mapped list and the request list are what row 4.18 checks: care_coordinator_name is a mapped property; hubspot_owner_id and care_coordinator_email are not requested", () => {
-  assert.equal(CASE_PROPERTIES.mapped.includes("care_coordinator_name"), true);
+test("[BR16][4.18] the mapped list and the request list are what row 4.18 checks: coordinator_export_status is a mapped property; hubspot_owner_id and care_coordinator_email are not requested", () => {
+  assert.equal(CASE_PROPERTIES.mapped.includes("coordinator_export_status"), true);
   assert.equal(caseRequestProperties().includes("hubspot_owner_id"), false);
   assert.equal(caseRequestProperties().includes("care_coordinator_email"), false);
   assert.deepEqual(missingMappedProperties({}), [...CASE_PROPERTIES.mapped]);

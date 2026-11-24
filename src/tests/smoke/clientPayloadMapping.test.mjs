@@ -37,6 +37,34 @@ test("[C8][4.1] buildClientPayload maps and normalizes AWS canonical fields", ()
   assert.equal(payload.DateOfBirth, "2017-01-14T00:00:00.000Z");
 });
 
+// Item 5 ("use hte fall back"; on an unreadable stateregion, "confirmed"): StateProvince is
+// stateregion, else location, else left out. An unreadable stateregion is a warning, not an error.
+test("[C8][4.1] item 5: StateProvince is stateregion, else location; an unreadable stateregion falls back with a warning naming the property, never the value", () => {
+  const map = (properties) => buildClientPayload({ deal: { id: "deal-1", properties } });
+
+  const upper = map({ stateregion: "NEW YORK", location: "Colorado" });
+  assert.equal(upper.StateProvince, "NY");
+  assert.deepEqual(upper.warnings, []);
+
+  const fallback = map({ stateregion: "", location: "Colorado" });
+  assert.equal(fallback.StateProvince, "CO");
+  assert.deepEqual(fallback.warnings, []);
+
+  const unreadable = map({ stateregion: "Brooklyn", location: "New York" });
+  assert.equal(unreadable.StateProvince, "NY");
+  assert.deepEqual(unreadable.unreadableValueProperties, []);
+  assert.deepEqual(unreadable.warnings, [{ code: "state_unreadable_used_location", property: "stateregion" }]);
+
+  const noFallback = map({ stateregion: "Brooklyn", location: "" });
+  assert.equal(noFallback.StateProvince, null);
+  assert.deepEqual(noFallback.warnings, [{ code: "state_unreadable_no_fallback", property: "stateregion" }]);
+  assert.equal(JSON.stringify(noFallback.warnings).includes("Brooklyn"), false);
+
+  const neither = map({ stateregion: "", location: "" });
+  assert.equal(neither.StateProvince, null);
+  assert.deepEqual(neither.warnings, []);
+});
+
 test("validateClientPayload enforces required names", () => {
   const valid = validateClientPayload(
     { FirstName: "Alex", LastName: "Rivera" },

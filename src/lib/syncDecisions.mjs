@@ -7,6 +7,13 @@ import {
 } from "../constants/syncReasons.mjs";
 import { EXTERNAL_SYSTEM_ID_CHECKLIST_VALUE } from "../constants/hubspot.mjs";
 
+// Item 15 (R-8, row 3.17): the Workday ID format, exactly 7 digits once trimmed. Pending final
+// confirmation of the Workday ID format by United Care (O-8): if the format changes, change only
+// this line.
+export function workdayIdIsValid(value) {
+  return /^\d{7}$/.test(String(value ?? "").trim());
+}
+
 export function checklistTicked(value) {
   return String(value ?? "")
     .split(";")

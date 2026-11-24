@@ -132,6 +132,23 @@ export function hubspotRecord(properties) {
   };
 }
 
+const CLIENT_READ_KEYS = [
+  "gender",
+  "dateOfBirth",
+  "primaryEmail",
+  "phoneCell",
+  "addressLine1",
+  "addressLine2",
+  "city",
+  "stateProvince",
+  "zipPostalCode",
+  "guardianFirstName",
+  "guardianLastName"
+];
+
+// Text keys the live PUT kept when they were left out (2026-11-24), plus the fake's own ID.
+const PUT_KEEPS_WHEN_LEFT_OUT = ["contactId", "type", "primaryOfficeLocation"];
+
 const CR_ROUTES = [
   {
     method: "GET",
@@ -170,7 +187,9 @@ const CR_ROUTES = [
       const contact = {
         contactId: nextId(),
         externalSystemId: String(body?.externalSystemId ?? body?.ExternalSystemId ?? ""),
-        primaryEmail: body?.primaryEmail ?? body?.PrimaryEmail ?? null
+        primaryEmail: body?.primaryEmail ?? body?.PrimaryEmail ?? null,
+        // An employee create stores its date of birth, and the employee read returns it (item 1).
+        ...(body?.dateOfBirth ? { dateOfBirth: body.dateOfBirth } : {})
       };
       contactsOf(match[1]).set(contact.contactId, contact);
       return { contact: { contactId: contact.contactId } };
@@ -189,10 +208,55 @@ const CR_ROUTES = [
     }
   },
   {
+    // Item B21: the client read before an update, in the shape recorded on 2026-11-24 (two
+    // production clients): under `contact`, a numeric contactId, all 11 core keys camelCase, a
+    // blank one as "" (never null), externalSystemId only when held. A test seeds stored values
+    // with cr.clients.set(id, { ... }); a client not seeded holds every core field blank.
+    method: "GET",
+    pattern: /^\/contacts\/client\/(\d+)$/,
+    name: () => "GET /contacts/client/{id}",
+    // BR16 (live read 2026-11-24): the read also returns the keys the integration does not map
+    // (firstName, chosenName, isActive, type, lists ...): any other key a test stores is returned
+    // as stored.
+    handle: ({ match, contactsOf }) => {
+      const stored = contactsOf("client").get(match[1]) || {};
+      const contact = { contactId: Number(match[1]) };
+      for (const [key, value] of Object.entries(stored)) {
+        if (!["contactId", "externalSystemId", ...CLIENT_READ_KEYS].includes(key)) {
+          contact[key] = value;
+        }
+      }
+      for (const key of CLIENT_READ_KEYS) {
+        contact[key] = stored[key] ?? "";
+      }
+      if (String(stored.externalSystemId ?? "") !== "") {
+        contact.externalSystemId = stored.externalSystemId;
+      }
+      return { contact };
+    }
+  },
+  {
+    // BR16 (live check 2026-11-24, test employee 5338681 and test client 5384589): the PUT
+    // replaces the whole record. A text key the body leaves out is blanked (employee jobTitle
+    // and chosenName, client chosenName); `type`, `primaryOfficeLocation` and keys that are not
+    // text (isActive, lists) were kept. A client body key is PascalCase. The values sent are not
+    // stored, so a test can still tell a value sent back from the read apart from one the worker
+    // made.
     method: "PUT",
     pattern: /^\/contacts\/(employee|client)\/(\w+)$/,
     name: (match) => `PUT /contacts/${match[1]}/{id}`,
-    handle: () => ({})
+    handle: ({ match, body, contactsOf }) => {
+      const stored = contactsOf(match[1]).get(match[2]);
+      const sent = new Set(
+        Object.keys(body || {}).map((key) => key.charAt(0).toLowerCase() + key.slice(1))
+      );
+      for (const [key, value] of Object.entries(stored || {})) {
+        if (typeof value === "string" && !sent.has(key) && !PUT_KEEPS_WHEN_LEFT_OUT.includes(key)) {
+          stored[key] = "";
+        }
+      }
+      return {};
+    }
   },
   {
     // The live label catalog (row L.1). `cr.catalog` is a list of label IDs. When a test does not
@@ -418,7 +482,7 @@ export function btRecord(properties = {}) {
     last_name: "Rivera",
     email: "alex@example.com",
     date_of_birth: "1990-10-20",
-    workday_id: "WD1",
+    workday_id: "1000001",
     street_address__work_: "1 Main St",
     ...properties
   });

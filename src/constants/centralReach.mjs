@@ -4,7 +4,7 @@ export const CENTRAL_REACH_EMPLOYEE_TYPES = {
 };
 
 // Central Reach requires a date of birth to create an employee. Placeholder used only on a create
-// when the HubSpot date of birth (BT/RBT date_of_birth, BCBA dob) is blank (Zeke, 2026-11-16).
+// when the HubSpot date of birth (date_of_birth on the BT/RBT and the BCBA) is blank (Zeke, 2026-11-16).
 // Temporary: pending a decision with Danny.
 export const EMPLOYEE_CREATE_DEFAULT_DATE_OF_BIRTH = "2000-01-01";
 
@@ -19,8 +19,10 @@ export const CENTRAL_REACH_EMPLOYEE_LABELS = {
   CO_EMPLOYEE: 1107687,
   RBT_CO: 1107692,
   NJ_EMPLOYEE: 1107686,
-  // New Mexico and Virginia: no HubSpot value exists yet, so no mapping reads these two and they
-  // are not managed (BL3, TL2; O-6).
+  // New Mexico and Virginia: both are options of HubSpot `location` on the BCBA and the BT/RBT
+  // (production reads 2026-11-20 and 2026-11-24), but their mapping is deferred until the client
+  // starts work in these states (package item 11), so no mapping reads these two and they are not
+  // managed (BL3, TL2; O-6).
   NM_EMPLOYEE: 1157030,
   VA_EMPLOYEE: 1157031,
   BT_NJ: 1132652,
@@ -144,6 +146,8 @@ export const CENTRAL_REACH_CLIENT_METADATA_FIELDS = {
   // "Date of Most Recent ASD Diagnosis Medicaid FFS NY" in CentralReach.
   ASD_DIAGNOSIS_DATE_MEDICAID: 138701,
   SUPERVISING_BCBA: 131308,
+  // C13 (item 9): "<First> <Last> Grad Permit Holder" for the Case's Grad Permit holder.
+  GRAD_PERMIT_HOLDER: 136052,
   INITIAL_ASSESSMENT_BCBA: 131314,
   REASSESSMENT_BCBA: 144602,
   CARE_COORDINATOR: 138851,
@@ -162,6 +166,10 @@ export const CENTRAL_REACH_CLIENT_METADATA_FIELDS = {
   SERVICE_LOCATION_ADDRESS: 137697,
   SERVICE_LOCATION_ADDRESS_2: 138091
 };
+
+// C12 (item 9 rule 5, guide insert E): added to each BCBA name sent to Supervising BCBA 131308,
+// whatever licence the BCBA holds.
+export const SUPERVISING_BCBA_SUFFIX = " BCBA LBA";
 
 // Fields CentralReach stores as a textarea. Every other field is an Input.
 const TEXT_AREA_METADATA_FIELD_IDS = [CENTRAL_REACH_CLIENT_METADATA_FIELDS.SERVICE_LOCATION_ADDRESS];

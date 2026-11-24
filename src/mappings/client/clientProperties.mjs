@@ -30,7 +30,7 @@ export const CASE_PROPERTIES = Object.freeze({
     "guardian_first_name",
     "guardian_last_name",
     // Labels (buildClientMetadata.mjs): CL1 to CL4. specific_home_location also chooses the
-    // service address (C24, C25).
+    // service address (C24, C25); location is also the state when stateregion is blank (item 5).
     "location",
     "specific_home_location",
     "case_status",
@@ -46,7 +46,6 @@ export const CASE_PROPERTIES = Object.freeze({
     "work_schedule_details",
     "btrbt_work_schedule_2_details",
     "finalized_client_service_hours_post_assessment",
-    "client_service_hours_total",
     // C20, row 4.6 (owner's decision 2026-11-21): Total Assigned Hours is the sum of the two hours.
     "hours_bt_work_schedule_1",
     "bt_rbt_2_work_schedule",
@@ -55,10 +54,12 @@ export const CASE_PROPERTIES = Object.freeze({
     "ia_hours_from_the_ia",
     "ongoing_auth_period_start_date",
     "ongoing_autrh_period_end_date",
-    "full_home_address",
+    // C24 (item 5): the Other Location parts. Child's House and More Than One Location use the
+    // core address parts above; full_home_address is not read.
     "service__street_address",
     "service__apt",
     "service__city",
+    "service__stateregion_2",
     "service__postal_code",
     "service_address__other",
     "n1_what_type_of_insurance",
@@ -80,8 +81,15 @@ export const CASE_PROPERTIES = Object.freeze({
     "insurance_2__other__summary",
     "insurance_id_2",
     "referral_source",
-    // C10, row 4.16 (decision 39): the Care Coordinator's name, as text on the Case.
-    "care_coordinator_name"
+    // C36 (item 2): the "Referral - Other" text, sent when referral_source is Other.
+    "referral_other",
+    // C10 (item 6, replaces decision 39): the Care Coordinator, from the fields Zeke's coordinator
+    // workflow keeps on the Case. care_coordinator_name is no longer read.
+    // These four properties exist in the sandbox only (production 404, 2026-11-24): a portal
+    // without them ends every Case run HUBSPOT_PROPERTY_MISSING (row 4.18).
+    "care_coordinator_first_name",
+    "care_coordinator_last_name",
+    "coordinator_export_status"
   ]),
   // dealstage, and the guide's five staffing-name signals: a HubSpot workflow cannot trigger on an
   // association, so it triggers on the name property that changes with it. No mapper reads them

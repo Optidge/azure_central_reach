@@ -71,18 +71,18 @@ test("[BR16][4.18] a BT/RBT answer without the street_home key is error, with no
   assert.equal(JSON.stringify(logs).includes("12 Main Street"), false);
 });
 
-test("[BR16][4.18] a BCBA answer without dob (the BCBA date of birth source, decision 48; O-10) is error, with no CentralReach call", async () => {
+test("[BR16][4.18] a BCBA answer without date_of_birth (the BCBA date of birth source, item 1; O-10) is error, with no CentralReach call", async () => {
   const { container, cr } = setup();
-  const record = linkedBcba(cr, { dob: "3/2/1985" });
+  const record = linkedBcba(cr, { date_of_birth: "3/2/1985" });
   const count = counters({ container, cr, record });
   const start = count.mark();
 
-  const result = await run(record, HUBSPOT_EMPLOYEE_TYPES.BCBA, { missing: ["dob"] });
+  const result = await run(record, HUBSPOT_EMPLOYEE_TYPES.BCBA, { missing: ["date_of_birth"] });
   const done = count.since(start);
 
   assert.equal(result.status, "error");
   assert.equal(done.crCalls.length, 0);
-  assert.equal(record.properties.last_sync_error, "Missing from the HubSpot answer: dob");
+  assert.equal(record.properties.last_sync_error, "Missing from the HubSpot answer: date_of_birth");
   // Nothing about the CentralReach employee is saved: no link record write, no hashes.
   assert.equal(container.get(BCBA_LINK.pk, BCBA_LINK.id), null);
 });
@@ -158,7 +158,7 @@ test("[BR16][4.18] a key missing from the confirm read is a temporary failed rea
 test("[BR7][4.18] a test record is skipped by the gate before the answer is checked: no writeback", async () => {
   const { cr } = setup();
   const record = stage3Bcba({ test_record: "true" });
-  const result = await run(record, HUBSPOT_EMPLOYEE_TYPES.BCBA, { missing: ["dob"] });
+  const result = await run(record, HUBSPOT_EMPLOYEE_TYPES.BCBA, { missing: ["date_of_birth"] });
 
   assert.equal(result.status, "skipped");
   assert.equal(result.reason, "test_record");

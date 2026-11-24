@@ -64,6 +64,17 @@ export function inProgressFields(writtenSoFar, contactId) {
   };
 }
 
+// The clean flag and in-progress fields as the run found them (linkData: the link record read at
+// its start). A run that marked the record in progress and then failed before any CentralReach
+// write saves these back: nothing reached CentralReach, so its hashes must not count as written.
+export function inProgressAsBefore(linkData) {
+  return {
+    clean: linkData?.clean === true,
+    inProgressFieldHashes: linkData?.inProgressFieldHashes ?? null,
+    inProgressContactId: linkData?.inProgressContactId ?? null
+  };
+}
+
 // Row 3.15: a create that was sent is remembered by its External System ID and the time it was
 // sent. Until the CR ID is saved, the next run looks that ID up before it may create again. A
 // lookup that answers "not found" inside this window is not trusted yet: CentralReach may not

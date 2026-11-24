@@ -107,7 +107,7 @@ async function withClock(run) {
 // earlier test fetched would be reused from the module's cache.
 test("[2.7 decision 6] a CentralReach token request that is refused is retried, never an error on the record", async () => {
   const { cr } = setup();
-  cr.employees.set("7001", { contactId: "7001", externalSystemId: "WD1", primaryEmail: "s@example.com" });
+  cr.employees.set("7001", { contactId: "7001", externalSystemId: "1000001", primaryEmail: "s@example.com" });
   const answer = axios.defaults.adapter;
   axios.defaults.adapter = async (requestConfig) => {
     if (String(requestConfig.url).includes("token.test")) {
@@ -285,7 +285,7 @@ test("[5.1] a HubSpot read that fails leaves the gate unknown: no writeback for 
 
 test("[5.1] a record that passed the gate still gets Retries used up on the last attempt", async () => {
   const { cr } = setup();
-  cr.employees.set("7001", { contactId: "7001", externalSystemId: "WD1", primaryEmail: "s@example.com" });
+  cr.employees.set("7001", { contactId: "7001", externalSystemId: "1000001", primaryEmail: "s@example.com" });
   cr.fail("PUT /contacts/employee/{id}", httpError(503), { times: 10 });
   const record = btRecord({ employee_id: "7001", sandbox_test_field: "true" });
 
