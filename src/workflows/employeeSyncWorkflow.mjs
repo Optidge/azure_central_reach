@@ -64,6 +64,7 @@ import {
   FAILURE_KINDS,
   classifyFailure,
   createStillPendingError,
+  isLastAttempt,
   labelPostUnconfirmedError,
   metadataWriteFailedError,
   permanentFailureReason
@@ -303,6 +304,8 @@ function syncInProgress() {
 
 // lastAttempt is set by the queue worker when this message has used its five retries. attempt is
 // the number of retries the message has used (row 3.20, the summary line); null when not passed.
+// With source it also decides whether a failure is the last attempt (item 20: one retry for a
+// daily sweep message, isLastAttempt in retry.mjs).
 export async function runEmployeeSyncWorkflow(
   { recordId, employeeType, hsLastModifiedDate, source, context, lastAttempt = false, attempt = null },
   dependencies = {}
@@ -777,16 +780,26 @@ export async function runEmployeeSyncWorkflow(
 
     // Contract P.5 (c) in src/mappings/employees/buildEmployeePayload.mjs: a field whose input
     // could not be read is named here, so it is not compared, not sent and not cleared.
-    // `dependencies.omitFieldIds` is a seam for tests (lane B I-1).
-    const omitFieldIds = [
-      ...(mappingWarnings.some((item) => item?.code === "missing_hubspot_portal_id")
-        ? [
-            CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
-            CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
-          ]
-        : []),
-      ...(dependencies.omitFieldIds || [])
-    ];
+    // `dependencies.omitFieldIds` is a seam for tests (lane B I-1). The list also depends on the
+    // record (B11: a Care Coordinator that is not ready leaves 140495 out), so the confirm
+    // mapping builds its own from the confirm read: a status change between the two reads makes
+    // the two hashes differ and the run ends SYNC_STALE (the Case pattern, decision 66a).
+    const omitFieldIdsOf = (mappedRecord) => {
+      const warningCodes = new Set((mappedRecord.warnings || []).map((item) => item?.code));
+      return [
+        ...(warningCodes.has("missing_hubspot_portal_id")
+          ? [
+              CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BT_RBT_RECORD,
+              CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
+            ]
+          : []),
+        ...(warningCodes.has("care_coordinator_not_ready")
+          ? [CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CARE_COORDINATOR]
+          : []),
+        ...(dependencies.omitFieldIds || [])
+      ];
+    };
+    const omitFieldIds = omitFieldIdsOf(mapped);
     // Row 3.7: the compared state is built from HubSpot data only: the mapped payload before
     // any CentralReach read, plus the two inputs of the identity check (rule 5.4).
     const comparedStateOf = (mappedRecord, recordProperties) => ({
@@ -794,7 +807,7 @@ export async function runEmployeeSyncWorkflow(
       metadata: explicitMetadata(
         mappedRecord.metadataValues,
         knownMetadataFieldIds(normalizedEmployeeType),
-        omitFieldIds
+        omitFieldIdsOf(mappedRecord)
       ),
       labels: canonicalizeLabels(mappedRecord.requiredLabelIds),
       identity: {
@@ -1001,11 +1014,13 @@ export async function runEmployeeSyncWorkflow(
       ? null
       : inProgressHashesFor(prior, linkedToOwnCreate ? null : existingContactId);
     const writtenBefore = writtenFieldHashes(savedAnyVersion, unfinishedFieldHashes);
-    // Row 3.18: an omitted field keeps its saved hash and is not a changed field.
+    // Row 3.18: an omitted field keeps its saved hash and is not a changed field. After a run
+    // that did not finish clean it may keep the unsettled hash instead (keepOmittedFieldHashes).
     const nextFieldHashes = keepOmittedFieldHashes(
       comparedFieldHashes,
       savedAnyVersion,
-      omitFieldIds
+      omitFieldIds,
+      unfinishedFieldHashes
     );
     const changedFields = changedNamesFromHashes(previousFieldHashes, nextFieldHashes);
     summary.setChangedFieldNames(changedFields);
@@ -1391,12 +1406,17 @@ export async function runEmployeeSyncWorkflow(
     // retry. HubSpot keeps its last status until the last attempt (decision 1).
     const failureKind = classifyFailure(error);
     const permanent = failureKind === FAILURE_KINDS.PERMANENT;
+    // Item 20: no retry is left for this failure. The worker says so when all five are used; a
+    // daily sweep message has one, except for the failures that keep the full schedule.
+    const retriesUsedUp =
+      Boolean(lastAttempt) ||
+      (Number.isInteger(attempt) && isLastAttempt({ attempt, source, error }));
     summary.setOutcome(
       WAITING_CODES.has(error?.code) ? "waiting" : "error",
       reasonCodeOfError(error)
     );
     logger(
-      permanent || lastAttempt ? "error" : "warn",
+      permanent || retriesUsedUp ? "error" : "warn",
       "Employee sync workflow failed.",
       buildError({
         workflow: "employeeSync",
@@ -1406,7 +1426,7 @@ export async function runEmployeeSyncWorkflow(
         extra: {
           employeeType: normalizedEmployeeType,
           failureKind,
-          lastAttempt: Boolean(lastAttempt),
+          lastAttempt: retriesUsedUp,
           invocationId: context?.invocationId || null,
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
         }
@@ -1421,7 +1441,7 @@ export async function runEmployeeSyncWorkflow(
     // Row 3.7: a status and reason HubSpot already shows are not written again.
     const errorReason = permanent ? permanentFailureReason(error) : RETRIES_USED_UP;
     const errorPatch = {
-      ...((permanent || lastAttempt) && !statusIsShown(shown, "error", errorReason)
+      ...((permanent || retriesUsedUp) && !statusIsShown(shown, "error", errorReason)
         ? buildWritebackPropertyPatch({
             employeeType: normalizedEmployeeType,
             employeeIdProperty,

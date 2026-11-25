@@ -71,7 +71,9 @@ test("[B7][5.2] BCBA mapping builds expected payload and metadata", () => {
         state_home: "CO",
         location: "Colorado",
         employee_phone: "5552223333",
-        medicaid_id__ny: "ny1"
+        medicaid_id__ny: "ny1",
+        // B11: no Care Coordinator owner, so 140495 is a blank and raises no warning.
+        coordinator_export_status: "no_owner"
       }
     }
   });
@@ -211,7 +213,8 @@ test("mapping returns warning when HUBSPOT_PORTAL_ID is missing", () => {
     record: {
       id: "r3",
       properties: {
-        hs_object_id: "r3"
+        hs_object_id: "r3",
+        coordinator_export_status: "no_owner"
       }
     }
   });

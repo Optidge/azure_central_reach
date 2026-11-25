@@ -8,6 +8,7 @@ import {
 import { HUBSPOT_CASE_OBJECT_TYPE_ID } from "../../constants/hubspot.mjs";
 import { readDate } from "../../lib/dates.mjs";
 import { readCaseStateCode, readStateCode } from "../../lib/fieldFormats.mjs";
+import { careCoordinatorValue } from "../shared/careCoordinator.mjs";
 
 function toTrimmedOrNull(value) {
   if (value === undefined || value === null) {
@@ -468,52 +469,11 @@ export function gradPermitHolderValue(staffNames) {
   return { value: singleSpaced(names).map((name) => `${name} Grad Permit Holder`).join(", ") };
 }
 
-// C10 (item 6, CF §1.2): Care Coordinator 138851, from the three fields Zeke's coordinator
-// workflow keeps on the Case. The integration trusts `ready` (Zeke: J "yes") and reads no owner.
-//   ready      "<first> <last>", one space; one name blank: the other. Both blank: as not ready.
-//   no_owner   blank (null): clears only a value the integration wrote.
-//   any other status, or blank: left out (not sent, not cleared, saved hash kept, row 3.18), with
-//              the warning care_coordinator_not_ready. It names the status, never a name.
-const COORDINATOR_STATUS_PROPERTY = "coordinator_export_status";
-// The options of coordinator_export_status (CF §1.1). Only these are named in the warning.
-const COORDINATOR_STATUSES = Object.freeze([
-  "refreshing",
-  "ready",
-  "no_owner",
-  "missing_match",
-  "duplicate_match",
-  "inactive",
-  "incomplete",
-  "error"
-]);
-
-function coordinatorNotReady(status) {
-  const named = status === null ? "blank" : COORDINATOR_STATUSES.includes(status) ? status : "unknown";
-  return {
-    ...OMIT,
-    warning: {
-      code: "care_coordinator_not_ready",
-      property: COORDINATOR_STATUS_PROPERTY,
-      status: named,
-      message: `The Care Coordinator is not ready (status ${named}); the field is not sent.`
-    }
-  };
-}
-
-export function careCoordinatorValue(dealProps) {
-  const status = toTrimmedOrNull(dealProps?.[COORDINATOR_STATUS_PROPERTY]);
-  if (status === "no_owner") {
-    return { value: null };
-  }
-  if (status !== "ready") {
-    return coordinatorNotReady(status);
-  }
-  const parts = [dealProps.care_coordinator_first_name, dealProps.care_coordinator_last_name]
-    .map((part) => toTrimmedOrNull(part))
-    .filter(Boolean);
-  const name = singleSpaced(parts).join(" ");
-  return name ? { value: name } : coordinatorNotReady(status);
-}
+// C10 (item 6, O-17): Care Coordinator 138851. The rule is shared with the BCBA field 140495
+// (B11) and lives in src/mappings/shared/careCoordinator.mjs: status ready sends first name, last
+// name and email, one per line, a blank part skipped; no_owner sends a blank; any other status is
+// left out with the warning care_coordinator_not_ready. Re-exported for clientSyncInputs.mjs.
+export { careCoordinatorValue };
 
 // CL1, row 4.19. The Case `location` stores the state name.
 const STATE_LABELS = {
@@ -596,9 +556,11 @@ function buildHubspotDealUrl(hsObjectId, portalId) {
 //               staff record with neither a first nor a last name: that field's key is left out
 //               and the answer's `warnings` list names the role ({ code, role, message }), never
 //               a value. A Grad Permit holder with no supervisor leaves 131308 out with the
-//               warning grad_permit_supervisor_missing. A Care Coordinator that is not ready
-//               (C10) leaves 138851 out with the warning care_coordinator_not_ready
-//               ({ code, property, status, message }), which names the status, never a name.
+//               warning grad_permit_supervisor_missing. A ready Care Coordinator (C10) sends
+//               138851 as first name, last name and email, one per line ("\n"), a blank part
+//               skipped. One that is not ready, or ready with all three blank, leaves 138851 out
+//               with the warning care_coordinator_not_ready ({ code, property, status, message }),
+//               which names the status, never a name or email.
 //
 // CONTRACT P.5 (c): an input that could not be read (rule 5.8) never becomes a blank.
 //   omitFieldIds  CentralReach metadata field IDs whose input could not be read in this run, for

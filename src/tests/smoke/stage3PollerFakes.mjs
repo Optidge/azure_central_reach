@@ -2,7 +2,7 @@
 // - fakeHubSpotSearch: HubSpot's CRM search at the HTTP level, so hubspotClient.mjs runs for real
 //   and a test sees the exact search body the poller sent. It evaluates the filters, sorts and
 //   pages the way HubSpot's search does, and rejects what HubSpot rejects (an operator it does
-//   not know, more than 200 a page, paging past 10,000 results).
+//   not know, more than 200 a page, paging past 10,000 results, too many filters).
 // - fakeQueues: the two Service Bus senders, so serviceBusClient.mjs builds the real messages.
 // - The Cosmos container is the shared in-memory one, so cosmosState.mjs runs for real.
 import { createHubSpotClient } from "../../lib/hubspotClient.mjs";
@@ -21,6 +21,20 @@ export const EXCLUDED_STAGES = ["1383894301", "1383894303", "1383894302", "13329
 
 const HUBSPOT_MAX_PAGE = 200;
 const HUBSPOT_MAX_RESULTS = 10000;
+// HubSpot's CRM search limits: at most five filter groups, six filters in a group and 18 filters
+// in all; more is a VALIDATION_ERROR (developers.hubspot.com, CRM Search API, "Limits").
+const HUBSPOT_MAX_GROUPS = 5;
+const HUBSPOT_MAX_FILTERS_PER_GROUP = 6;
+const HUBSPOT_MAX_FILTERS = 18;
+
+function tooManyFilters(groups) {
+  const counts = groups.map((group) => (group.filters || []).length);
+  return (
+    groups.length > HUBSPOT_MAX_GROUPS ||
+    counts.some((count) => count > HUBSPOT_MAX_FILTERS_PER_GROUP) ||
+    counts.reduce((sum, count) => sum + count, 0) > HUBSPOT_MAX_FILTERS
+  );
+}
 
 const timeOf = (value) => (/^\d+$/.test(String(value)) ? Number(value) : Date.parse(value));
 // A record ID is compared as a number, a date property as a time.
@@ -117,6 +131,9 @@ export function fakeHubSpotSearch() {
       throw httpError(400, { data: { message: "Search paging is outside HubSpot's limits" } });
     }
     const groups = body.filterGroups || [];
+    if (tooManyFilters(groups)) {
+      throw httpError(400, { data: { category: "VALIDATION_ERROR", message: "Too many filters" } });
+    }
     const found = (records.get(objectTypeId) || []).filter(
       (record) =>
         groups.length === 0 ||

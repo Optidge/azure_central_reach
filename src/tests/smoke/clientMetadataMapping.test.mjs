@@ -96,26 +96,29 @@ test("[C28] Severity Level sends the digit of severity_level_clinical, nothing w
   );
 });
 
-// Package item 6 (CF §1.2): Care Coordinator 138851 from the three fields Zeke's coordinator
-// workflow keeps on the Case. care_coordinator_name is no longer read.
+// Package item 6 (CF §1.2), O-17 (11.a, 11.b): Care Coordinator 138851 from the fields Zeke's
+// coordinator workflow keeps on the Case. care_coordinator_name is no longer read. The full rule
+// table, shared with the BCBA 140495, is in careCoordinatorMapping.test.mjs.
 const COORDINATOR = CENTRAL_REACH_CLIENT_METADATA_FIELDS.CARE_COORDINATOR;
 const coordinatorOf = (properties) =>
   buildClientMetadata({ deal: { properties: { hs_object_id: "777", ...properties } } });
 const hasCoordinator = (mapped) => Object.hasOwn(mapped.metadataValues, COORDINATOR);
 
-test("[C10] Care Coordinator: status ready sends \"<first> <last>\", trimmed, one space; one name blank sends the other", () => {
-  const ready = (first, last) =>
+test("[C10] Care Coordinator: status ready sends first name, last name and email, one per line, each trimmed; a blank part is skipped", () => {
+  const ready = (first, last, email) =>
     coordinatorOf({
       coordinator_export_status: "ready",
       care_coordinator_first_name: first,
-      care_coordinator_last_name: last
+      care_coordinator_last_name: last,
+      care_coordinator_email: email
     });
-  assert.equal(ready("Ann", "Lee").metadataValues[COORDINATOR], "Ann Lee");
-  assert.equal(ready("  Ann ", " Lee  ").metadataValues[COORDINATOR], "Ann Lee");
-  assert.equal(ready("Mary  Ann", "  van   Lee").metadataValues[COORDINATOR], "Mary Ann van Lee");
-  assert.equal(ready("Ann", null).metadataValues[COORDINATOR], "Ann");
-  assert.equal(ready("", "Lee").metadataValues[COORDINATOR], "Lee");
-  assert.deepEqual(ready("Ann", "Lee").warnings, []);
+  const email = "ann.lee@example.com";
+  assert.equal(ready("Ann", "Lee", email).metadataValues[COORDINATOR], `Ann\nLee\n${email}`);
+  assert.equal(ready("  Ann ", " Lee  ", ` ${email} `).metadataValues[COORDINATOR], `Ann\nLee\n${email}`);
+  assert.equal(ready("Mary  Ann", "  van   Lee", null).metadataValues[COORDINATOR], "Mary Ann\nvan Lee");
+  assert.equal(ready("Ann", null, null).metadataValues[COORDINATOR], "Ann");
+  assert.equal(ready("", "Lee", email).metadataValues[COORDINATOR], `Lee\n${email}`);
+  assert.deepEqual(ready("Ann", "Lee", email).warnings, []);
 });
 
 test("[C10] Care Coordinator: status no_owner sends a blank, with its key present, whatever the name fields hold", () => {

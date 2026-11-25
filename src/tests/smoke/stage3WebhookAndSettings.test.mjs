@@ -299,8 +299,8 @@ test("[BR4][3.12] the sandbox with neither path setting reads sandbox_test_field
       assert.equal(config.sync.createGateProperty, null);
       assert.equal(config.sync.updateGateProperty, null);
       assert.deepEqual(gateProperties(config.sync), {
-        create: "sandbox_test_field",
-        update: "sandbox_test_field"
+        create: ["sandbox_test_field"],
+        update: ["sandbox_test_field"]
       });
     }
   });
@@ -364,7 +364,7 @@ test("[BR4][3.12] production with the exact two names and no SYNC_RECORD_GATE_PR
       }
       for (const config of [getConfig(), getIntakePollerConfig()]) {
         assert.deepEqual(config.sync.recordGateProperty, null);
-        assert.deepEqual(gateProperties(config.sync), { create: CREATES, update: UPDATES });
+        assert.deepEqual(gateProperties(config.sync), { create: [CREATES], update: [UPDATES] });
       }
       assert.equal(getConfig().sync.includeTestRecords, false);
     });
@@ -377,14 +377,14 @@ test("[BR4][3.12] the sandbox accepts any two gate names, SYNC_RECORD_GATE_PROPE
     () => {
       assert.equal(validateConfig().isValid, true);
       assert.equal(validateIntakePollerConfig().isValid, true);
-      assert.deepEqual(gateProperties(getConfig().sync), { create: "box_a", update: "box_b" });
+      assert.deepEqual(gateProperties(getConfig().sync), { create: ["box_a"], update: ["box_b"] });
     }
   );
   withEnv({ ...GATE_ENV, SYNC_RECORD_GATE_PROPERTY: "none", INCLUDE_TEST_RECORDS: "true" }, () => {
     assert.equal(validateConfig().isValid, true);
     const config = getConfig();
     assert.equal(config.sync.includeTestRecords, true);
-    assert.deepEqual(gateProperties(config.sync), { create: null, update: null });
+    assert.deepEqual(gateProperties(config.sync), { create: [], update: [] });
   });
 });
 
@@ -398,4 +398,70 @@ test("[BR4][3.12] with one path setting not set, SYNC_RECORD_GATE_PROPERTY is st
       }
     );
   }
+});
+
+// Zeke 2026-11-25: SYNC_RECORD_GATE_PROPERTY next to the two path settings is enforced on both
+// paths together with each path's own property. Every combination of the three settings, on both
+// portals: what is missing, what is invalid, and the gate properties of each path when valid.
+test("[BR4][3.12] every combination of the record gate and the two path settings, on the sandbox and in production", () => {
+  const RECORD = "sandbox_test_field";
+  const combos = [];
+  for (const record of [undefined, RECORD]) {
+    for (const creates of [undefined, CREATES]) {
+      for (const updates of [undefined, UPDATES]) {
+        combos.push({ record, creates, updates });
+      }
+    }
+  }
+  for (const portal of [SANDBOX_PORTAL, PRODUCTION_PORTAL]) {
+    for (const { record, creates, updates } of combos) {
+      const label = JSON.stringify({ portal, record, creates, updates });
+      const bothPaths = Boolean(creates && updates);
+      const expectedMissing = !record && !bothPaths ? ["SYNC_RECORD_GATE_PROPERTY"] : [];
+      // Production: each path setting must be its exact name, so a missing one is invalid.
+      const expectedInvalid =
+        portal === PRODUCTION_PORTAL
+          ? [
+              ...(creates ? [] : ["SYNC_CREATE_GATE_PROPERTY"]),
+              ...(updates ? [] : ["SYNC_UPDATE_GATE_PROPERTY"])
+            ]
+          : [];
+      withEnv(
+        {
+          ...GATE_ENV,
+          HUBSPOT_PORTAL_ID: portal,
+          SYNC_RECORD_GATE_PROPERTY: record,
+          SYNC_CREATE_GATE_PROPERTY: creates,
+          SYNC_UPDATE_GATE_PROPERTY: updates
+        },
+        () => {
+          for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+            assert.deepEqual(validation.missing, expectedMissing, label);
+            assert.deepEqual(validation.invalid, expectedInvalid, label);
+          }
+          if (expectedMissing.length > 0 || expectedInvalid.length > 0) {
+            assert.throws(() => getConfig(), /Configuration validation failed/, label);
+            assert.throws(() => getIntakePollerConfig(), /Configuration validation failed/, label);
+            return;
+          }
+          const expected = {
+            create: [record, creates].filter(Boolean),
+            update: [record, updates].filter(Boolean)
+          };
+          for (const config of [getConfig(), getIntakePollerConfig()]) {
+            assert.deepEqual(gateProperties(config.sync), expected, label);
+          }
+        }
+      );
+    }
+  }
+});
+
+test("[BR4][3.12] SYNC_RECORD_GATE_PROPERTY = none with the two path settings: the sandbox gates on the two boxes only, production refuses it", () => {
+  const env = { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES, SYNC_RECORD_GATE_PROPERTY: "none" };
+  withEnv(env, () => {
+    assert.equal(validateConfig().isValid, true);
+    assert.deepEqual(gateProperties(getConfig().sync), { create: [CREATES], update: [UPDATES] });
+  });
+  assertRefused({ ...env, HUBSPOT_PORTAL_ID: PRODUCTION_PORTAL }, "SYNC_RECORD_GATE_PROPERTY");
 });

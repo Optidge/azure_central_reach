@@ -6,7 +6,8 @@
 //   checkpoint moves forward only after a whole page was queued.
 // - Daily sweep, in the first run at or after 08:00 UTC: every linked record, and every unlinked
 //   record whose status is waiting. It catches values that change with no edit.
-// - With a record gate set, every search is limited to records where the gate property is true.
+// - With gates set, every search is limited to records where every gate property of the branch's
+//   path is true (src/lib/syncEligibility.mjs gateProperties).
 //   The Case searches leave out the four excluded stages. The worker checks each record again.
 import { getIntakePollerConfig } from "../lib/config.mjs";
 import { safeLog } from "../lib/safeLog.mjs";
@@ -55,6 +56,9 @@ const SWEEP_START_HOUR_UTC = 8;
 const SWEEP_PAGE_SIZE = 100;
 export const SWEEP_MESSAGES_PER_MINUTE = 60;
 export const SWEEP_MAX_MESSAGES_PER_RUN = 3000;
+
+// HubSpot's CRM search refuses a filter group of more than six filters (VALIDATION_ERROR).
+const HUBSPOT_MAX_FILTERS_PER_GROUP = 6;
 
 const STATUS_PROPERTY = "last_sync_status";
 const WAITING_STATUS = "waiting";
@@ -106,15 +110,20 @@ function pollerEntities(config, { sendClient, sendEmployee }) {
   ];
 }
 
-// HubSpot ORs the filter groups and ANDs the filters inside one. So each branch { gate, filter }
-// becomes a group: its own path's gate (item 24: linked → update gate, unlinked → create gate),
-// the Case stage exclusion, the shared filters and the branch filter. With one gate for both
-// paths every group carries the same gate, as before item 24.
-function buildFilterGroups({ entity, branches, shared }) {
-  return branches.map(({ gate, filter }) => ({
+// HubSpot ORs the filter groups and ANDs the filters inside one. So each branch { gates, filter }
+// becomes a group: every gate property of its own path (item 24: linked → update path, unlinked
+// → create path; with the record gate set it is on both, gateProperties), the Case stage
+// exclusion, the shared filters and the branch filter. "EQ true" matches only the value the
+// worker's check accepts (isTestRecord), so a record the worker would skip is not queued.
+// HubSpot allows six filters in a group (HUBSPOT_MAX_FILTERS_PER_GROUP). Only the Case block
+// search with two gates on a path and a record ID to page after would need seven; that search
+// leaves out the stage exclusion. The gates are never left out, and the worker skips an excluded
+// stage itself (excluded_stage: no CentralReach call, no HubSpot write).
+function buildFilterGroups({ entity, branches, shared, stageFilters = entity.stageFilters }) {
+  return branches.map(({ gates, filter }) => ({
     filters: [
-      ...(gate ? [{ propertyName: gate, operator: "EQ", value: "true" }] : []),
-      ...entity.stageFilters,
+      ...gates.map((gate) => ({ propertyName: gate, operator: "EQ", value: "true" })),
+      ...stageFilters,
       ...shared,
       filter
     ]
@@ -199,16 +208,25 @@ async function pollEntity({
     operator,
     value: new Date(ms).toISOString()
   });
+  const branches = [
+    { gates: gates.update, filter: linkedFilter(entity) },
+    { gates: gates.create, filter: entity.entryFilter }
+  ];
+  // The stage exclusion is left out only when a group would pass HubSpot's limit with it.
+  const fitsWithStage = (shared) =>
+    branches.every(
+      ({ gates: branchGates }) =>
+        branchGates.length + entity.stageFilters.length + shared.length + 1 <=
+        HUBSPOT_MAX_FILTERS_PER_GROUP
+    );
   const search = (shared, sortProperty) =>
     searchPage({
       objectTypeId: entity.objectTypeId,
       filterGroups: buildFilterGroups({
         entity,
-        branches: [
-          { gate: gates.update, filter: linkedFilter(entity) },
-          { gate: gates.create, filter: entity.entryFilter }
-        ],
-        shared
+        branches,
+        shared,
+        stageFilters: fitsWithStage(shared) ? entity.stageFilters : []
       }),
       sorts: [{ propertyName: sortProperty, direction: "ASCENDING" }],
       properties: ["hs_object_id", "hs_lastmodifieddate"],
@@ -363,11 +381,11 @@ async function runDailySweep({
           filterGroups: buildFilterGroups({
             entity,
             branches: [
-              { gate: gates.update, filter: linkedFilter(entity) },
-              ...(gates.create
+              { gates: gates.update, filter: linkedFilter(entity) },
+              ...(gates.create.length > 0
                 ? [
                     {
-                      gate: gates.create,
+                      gates: gates.create,
                       filter: { propertyName: STATUS_PROPERTY, operator: "EQ", value: WAITING_STATUS }
                     }
                   ]

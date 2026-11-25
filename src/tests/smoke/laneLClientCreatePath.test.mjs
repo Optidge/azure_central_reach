@@ -281,3 +281,56 @@ test("[BR1][3.14] a client create that fails with 500 is sent once and its outco
   );
   assert.equal(cr.count(CLIENT_POST), 1);
 });
+
+// SG-1 (BR16, rule 5.8): an error thrown before any write was sent carries crWriteNotSent, so the
+// worker can put its in-progress mark back. Once the create POST or the core PUT was attempted it
+// may have reached CentralReach, so its error never carries the flag.
+test("[BR16][3.14] SG-1: errors from the lookup, the client read and the SSN guard carry crWriteNotSent; errors from the create POST and the core PUT never do", async () => {
+  const CLIENT_GET = "GET /contacts/client/{id}";
+  const notSent = (error) => error.crWriteNotSent === true;
+  const sent = (error) => error.crWriteNotSent === undefined;
+  const heldClient = (cr) =>
+    cr.clients.set("2001", { contactId: "2001", externalSystemId: CASE_ID, ...HELD_BLANK_CORE });
+
+  // The lookup: a 500 (CR_LOOKUP_UNKNOWN), a timeout, a 200 with no contact ID.
+  let cr = fakeCentralReach();
+  cr.fail(LOOKUP_GET, httpError(500), { times: 3 });
+  await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId: null }), notSent);
+  cr = fakeCentralReach();
+  cr.fail(LOOKUP_GET, timeoutError(), { times: 3 });
+  await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId: null }), notSent);
+  cr = fakeCentralReach();
+  heldClient(cr);
+  cr.answer(LOOKUP_GET, { contact: {} });
+  await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId: null }), notSent);
+
+  // The client read (a 503 with no code) and the SSN guard, by CR ID and after a lookup.
+  for (const existingContactId of ["2001", null]) {
+    cr = fakeCentralReach();
+    heldClient(cr);
+    cr.fail(CLIENT_GET, httpError(503), { times: 3 });
+    await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId }), notSent);
+    cr = fakeCentralReach();
+    cr.clients.set("2001", {
+      contactId: "2001",
+      externalSystemId: CASE_ID,
+      ...HELD_BLANK_CORE,
+      ssn: "***-**-6789"
+    });
+    await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId }), notSent);
+    assert.equal(cr.writes().length, 0);
+  }
+
+  // The writes: the create POST (500, outcome unknown) and the core PUT (503, then 400).
+  cr = fakeCentralReach();
+  cr.fail(CLIENT_POST, httpError(500), { times: 3 });
+  await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId: null }), sent);
+  assert.equal(cr.count(CLIENT_POST), 1);
+  for (const status of [503, 400]) {
+    cr = fakeCentralReach();
+    heldClient(cr);
+    cr.fail(CLIENT_PUT, httpError(status), { times: 3 });
+    await assert.rejects(createOrUpdateClient({ payload: clientPayload(), existingContactId: "2001" }), sent);
+    assert.equal(cr.count(CLIENT_PUT) > 0, true);
+  }
+});

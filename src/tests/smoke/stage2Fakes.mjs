@@ -362,7 +362,13 @@ export function fakeCentralReach() {
     const name = route.name(match);
     const body = parseBody(requestConfig.data);
     calls.push({ method, url, name, body });
-    cr.onRequest?.(name, { method, url, body });
+    cr.onRequest?.(name, {
+      method,
+      url,
+      body,
+      headers: requestConfig.headers,
+      params: requestConfig.params
+    });
     const holdIndex = holds.findIndex((item) => item.name === name);
     if (holdIndex >= 0) {
       await holds.splice(holdIndex, 1)[0].promise;

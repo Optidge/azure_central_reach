@@ -60,6 +60,7 @@ const CASE_VALUES = Object.freeze({
   policy_holder_name: "Wilhelmina Fitzgibbon",
   care_coordinator_first_name: "Ottoline",
   care_coordinator_last_name: "Brightwater",
+  care_coordinator_email: "ottoline.bright@coordinator.example",
   insurance_id_1: "INS-7Q4X9Z",
   insurance_id_2: "INS-2R8K5W",
   referring_provider_medicaid_id: "MCD-6T3V1B",
@@ -113,7 +114,11 @@ const BCBA_VALUES = Object.freeze({
   employee_phone: "(646) 555-0187",
   medicaid_id__ny: "NYM-4D7H2P",
   medicaid_id__nj: "NJM-9C5F3L",
-  medicaid_id__co: "COM-1B6G8S"
+  medicaid_id__co: "COM-1B6G8S",
+  // B11: the Care Coordinator lines sent to 140495.
+  care_coordinator_first_name: "Rosamund",
+  care_coordinator_last_name: "Pettigrewson",
+  care_coordinator_email: "rosamund.petti@coordinator.example"
 });
 const BCBA_CONTACT_EMAIL = "evangelina.personal@contact.example";
 
@@ -445,7 +450,8 @@ const BCBA_RECORD_VALUES = Object.freeze({
   ...BCBA_VALUES,
   gender_new: "Female",
   state_home: "NJ",
-  location: "New York;New Jersey"
+  location: "New York;New Jersey",
+  coordinator_export_status: "ready"
 });
 
 const bcbaValues = () => withForms([...Object.values(BCBA_VALUES), BCBA_CONTACT_EMAIL]);
@@ -491,6 +497,34 @@ test("[BR21][3.9] BCBA run, mapper warning (a Work State option with no mapping)
   const warning = sink.logs.find((entry) => entry.message === "Employee mapping warnings.");
   assert.ok(warning, "the mapping warning was logged");
   assert.deepEqual(warning.meta.warningCodes, ["unmapped_work_state"]);
+  assertNoValues(sink, record, bcbaValues());
+});
+
+test("[BR21][3.9][BL6] BCBA run, mapper warning (a credential option with no mapping): the run succeeds and the warning names a code, never the option", async () => {
+  const { cr } = setup();
+  const sink = newSink();
+  const record = linkedBcba(cr, { ...BCBA_RECORD_VALUES, ny_insurance_labels: "Aetna-NY;Renamed-NY" });
+  const result = await runEmployee(sink, record, HUBSPOT_EMPLOYEE_TYPES.BCBA, {
+    overrides: bcbaContact()
+  });
+  assert.equal(result.status, "success");
+  const warning = sink.logs.find((entry) => entry.message === "Employee mapping warnings.");
+  assert.ok(warning, "the mapping warning was logged");
+  assert.deepEqual(warning.meta.warningCodes, ["unmapped_credential_option"]);
+  assert.equal(JSON.stringify(sink.logs).includes("Renamed-NY"), false);
+  assertNoValues(sink, record, bcbaValues());
+});
+
+test("[BR21][3.9][B11] BCBA run, Care Coordinator not ready: the warning names a code, never the coordinator's name or email", async () => {
+  const { cr } = setup();
+  const sink = newSink();
+  const record = linkedBcba(cr, { ...BCBA_RECORD_VALUES, coordinator_export_status: "missing_match" });
+  const result = await runEmployee(sink, record, HUBSPOT_EMPLOYEE_TYPES.BCBA, {
+    overrides: bcbaContact()
+  });
+  assert.equal(result.status, "success");
+  const warning = sink.logs.find((entry) => entry.message === "Employee mapping warnings.");
+  assert.deepEqual(warning.meta.warningCodes, ["care_coordinator_not_ready"]);
   assertNoValues(sink, record, bcbaValues());
 });
 

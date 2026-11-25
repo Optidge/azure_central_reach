@@ -14,7 +14,8 @@
  * poller's six-field NCRONTAB schedule. Hourly when it is not set.
  * Optional, read here: SYNC_CREATE_GATE_PROPERTY and SYNC_UPDATE_GATE_PROPERTY (item 24), the gate
  * of the create path and of the update path. Required in production (exact names); with both set,
- * SYNC_RECORD_GATE_PROPERTY is not required.
+ * SYNC_RECORD_GATE_PROPERTY is optional, and when it is set a record needs it true as well
+ * (Zeke 2026-11-25; src/lib/syncEligibility.mjs gateProperties).
  * See README.md → Configuration Notes for optional keys that are read elsewhere in src/.
  */
 const REQUIRED_ENV_NAMES = [
@@ -147,7 +148,7 @@ const PORTAL_OBJECT_TYPE_ENV_NAMES = Object.freeze({
 
 // Production portal only (items 14 and 24, D18): each path's gate setting must name exactly this
 // property, so a missing, swapped or misspelt name refuses to run. The sandbox may name any
-// property, or neither (then both paths fall back to SYNC_RECORD_GATE_PROPERTY).
+// property, or neither (then both paths are gated by SYNC_RECORD_GATE_PROPERTY alone).
 const PRODUCTION_PORTAL_ID = "50317927";
 export const PRODUCTION_GATE_PROPERTIES = Object.freeze({
   SYNC_CREATE_GATE_PROPERTY: "centralreach_creates_only",
@@ -216,7 +217,8 @@ function isNoneSetting(value) {
   return settingValue(value).toLowerCase() === "none";
 }
 
-// Both path settings are set: SYNC_RECORD_GATE_PROPERTY is then not read and may be left out.
+// Both path settings are set: SYNC_RECORD_GATE_PROPERTY may then be left out. When it is set it
+// is still enforced, on both paths, together with each path's own property (gateProperties).
 function pathGatesSet(env) {
   return PATH_GATE_ENV_NAMES.every((name) => settingValue(env[name]) !== "");
 }
@@ -240,8 +242,8 @@ export function syncRecordGateProperty(
   return raw;
 }
 
-// SYNC_CREATE_GATE_PROPERTY or SYNC_UPDATE_GATE_PROPERTY (item 24). Not set → null: that path
-// falls back to SYNC_RECORD_GATE_PROPERTY (syncEligibility.gateProperties). "none" is invalid on
+// SYNC_CREATE_GATE_PROPERTY or SYNC_UPDATE_GATE_PROPERTY (item 24). Not set → null: that path is
+// gated by SYNC_RECORD_GATE_PROPERTY alone (syncEligibility.gateProperties). "none" is invalid on
 // every portal: the only off switch is SYNC_RECORD_GATE_PROPERTY = none, sandbox only.
 export function syncPathGateProperty(name, value = process.env[name]) {
   const raw = settingValue(value);
@@ -254,7 +256,8 @@ export function syncPathGateProperty(name, value = process.env[name]) {
   return raw;
 }
 
-// The raw gate settings. The fallback of a path to the record gate is not done here.
+// The raw gate settings. Which properties gate each path is decided in
+// syncEligibility.gateProperties, not here.
 function gateSettings(env = process.env) {
   return {
     recordGateProperty: syncRecordGateProperty(env.SYNC_RECORD_GATE_PROPERTY, {

@@ -30,19 +30,26 @@ export function isTestRecord(value) {
   return value === true || String(value ?? "").trim().toLowerCase() === "true";
 }
 
-// Item 24 (D18): the gate property of each path. A path setting that is not set falls back to
-// the record gate, so with neither set (the sandbox) both paths read SYNC_RECORD_GATE_PROPERTY.
-// The one place the fallback lives; both workers and the poller use it.
+// Item 24 (D18) and Zeke 2026-11-25: the gate properties of each path; a record must have every
+// one of them true. The record gate (SYNC_RECORD_GATE_PROPERTY, when set and not "none") is on
+// both paths; a path setting adds its own property to its path. So:
+//   record gate only (the sandbox until 2026-11-25): both paths [record gate]
+//   two path settings only:                           create [creates], update [updates]
+//   record gate and two path settings:                create [record gate, creates],
+//                                                     update [record gate, updates]
+// The one place the rule lives; both workers, the poller and the daily sweep use it.
 export function gateProperties(sync) {
+  const recordGate = sync?.recordGateProperty || null;
+  const pathGates = (pathGate) => [...new Set([recordGate, pathGate || null].filter(Boolean))];
   return {
-    create: sync?.createGateProperty ?? sync?.recordGateProperty ?? null,
-    update: sync?.updateGateProperty ?? sync?.recordGateProperty ?? null
+    create: pathGates(sync?.createGateProperty),
+    update: pathGates(sync?.updateGateProperty)
   };
 }
 
 // The gate properties a worker must read: both paths', whichever path the record is on.
 export function gatePropertyNames(gates) {
-  return [...new Set([gates?.create, gates?.update].filter(Boolean))];
+  return [...new Set([...(gates?.create || []), ...(gates?.update || [])])];
 }
 
 // The path follows the HubSpot CR ID, not the link record (D18 b): CR ID blank → create, filled →
@@ -57,8 +64,9 @@ function decide({
   gates = null
 }) {
   const path = hubspotHasCrId ? "update" : "create";
-  const gateProperty = gates?.[path] || null;
-  if (gateProperty && !isTestRecord(properties?.[gateProperty])) {
+  // Fail closed: a gate value that is blank, unreadable or anything but true skips the record.
+  const pathGates = gates?.[path] || [];
+  if (pathGates.some((name) => !isTestRecord(properties?.[name]))) {
     return { eligible: false, reason: SKIP_REASONS.RECORD_GATE, gate: path };
   }
   if (!includeTestRecords && isTestRecord(properties?.[TEST_RECORD_PROPERTY])) {

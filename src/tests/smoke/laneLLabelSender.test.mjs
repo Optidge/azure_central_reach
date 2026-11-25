@@ -37,7 +37,7 @@ const STAFFING_PARENT = 1156741;
 const RETIRED_PENDING_97151 = 1156742;
 const RETIRED_PENDING_97153 = 1156744;
 const RETIRED_STARTING_97153 = 1156745;
-// CR labels the guide records and the integration does not map ([G07B] School; BL6 Aetna).
+// CR labels held on a contact but outside the managed list a test passes ([G07B] School; Aetna).
 const SCHOOL = 1052688;
 const AETNA = 1107649;
 // Employee labels (sections 9.3 and 9.4).
@@ -86,7 +86,7 @@ function postBodies(cr) {
 // --- L.1: only known IDs are sent, and never an empty list ---
 
 test("[BR19][L.1] a required label outside the sendable list is never posted: CR_LABEL_NOT_SENDABLE, permanent", async () => {
-  for (const notSendable of [STAFFING_PARENT, RETIRED_PENDING_97151, AETNA, 999999999]) {
+  for (const notSendable of [STAFFING_PARENT, RETIRED_PENDING_97151, SCHOOL, 999999999]) {
     const cr = fakeCentralReach();
     cr.labels.set(CLIENT, [ALL_CLIENTS]);
     let thrown = null;
@@ -309,7 +309,8 @@ test("[BR19][L.2] an RBT who becomes a BT in New York, and a BCBA whose licence 
 });
 
 test("[BR19][L.2] a staff label the integration does not map is kept", async () => {
-  // Client: School is a CR label with no HubSpot option ([G07B]). BCBA: Aetna is not built (BL6).
+  // Client: School is a CR label with no HubSpot option ([G07B]). Employee: Aetna is not in the
+  // managed list this call passes.
   const client = fakeCentralReach();
   client.labels.set(CLIENT, [ALL_CLIENTS, SCHOOL, SERVICES_97151]);
   await sendLabels(CLIENT, {

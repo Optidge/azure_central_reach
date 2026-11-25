@@ -44,6 +44,10 @@ const SECTION_9_SENDABLE = {
   "BCBA LBA NY (BL4)": 1052629,
   "GRAD Student- LBA NY (BL4)": 1092164,
   "NY Medicaid (BL5)": 1107647,
+  "Aetna (BL6)": 1107649,
+  "Cigna (BL6)": 1107650,
+  "Carelon (BL6)": 1132654,
+  "CO Medicaid (BL6)": 1107651,
   "Salaried (B10, row 5.7)": 1132653,
   "Billing Hold Medicaid Affiliation (BL7)": 1103437,
   "Behavior Technician NY (TL3)": 1052630,
@@ -55,8 +59,8 @@ const SECTION_9_SENDABLE = {
 };
 const PARENT_STAFFING_STATUS = 1156741;
 const RETIRED_STAFFING = [1156742, 1156744, 1156745];
-// BL6: recorded in the guide, not documented, not built (decision 25).
-const BL6_NOT_BUILT = [1107649, 1107650, 1132654, 1107651];
+// [G07C] Case funding-source labels (group "Funding Source"): suspended, never sent (CL5).
+const FUNDING_SOURCE = [1082497, 1082498, 1124249, 1107648, 1052532, 1124247, 1124248];
 
 const byNumber = (values) => [...values].sort((left, right) => left - right);
 
@@ -94,8 +98,11 @@ test("[P.3] the sendable list leaves out the parent label Staffing Status and th
   }
 });
 
-test("[P.3][BL6] the sendable list leaves out the credential labels the guide does not document", () => {
-  for (const id of BL6_NOT_BUILT) {
+test("[P.3][BL6] the BCBA credential labels are the New Employee On-boarding ones; no Funding Source label is sendable", () => {
+  for (const id of [1107647, 1107649, 1107650, 1132654, 1107651]) {
+    assert.equal(CENTRAL_REACH_SENDABLE_LABEL_IDS.includes(id), true, `${id} is sendable`);
+  }
+  for (const id of FUNDING_SOURCE) {
     assert.equal(CENTRAL_REACH_SENDABLE_LABEL_IDS.includes(id), false, `${id} is not sendable`);
   }
 });

@@ -54,7 +54,7 @@ Do not deploy until manual intake poller test confirms:
 ## D. Deployment Command Later
 
 When deployment is explicitly approved:
-- `func azure functionapp publish centralreachfunction`
+- `func azure functionapp publish centralreachserverless --javascript`
 
 ## E. Timer Enablement
 
@@ -84,10 +84,21 @@ Partners Enterprise API auth is only:
 `HUBSPOT_PORTAL_ID` and `SYNC_RECORD_GATE_PROPERTY` are in `REQUIRED_ENV_NAMES` in `src/lib/config.mjs`. The app does not start a run without `HUBSPOT_PORTAL_ID`, nor without `SYNC_RECORD_GATE_PROPERTY` unless both path settings below are set. The path settings are required in production (`50317927`) and optional in the sandbox.
 
 - `HUBSPOT_PORTAL_ID` — always required. The HubSpot portal this app serves: sandbox `52311591` or production `50317927`. Any other value is invalid configuration. It builds the HubSpot record links, and every queue message must carry the same portal ID. The HubSpot token must belong to this portal. Before any HubSpot call the app reads `GET /account-info/v3/details` once (the answer is cached) and compares the portal ID. If they differ, the run ends with the error code `HUBSPOT_PORTAL_MISMATCH`, which names both portal IDs; no CRM call is made, and the message is retried and then dead-lettered like any configuration failure. The private app needs access to the account-info endpoint.
-- `SYNC_RECORD_GATE_PROPERTY` — required unless both path settings below are set (then it is not read and may be left out). The HubSpot checkbox property a record must have set to true before it syncs. The sandbox value is `sandbox_test_field`. The value `none` turns the gate off (sandbox only; invalid in production).
-- `SYNC_CREATE_GATE_PROPERTY`, `SYNC_UPDATE_GATE_PROPERTY` — the gate of each path; required in production, optional in the sandbox. A record whose HubSpot CR ID is blank is on the create path; a filled CR ID puts it on the update path. The record's property for its path must be true, or the run is skipped with reason `record_gate` (the `Sync run summary.` line then carries `gate`: `create` or `update`). Both properties are read on every run; a key missing from HubSpot's answer is a failed read.
-  - **Fallback (sandbox `52311591`):** a path setting that is not set uses `SYNC_RECORD_GATE_PROPERTY`. The sandbox sets neither, so both paths read `sandbox_test_field`.
-  - **Production (`50317927`):** both are required and must be exactly `SYNC_CREATE_GATE_PROPERTY` = `centralreach_creates_only` and `SYNC_UPDATE_GATE_PROPERTY` = `centralreach_updates_only` (case-sensitive, trimmed). A missing, swapped or misspelt name, `SYNC_RECORD_GATE_PROPERTY` = `none`, or `INCLUDE_TEST_RECORDS` = `true` (matched in any case, trimmed) is invalid configuration: every run fails before any HubSpot or CentralReach call.
+- `SYNC_RECORD_GATE_PROPERTY` — the record gate: the HubSpot checkbox property a record must have set to true before it syncs, on both paths. Required unless both path settings below are set; then it is optional, and **when it is set it is still enforced, together with each path's own property** (Zeke, 2026-11-25). The sandbox value is `sandbox_test_field`. The value `none` turns the record gate off (sandbox only; invalid in production).
+- `SYNC_CREATE_GATE_PROPERTY`, `SYNC_UPDATE_GATE_PROPERTY` — the gate of each path; required in production, optional in the sandbox. A record whose HubSpot CR ID is blank is on the create path; a filled CR ID puts it on the update path.
+- **The rule** (`gateProperties` in `src/lib/syncEligibility.mjs`, used by both workers, the hourly poller and the daily sweep): a record syncs only when every gate property of its path is true.
+
+  | Settings | Create path needs | Update path needs |
+  |---|---|---|
+  | Record gate only | record gate | record gate |
+  | Record gate and both path settings | record gate **and** `SYNC_CREATE_GATE_PROPERTY` | record gate **and** `SYNC_UPDATE_GATE_PROPERTY` |
+  | Both path settings only (record gate not set or `none`) | `SYNC_CREATE_GATE_PROPERTY` | `SYNC_UPDATE_GATE_PROPERTY` |
+
+  With the record gate and only one path setting (sandbox only), that path needs the record gate and its own property, and the other path the record gate alone.
+
+  "True" is the checkbox value `true` (shown as "Yes" in HubSpot). Blank, `false`, any other value, or a run that cannot read the value never passes. A record that fails the gate is skipped with reason `record_gate` (the `Sync run summary.` line then carries `gate`: `create` or `update`): no CentralReach call and no HubSpot write. Every gate property is read on every run; a key missing from HubSpot's answer is a failed read (no CentralReach call, no HubSpot write, retried). The poller and sweep searches carry the same conditions (`EQ true` on each gate property of the branch's path), so a record that fails the gate is never queued by them. HubSpot allows six filters in a search group; the one Case search that would need seven (records sharing one timestamp, paged by record ID, with two gates on a path) leaves out the stage exclusion, never a gate, and the worker skips an excluded stage itself.
+  - **Sandbox (`52311591`), from 2026-11-25:** set all three: `SYNC_RECORD_GATE_PROPERTY` = `sandbox_test_field`, `SYNC_CREATE_GATE_PROPERTY` = `centralreach_creates_only`, `SYNC_UPDATE_GATE_PROPERTY` = `centralreach_updates_only`. A create then needs Sandbox Test Field and CentralReach creates only ticked; an update needs Sandbox Test Field and CentralReach updates only ticked. Keep `INCLUDE_TEST_RECORDS` = `false` (sandbox test records leave `test_record` blank).
+  - **Production (`50317927`):** both path settings are required and must be exactly `SYNC_CREATE_GATE_PROPERTY` = `centralreach_creates_only` and `SYNC_UPDATE_GATE_PROPERTY` = `centralreach_updates_only` (case-sensitive, trimmed). `SYNC_RECORD_GATE_PROPERTY` is optional there: not set, production gates on the two checkboxes only; set, it is enforced the same way as in the sandbox. Which property it names in production is decided for the final production deploy, after the sandbox end-to-end test. A missing, swapped or misspelt path name, `SYNC_RECORD_GATE_PROPERTY` = `none`, or `INCLUDE_TEST_RECORDS` = `true` (matched in any case, trimmed) is invalid configuration: every run fails before any HubSpot or CentralReach call.
   - `none` in either path setting is invalid configuration on every portal.
 
 ### Optional settings this repo reads (not in required lists)

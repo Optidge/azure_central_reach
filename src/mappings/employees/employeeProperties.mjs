@@ -26,6 +26,7 @@ import {
   BT_RBT_DATE_OF_BIRTH_PROPERTY,
   EMPLOYEE_PERSONAL_EMAIL_PROPERTY
 } from "./buildEmployeePayload.mjs";
+import { CARE_COORDINATOR_PROPERTIES } from "../shared/careCoordinator.mjs";
 
 export const BT_RBT_PROPERTIES = Object.freeze({
   mapped: Object.freeze([
@@ -93,14 +94,20 @@ export const BCBA_PROPERTIES = Object.freeze({
     "medicaid_id__ny",
     "medicaid_id__nj",
     "medicaid_id__co",
-    // Labels: Work State(s) (BL2), assignment and licensure (BL4), NY Medicaid (BL5),
-    // Salaried (B10), Billing Hold (BL7)
+    // Labels: Work State(s) (BL2), assignment and licensure (BL4), credentials (BL5, BL6; the keys
+    // of BCBA_CREDENTIAL_LABELS_BY_PROPERTY), Salaried (B10), Billing Hold (BL7)
     "location",
     "assign_states",
     "lba_licensure__ny",
     "ny_insurance_labels",
+    "co_insurance_labels",
+    "nj_insurance_labels",
     "work_status",
-    "cr_billing_hold_label"
+    "cr_billing_hold_label",
+    // Care Coordinator, Meta 140495 (B11, O-17): the fields Zeke's BCBA coordinator workflow
+    // keeps on the record. Sandbox only (production 404, 2026-11-25): a portal without them ends
+    // every BCBA run HUBSPOT_PROPERTY_MISSING (row 4.18).
+    ...CARE_COORDINATOR_PROPERTIES
   ]),
   signalOnly: Object.freeze([]),
   mustTrigger: Object.freeze([EMPLOYEE_ENTRY_PROPERTY, BCBA_CHECKLIST_PROPERTY]),
@@ -137,7 +144,8 @@ export function employeeRequestProperties(employeeType) {
 }
 
 // The CentralReach metadata fields the integration maps for each employee type. The worker
-// compares and sends every field in this list: a field the mapper leaves out is sent as blank.
+// compares and sends every field in this list: a field the mapper leaves out is sent as blank,
+// unless the worker names it in its omit list (140495 when the Care Coordinator is not ready).
 export function knownMetadataFieldIds(employeeType) {
   if (employeeType === HUBSPOT_EMPLOYEE_TYPES.BT_RBT) {
     return [
@@ -151,6 +159,7 @@ export function knownMetadataFieldIds(employeeType) {
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NY,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_NJ,
     CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_MEDICAID_ID_CO,
-    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.HUBSPOT_LINK_TO_BCBA_RECORD,
+    CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CARE_COORDINATOR
   ];
 }

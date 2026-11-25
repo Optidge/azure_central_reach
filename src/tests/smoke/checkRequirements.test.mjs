@@ -239,7 +239,8 @@ test("[BR1][3.19] the real BUILD-PLAN section 9 is read: every family of IDs, wi
   assert.deepEqual(classifyStatus(status("C13")), { built: true, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("C18")), { built: false, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("CL5")), { built: false, toBuildStages: [] });
-  assert.deepEqual(classifyStatus(status("BL6")), { built: false, toBuildStages: [] });
+  // BL6 was "not built" until the credential labels were built on 2026-11-25.
+  assert.deepEqual(classifyStatus(status("BL6")), { built: true, toBuildStages: [] });
   assert.deepEqual(classifyStatus(status("K1")), { built: true, toBuildStages: [] });
 });
 

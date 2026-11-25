@@ -222,6 +222,14 @@ export function lookupWithoutContactId(kind, response) {
   });
 }
 
+// SG-1: marks an error thrown before any CentralReach write was sent (createOrUpdateClient).
+function markCrWriteNotSent(error) {
+  if (error && typeof error === "object") {
+    error.crWriteNotSent = true;
+  }
+  return error;
+}
+
 export function findEmployeeByExternalSystemId(id, options) {
   return findByExternalSystemId("employee", id, options);
 }
@@ -312,8 +320,12 @@ function observedRequest(send, kind, onCall) {
   };
 }
 
-// The full response, for readers that need the HTTP status as well as the body.
-async function crSend(path, { method = "GET", body, suppressRetry = false, kind, onCall } = {}) {
+// The full response, for readers that need the HTTP status as well as the body. `headers` and
+// `params` are extra request headers and query values; only the contact label read uses them.
+async function crSend(
+  path,
+  { method = "GET", body, suppressRetry = false, kind, onCall, headers = {}, params } = {}
+) {
   if (!centralReachHttpClient || !centralReachConfig) {
     throw new Error("CentralReach client is not initialized");
   }
@@ -324,7 +336,9 @@ async function crSend(path, { method = "GET", body, suppressRetry = false, kind,
       url: path,
       method,
       data: body,
+      params,
       headers: {
+        ...headers,
         Authorization: `Bearer ${token}`,
         "x-api-key": centralReachConfig.centralReach.apiKey
       }
@@ -382,6 +396,10 @@ async function crSend(path, { method = "GET", body, suppressRetry = false, kind,
 //                     This covers every update: the linked Case, the pending-create Case whose
 //                     lookup found its client, and the lookup inside this call. A create sends
 //                     the payload as it is and makes no client read.
+// SG-1 (BR16, rule 5.8): any error from the lookup, the client read or the SSN guard, so before
+// any write was sent, carries crWriteNotSent = true, whatever its code (a 5xx, a timeout, a
+// token failure). The worker then puts its in-progress mark back. An error from the create POST
+// or the core PUT never carries it: once a write is attempted it may have reached CentralReach.
 export async function createOrUpdateClient(payloadOrOptions) {
   const isOptionsObject =
     payloadOrOptions &&
@@ -399,39 +417,50 @@ export async function createOrUpdateClient(payloadOrOptions) {
     throw new Error("CentralReach client payload must be an object");
   }
 
-  let lookedUpContactId = null;
-  if (!existingContactId) {
-    const lookedUp = await findClientByExternalSystemId(payload.ExternalSystemId, { onCall });
-    if (lookedUp.found) {
-      lookedUpContactId = lookedUp.crContactId;
+  // Everything before the first write: the lookup, the client read and the SSN guard.
+  let plan;
+  let putBody = null;
+  try {
+    let lookedUpContactId = null;
+    if (!existingContactId) {
+      const lookedUp = await findClientByExternalSystemId(payload.ExternalSystemId, { onCall });
+      if (lookedUp.found) {
+        lookedUpContactId = lookedUp.crContactId;
+      }
     }
+
+    plan = clientWritePlan({ existingContactId, lookedUpContactId });
+    if (plan.operation === "update") {
+      const externalSystemIdHeld =
+        Boolean(lookedUpContactId) ||
+        (isOptionsObject && payloadOrOptions.externalSystemIdHeld === true);
+      const updatePayload = { ...payload };
+      delete updatePayload.ContactForm;
+      if (!externalSystemIdHeld || String(updatePayload.ExternalSystemId ?? "").trim() === "") {
+        delete updatePayload.ExternalSystemId;
+      }
+      // Item B21: every update path ends here, so no client PUT is sent without this read.
+      const heldClient = await getClientByContactId(plan.crContactId, {
+        onCall,
+        payload: updatePayload
+      });
+      const mappedBody = keepHeldClientCoreFields(updatePayload, heldClient);
+      // BR16 (2026-11-24): no PUT when CentralReach already holds every mapped value; otherwise
+      // the whole read goes back with the mapped keys laid over it (updateBodyFromRead).
+      if (mappedKeysMatchRead(mappedBody, heldClient, clientCoreReadKey)) {
+        return { operation: "update", crContactId: plan.crContactId };
+      }
+      checkHeldSsnSendable("client", heldClient);
+      putBody = updateBodyFromRead(mappedBody, heldClient, clientPutKey);
+    }
+  } catch (error) {
+    throw markCrWriteNotSent(error);
   }
 
-  const plan = clientWritePlan({ existingContactId, lookedUpContactId });
   if (plan.operation === "update") {
-    const externalSystemIdHeld =
-      Boolean(lookedUpContactId) ||
-      (isOptionsObject && payloadOrOptions.externalSystemIdHeld === true);
-    const updatePayload = { ...payload };
-    delete updatePayload.ContactForm;
-    if (!externalSystemIdHeld || String(updatePayload.ExternalSystemId ?? "").trim() === "") {
-      delete updatePayload.ExternalSystemId;
-    }
-    // Item B21: every update path ends here, so no client PUT is sent without this read.
-    const heldClient = await getClientByContactId(plan.crContactId, {
-      onCall,
-      payload: updatePayload
-    });
-    const mappedBody = keepHeldClientCoreFields(updatePayload, heldClient);
-    // BR16 (2026-11-24): no PUT when CentralReach already holds every mapped value; otherwise
-    // the whole read goes back with the mapped keys laid over it (updateBodyFromRead).
-    if (mappedKeysMatchRead(mappedBody, heldClient, clientCoreReadKey)) {
-      return { operation: "update", crContactId: plan.crContactId };
-    }
-    checkHeldSsnSendable("client", heldClient);
     await crRequest(`/contacts/client/${plan.crContactId}`, {
       method: "PUT",
-      body: updateBodyFromRead(mappedBody, heldClient, clientPutKey),
+      body: putBody,
       kind: "update",
       onCall
     });
@@ -867,11 +896,21 @@ function readMapperLabelIds(list, listName) {
   return Array.from(new Set(ids));
 }
 
+// R-6 (Zeke, 2026-11-25: "Do a fresh read of the labels, then, please."): every contact label
+// read asks CentralReach for a fresh answer, never a cached one. The POST replaces the whole set,
+// so a stale read would undo a label staff just added or removed. Both forms were answered 200
+// in the live label test of 2026-11-25 (test employee 5338681); the headers bypass a cache that
+// honours them, the throwaway _t value one keyed by URL. Not proven for an edit made on the
+// CentralReach screen (that test is paused). No extra call: this is the read that was made anyway.
+const FRESH_LABEL_READ_HEADERS = Object.freeze({ "Cache-Control": "no-cache", Pragma: "no-cache" });
+
 async function readContactLabelIds(contactId, onCall) {
   const response = await crSend(`/contacts/${contactId}/labels`, {
     method: "GET",
     kind: "labelRead",
-    onCall
+    onCall,
+    headers: FRESH_LABEL_READ_HEADERS,
+    params: { _t: Date.now() }
   });
   const labelIds = readLabelIds(response?.data);
   if (!labelIds) {
@@ -1007,6 +1046,10 @@ async function updateContactLabels(
     return buildLabelResult("skip_window", { confirmed: sameLabelSet(shown, savedLabelIds) });
   }
 
+  // R-6: the set to post is built only from this fresh read, made in the same step just before
+  // the POST (only the catalog read sits between). No list from an earlier read, the link record
+  // or the queue message is ever posted; a retry run reads again here. A read that fails throws,
+  // so nothing is posted.
   const current = await readContactLabelIds(contactId, onCall);
   if (!current.length && !contactCreatedThisRun) {
     throw labelError(
@@ -1174,6 +1217,9 @@ async function updateMetadataField(contactId, fieldId, value, onCall) {
 // post: confirmed is false, so the run is retried and posts after the window. If it equals the
 // saved labelIds: confirmed is true when the read shows them and false when it does not. After
 // the window the set is worked out from a fresh read again.
+// R-6: every read of the contact's labels (the read before the POST, the read-backs, the read
+// inside the window) is the fresh read: headers Cache-Control: no-cache and Pragma: no-cache, and
+// a throwaway query value _t=<ms>. The catalog read GET /contacts/labels is a plain read.
 // What the worker does with the answer, in this order:
 //   1. It saves lastLabelPost first, before any throw: { contactId, labelIds: postedLabelIds,
 //      postedAt } whenever postedLabelIds is not null; or, when updateClientMetadata throws an

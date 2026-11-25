@@ -88,9 +88,10 @@ const CASE_MAPPED = [
   "referral_source",
   // C36 (item 2): the "Referral - Other" text
   "referral_other",
-  // C10 (4.16; item 6: the coordinator workflow's fields)
+  // C10 (4.16; item 6: the coordinator workflow's fields; the email since O-17 11.a)
   "care_coordinator_first_name",
   "care_coordinator_last_name",
+  "care_coordinator_email",
   "coordinator_export_status"
 ];
 
@@ -172,11 +173,12 @@ test("[BR18][4.14] the five staffing-name signals are change signals only: curre
   }
 });
 
-test("[C10][4.16] the Care Coordinator's three workflow fields are mapped; care_coordinator_name, hubspot_owner_id, care_coordinator_email and coordinator_export_source_snapshot are not requested (item 6)", () => {
+test("[C10][4.16] the Care Coordinator's workflow fields, the email included (O-17 11.a), are mapped; care_coordinator_name, hubspot_owner_id and coordinator_export_source_snapshot are not requested (item 6)", () => {
   const requested = caseRequestProperties();
   for (const property of [
     "care_coordinator_first_name",
     "care_coordinator_last_name",
+    "care_coordinator_email",
     "coordinator_export_status"
   ]) {
     assert.equal(CASE_PROPERTIES.mapped.includes(property), true, property);
@@ -184,7 +186,6 @@ test("[C10][4.16] the Care Coordinator's three workflow fields are mapped; care_
   for (const property of [
     "care_coordinator_name",
     "hubspot_owner_id",
-    "care_coordinator_email",
     "coordinator_export_source_snapshot"
   ]) {
     assert.equal(requested.includes(property), false, property);
@@ -286,13 +287,20 @@ const BCBA_MAPPED = [
   "email",
   // B9 (row 6.4, decision 50) Meta 138069
   "personal_email",
-  // BL2 (5.4), BL4 (5.5), BL5 (5.6), B10 (5.7), BL7 (5.8)
+  // BL2 (5.4), BL4 (5.5), BL5 and BL6 (5.6), B10 (5.7), BL7 (5.8)
   "location",
   "assign_states",
   "lba_licensure__ny",
   "ny_insurance_labels",
+  "co_insurance_labels",
+  "nj_insurance_labels",
   "work_status",
-  "cr_billing_hold_label"
+  "cr_billing_hold_label",
+  // B11 (O-17): the Care Coordinator, Meta 140495
+  "care_coordinator_first_name",
+  "care_coordinator_last_name",
+  "care_coordinator_email",
+  "coordinator_export_status"
 ];
 
 test("[B7][5.2] the BCBA mapped list holds exactly the HubSpot sources of the built BCBA requirements", () => {
@@ -325,7 +333,7 @@ test("[B4][1.3] ucaba_email_address and dob are no longer requested for a BCBA (
 test("[B13][5.3] field 134444 is not a known BCBA metadata field, so no clear is sent for it", () => {
   assert.deepEqual(
     knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BCBA),
-    [138069, 126216, 138112, 138113, 138703]
+    [138069, 126216, 138112, 138113, 138703, 140495]
   );
   assert.deepEqual(knownMetadataFieldIds(HUBSPOT_EMPLOYEE_TYPES.BT_RBT), [133819, 147882, 138703]);
 });
@@ -336,13 +344,17 @@ test("[B6][5.1] the archived BCBA gender property is not requested; gender_new i
   assert.equal(requested.includes("gender_new"), true);
 });
 
-test("[BL6][5.6] co_insurance_labels and nj_insurance_labels are not requested: those credential labels are not built", () => {
-  const requested = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BCBA);
-  assert.equal(requested.includes("co_insurance_labels"), false);
-  assert.equal(requested.includes("nj_insurance_labels"), false);
+test("[BL6][5.6] the three credential label properties are requested and mapped for a BCBA, and for no BT/RBT", () => {
+  const bcbaRequested = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BCBA);
+  const btRequested = employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BT_RBT);
+  for (const property of ["ny_insurance_labels", "co_insurance_labels", "nj_insurance_labels"]) {
+    assert.equal(bcbaRequested.includes(property), true, `${property} is requested for a BCBA`);
+    assert.equal(BCBA_PROPERTIES.mapped.includes(property), true, `${property} is mapped`);
+    assert.equal(btRequested.includes(property), false, `${property} is not requested for a BT/RBT`);
+  }
 });
 
-test("[B11][5.7] hubspot_owner_id is not requested for a BCBA while the Care Coordinator target is open", () => {
+test("[B11][5.7] hubspot_owner_id is not requested for a BCBA: the Care Coordinator reads the coordinator workflow's fields, not the owner (O-17)", () => {
   assert.equal(employeeRequestProperties(HUBSPOT_EMPLOYEE_TYPES.BCBA).includes("hubspot_owner_id"), false);
 });
 

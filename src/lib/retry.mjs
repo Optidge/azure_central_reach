@@ -9,7 +9,7 @@ import {
 
 // A temporary failure is retried by a new scheduled queue message after 1 minute, 5 minutes,
 // 15 minutes, 1 hour and 4 hours. After the fifth retry fails the record shows "Retries used up"
-// and the message is dead-lettered.
+// and the message is dead-lettered. A daily sweep message gets fewer (maxRetriesFor, item 20).
 export const RETRY_DELAYS_SECONDS = Object.freeze([60, 300, 900, 3600, 14400]);
 export const MAX_RETRIES = RETRY_DELAYS_SECONDS.length;
 // No retry is scheduled further out than this, whatever Retry-After says (HubSpot's longest
@@ -218,11 +218,41 @@ export function retryAfterSeconds(error, now = Date.now()) {
   return Math.max(0, Math.ceil((dateMs - now) / 1000));
 }
 
-// attempt is the number of retries this message has already used (0 on the first delivery).
-// Returns the next attempt and its delay, or null when the retries are used up. A Retry-After
-// longer than the next step sets the delay.
-export function planRetry({ attempt, error }) {
-  if (attempt >= MAX_RETRIES) {
+// Package item 20: a message queued by the daily sweep gets one queue retry, not five. The
+// sweep queues the record again the next day, so a stuck record costs at most two full runs a
+// day. Every other source (webhooks, the hourly poller, the Contact fan-out) keeps five.
+export const DAILY_SWEEP_SOURCE = "dailySweep";
+export const DAILY_SWEEP_MAX_RETRIES = 1;
+// The failures that keep the full schedule on a sweep message too: another run holds the
+// record, a create is still inside its 15-minute window (a waiting record never goes to the
+// dead-letter queue, guide line 267), and an unconfirmed label POST (requirements review
+// question 20, decided 2026-11-24).
+const FULL_SCHEDULE_CODES = new Set([
+  "SYNC_IN_PROGRESS",
+  "CR_CREATE_PENDING",
+  "CR_LABEL_POST_UNCONFIRMED"
+]);
+
+// The number of queue retries a message from this source gets for this failure. Without an
+// error, the limit for an ordinary failure.
+export function maxRetriesFor({ source, error } = {}) {
+  if (source === DAILY_SWEEP_SOURCE && !FULL_SCHEDULE_CODES.has(error?.code)) {
+    return DAILY_SWEEP_MAX_RETRIES;
+  }
+  return MAX_RETRIES;
+}
+
+// True when a failure of this attempt gets no further retry: the record shows "Retries used up"
+// and the message is dead-lettered.
+export function isLastAttempt({ attempt, source, error } = {}) {
+  return attempt >= maxRetriesFor({ source, error });
+}
+
+// attempt is the number of retries this message has already used (0 on the first delivery);
+// source is the message's `source`. Returns the next attempt and its delay, or null when the
+// retries are used up. A Retry-After longer than the next step sets the delay.
+export function planRetry({ attempt, error, source }) {
+  if (isLastAttempt({ attempt, source, error })) {
     return null;
   }
   const waitSeconds = retryAfterSeconds(error) ?? 0;

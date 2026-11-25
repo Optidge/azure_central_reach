@@ -11,6 +11,7 @@
 // centralReachClient.mjs (fake HTTP adapter) are real. No live call.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createOrUpdateEmployee } from "../../lib/centralReachClient.mjs";
 import { putState } from "../../lib/cosmosState.mjs";
 import { buildErrorLog } from "../../lib/errors.mjs";
 import {
@@ -25,6 +26,7 @@ import { buildEmployeePayload } from "../../mappings/employees/buildEmployeePayl
 import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
 import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
 import {
+  SANDBOX_PORTAL,
   clientWorkflowDeps,
   employeeWorkflowDeps,
   httpError,
@@ -35,6 +37,7 @@ import {
   BT_LINK,
   CASE_LINK,
   EMPLOYEE_GET,
+  METADATA_DELETE,
   METADATA_PUT,
   STAFF_LABEL,
   STORED_EMPLOYEE,
@@ -491,6 +494,8 @@ const SSN_STOPPED = [
   ["masked with *, no dashes", "*****6789"],
   ["8 digits", "12345678"],
   ["10 digits", "1234567890"],
+  // SG-4: a full 9 digits with a trailing line break is not "a full 9 digits".
+  ["9 digits with a trailing line break", "123456789\n"],
   ["a number", 123456789],
   ["an object", { last4: "Zq6789" }]
 ];
@@ -499,7 +504,7 @@ const SSN_REASON = (entity) =>
 
 // The text that must never leave the read: the value itself, or its marker for an object.
 function ssnNeedle(value) {
-  return typeof value === "object" ? value.last4 : String(value);
+  return typeof value === "object" ? value.last4 : String(value).trim();
 }
 
 function linkOf(type) {
@@ -761,6 +766,146 @@ test("[BR16][3.13][C2] a Case whose client read lacks a core key (item B21) send
   assert.equal((await runCase(record)).status, "error");
   assert.equal(cr.count(CLIENT_PUT), 0);
   assert.deepEqual(linkData(container, CASE_LINK), savedBefore);
+});
+
+// SG-4: the library-level guard in createOrUpdateEmployee, on its own (the workflow's guard
+// always fires first in the workflow tests).
+test("[BR16][3.13][B3][T2] the SSN guard inside createOrUpdateEmployee: a held masked SSN sends no PUT on a core change", async () => {
+  const { cr } = setup();
+  await assert.rejects(
+    createOrUpdateEmployee({
+      payload: { firstName: "Alex", lastName: "Okonkwo", externalSystemId: "1000001" },
+      existingContactId: "5001",
+      heldContact: { contactId: 5001, firstName: "Alex", lastName: "Rivera", ssn: "***-**-6789" }
+    }),
+    (error) => error.code === "CR_EMPLOYEE_READ_FAILED" && /contact\.ssn/.test(error.syncReason)
+  );
+  assert.equal(cr.count(EMPLOYEE_PUT), 0);
+  assert.equal(cr.calls.length, 0);
+});
+
+// ---------------------------------------------------------------------------------------------
+// SG-1 and SG-2 (SSN guard review, 2026-11-24): a run that marked the Case in progress and then
+// failed before any CentralReach write puts the clean flag and the in-progress fields back as it
+// found them, whatever the failure (rule 5.8: a failed read is never a clear).
+// ---------------------------------------------------------------------------------------------
+
+test("[BR16][3.13][C28] SG-1: a client read that fails with 503 three times after HubSpot set a field leaves the link record as it was, so when HubSpot blanks the field again the next run sends no metadata DELETE", async () => {
+  const { container, cr } = setup();
+  const record = stage3Case({ client_id_number: "2001", severity_level_clinical: "" });
+  seedClientAsMapped(cr, record);
+  assert.equal((await runCase(record)).status, "success");
+  const savedBefore = linkData(container, CASE_LINK);
+
+  record.properties.severity_level_clinical = "Level 2";
+  cr.fail(CLIENT_GET, httpError(503), { times: 3 });
+  const start = cr.calls.length;
+  await assert.rejects(runCase(record), (error) => error.crWriteNotSent === true);
+  assert.deepEqual(namesSince(cr, start), [
+    "GET /contacts/client/byExternalSystemId",
+    CLIENT_GET,
+    CLIENT_GET,
+    CLIENT_GET
+  ]);
+  assert.deepEqual(linkData(container, CASE_LINK), savedBefore);
+
+  // HubSpot is back to what was last written: nothing to send.
+  record.properties.severity_level_clinical = "";
+  const next = cr.calls.length;
+  assert.equal((await runCase(record)).status, "noop");
+  assert.equal(namesSince(cr, next).includes(METADATA_DELETE), false);
+  assert.equal(namesSince(cr, next).includes(METADATA_PUT), false);
+});
+
+test("[BR16][3.13][C28] SG-1 boundary: a client PUT that fails after it was sent is not \"not sent\": its hashes stay counted as written", async () => {
+  const { container, cr } = setup();
+  const record = stage3Case({ client_id_number: "2001" });
+  seedClientAsMapped(cr, record);
+  assert.equal((await runCase(record)).status, "success");
+
+  record.properties.phi_last_name = "Okonkwo";
+  cr.fail(CLIENT_PUT, httpError(503), { times: 3 });
+  await assert.rejects(runCase(record), (error) => error.crWriteNotSent === undefined);
+  assert.equal(cr.count(CLIENT_PUT), 3);
+  const saved = linkData(container, CASE_LINK);
+  assert.equal(saved.clean, false);
+  assert.equal(saved.inProgressContactId, "2001");
+  assert.equal(typeof saved.inProgressFieldHashes, "object");
+  assert.notEqual(saved.inProgressFieldHashes, null);
+});
+
+for (const [code, failLookup, outcome] of [
+  ["CR_LOOKUP_UNKNOWN", (cr) => cr.fail("GET /contacts/client/byExternalSystemId", httpError(500), { times: 3 }), "thrown"],
+  [
+    "CR_LOOKUP_UNREADABLE",
+    (cr) => {
+      // The lookup finds a client, and its answer is replaced by a 200 with no contact ID.
+      cr.clients.set("2001", { contactId: "2001", externalSystemId: "deal-1" });
+      cr.answer("GET /contacts/client/byExternalSystemId", { contact: {} });
+    },
+    "error"
+  ]
+]) {
+  test(`[BR16][3.15][C2] SG-2 (a): on the creating path, the lookup inside createOrUpdateClient failing with ${code} puts back the earlier run's in-progress hashes and clears the create marker`, async () => {
+    const { container, cr } = setup();
+    // An earlier run of this unlinked Case failed after its in-progress save.
+    const prior = {
+      workflow: "clientSync",
+      portalId: SANDBOX_PORTAL,
+      clean: false,
+      inProgressFieldHashes: { "core:FirstName": "earlier-hash" },
+      inProgressContactId: null
+    };
+    await putState({ ...CASE_LINK, type: "link", ttlSeconds: -1, data: prior });
+    const record = stage3Case({ phi_last_name: "Okonkwo" });
+
+    failLookup(cr);
+    if (outcome === "thrown") {
+      await assert.rejects(runCase(record), (error) => error.code === code && error.crWriteNotSent === true);
+    } else {
+      assert.equal((await runCase(record)).status, "error");
+    }
+    assert.equal(cr.count("POST /contacts/client"), 0);
+    assert.deepEqual(linkData(container, CASE_LINK), {
+      ...prior,
+      pendingCreateExternalId: null,
+      pendingCreateSentAt: null
+    });
+  });
+}
+
+test("[BR16][3.13][C2] SG-2 (b): a prior that already holds in-progress hashes and a contact ID from an earlier failed run comes back unchanged after a client read failure or the SSN guard", async () => {
+  for (const [name, breakRead] of [
+    ["client read 503", (cr) => cr.fail(CLIENT_GET, httpError(503), { times: 3 })],
+    ["SSN guard", (cr) => {
+      cr.clients.get("2001").ssn = "***-**-6789";
+    }]
+  ]) {
+    const { container, cr } = setup();
+    const record = stage3Case({ client_id_number: "2001" });
+    seedClientAsMapped(cr, record);
+    assert.equal((await runCase(record)).status, "success", name);
+
+    // An earlier run wrote (or may have written) the severity, then failed: in progress.
+    record.properties.severity_level_clinical = "Level 3";
+    cr.fail(METADATA_PUT, httpError(503), { times: 3 });
+    await assert.rejects(runCase(record), name);
+    const savedBefore = linkData(container, CASE_LINK);
+    assert.equal(savedBefore.clean, false, name);
+    assert.equal(savedBefore.inProgressContactId, "2001", name);
+    assert.notEqual(savedBefore.inProgressFieldHashes ?? null, null, name);
+
+    breakRead(cr);
+    record.properties.phi_last_name = "Okonkwo";
+    record.properties.severity_level_clinical = "Level 1";
+    try {
+      await runCase(record);
+    } catch {
+      // The 503 is thrown for a retry; the guard ends as error on the record.
+    }
+    assert.equal(cr.count(CLIENT_PUT), 0, name);
+    assert.deepEqual(linkData(container, CASE_LINK), savedBefore, name);
+  }
 });
 
 // ---------------------------------------------------------------------------------------------

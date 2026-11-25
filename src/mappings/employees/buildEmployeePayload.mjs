@@ -11,6 +11,7 @@ import {
   readPhone,
   readStateCode
 } from "../../lib/fieldFormats.mjs";
+import { careCoordinatorValue } from "../shared/careCoordinator.mjs";
 
 // The employee side accepts m / f as well as male / female (kept from before F-1).
 const GENDER_OPTIONS = Object.freeze({ allowInitials: true });
@@ -134,13 +135,72 @@ function managedBtRbtLabels(btRbtType) {
     : stateLabelIds;
 }
 
+// BL5, BL6, row 5.6 (Zeke 2026-11-25, "BCBA label group settled"): the BCBA credential labels, read
+// from the three per-state multi-checkboxes, keyed by the option's stored value. The CentralReach
+// labels are stateless, so the same payor in two states sends its label once.
+// `null`: a known option with no CentralReach label (MCD-NJ, Horizon-NJ); it sends nothing and raises
+// no warning. An option not listed here (a renamed option, say) also sends nothing, so its label is
+// removed, and raises `unmapped_credential_option`. `credentialed_insurances__ny` is never read.
+// The NJ options `Aetna` and `Cigna` exist in production only (2026-11-25 option read).
+export const BCBA_CREDENTIAL_LABELS_BY_PROPERTY = Object.freeze({
+  ny_insurance_labels: Object.freeze({
+    "MCD FFS-NY": CENTRAL_REACH_EMPLOYEE_LABELS.NY_MEDICAID,
+    "Aetna-NY": CENTRAL_REACH_EMPLOYEE_LABELS.AETNA,
+    "Cigna-NY": CENTRAL_REACH_EMPLOYEE_LABELS.CIGNA,
+    "Carelon-NY": CENTRAL_REACH_EMPLOYEE_LABELS.CARELON
+  }),
+  co_insurance_labels: Object.freeze({
+    "MCD-CO": CENTRAL_REACH_EMPLOYEE_LABELS.CO_MEDICAID,
+    "Aetna-CO": CENTRAL_REACH_EMPLOYEE_LABELS.AETNA,
+    "Cigna-CO": CENTRAL_REACH_EMPLOYEE_LABELS.CIGNA,
+    "Carelon-CO": CENTRAL_REACH_EMPLOYEE_LABELS.CARELON
+  }),
+  nj_insurance_labels: Object.freeze({
+    Aetna: CENTRAL_REACH_EMPLOYEE_LABELS.AETNA,
+    Cigna: CENTRAL_REACH_EMPLOYEE_LABELS.CIGNA,
+    "MCD-NJ": null,
+    "Horizon-NJ": null
+  })
+});
+
+const CREDENTIAL_LABEL_IDS = [
+  ...new Set(
+    Object.values(BCBA_CREDENTIAL_LABELS_BY_PROPERTY)
+      .flatMap((options) => Object.values(options))
+      .filter(Boolean)
+  )
+];
+
+// The credential labels the ticked options require, with no duplicates.
+function requiredCredentialLabels(properties) {
+  const labelIds = Object.entries(BCBA_CREDENTIAL_LABELS_BY_PROPERTY).flatMap(([property, options]) =>
+    multiCheckboxValues(properties[property])
+      .filter((option) => Object.hasOwn(options, option))
+      .map((option) => options[option])
+  );
+  return [...new Set(labelIds.filter(Boolean))];
+}
+
+// Review F1: one warning per credential property holding an option the table does not list, by
+// property name only (BR21). It changes no label and does not stop the sync.
+function unmappedCredentialOptionWarnings(properties) {
+  return Object.entries(BCBA_CREDENTIAL_LABELS_BY_PROPERTY)
+    .filter(([property, options]) =>
+      multiCheckboxValues(properties[property]).some((option) => !Object.hasOwn(options, option))
+    )
+    .map(([property]) => ({
+      code: "unmapped_credential_option",
+      message: `${property} holds an option with no CentralReach mapping; no credential label is sent for it.`
+    }));
+}
+
 const BCBA_MANAGED_LABEL_IDS = Object.freeze([
   ...Object.values(STATE_LABELS),
   CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_COLORADO,
   CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NJ,
   CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NY,
   CENTRAL_REACH_EMPLOYEE_LABELS.GRAD_STUDENT_LBA_NY,
-  CENTRAL_REACH_EMPLOYEE_LABELS.NY_MEDICAID,
+  ...CREDENTIAL_LABEL_IDS,
   CENTRAL_REACH_EMPLOYEE_LABELS.SALARIED,
   CENTRAL_REACH_EMPLOYEE_LABELS.BILLING_HOLD_MEDICAID_AFFILIATION
 ]);
@@ -186,9 +246,8 @@ function requiredBcbaLabels({ properties, workStates }) {
     assignStates.includes("Assign NJ") && CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NJ,
     lbaLicensure === "Yes" && CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NY,
     lbaLicensure === "Grad Permit" && CENTRAL_REACH_EMPLOYEE_LABELS.GRAD_STUDENT_LBA_NY,
-    // BL5, row 5.6. The other credential options have no documented label (BL6) and send nothing.
-    multiCheckboxValues(properties.ny_insurance_labels).includes("MCD FFS-NY") &&
-      CENTRAL_REACH_EMPLOYEE_LABELS.NY_MEDICAID,
+    // BL5, BL6, row 5.6: NY Medicaid, CO Medicaid, Aetna, Cigna and Carelon.
+    ...requiredCredentialLabels(properties),
     // B10, row 5.7.
     trimOrNull(properties.work_status) === "Salaried" && CENTRAL_REACH_EMPLOYEE_LABELS.SALARIED,
     // BL7, row 5.8.
@@ -295,6 +354,7 @@ function buildBcbaPayload({ record, config }) {
   const { valueOf, unreadableValueProperties } = createValueReader(properties);
   const stateCode = valueOf(readStateCode, "state_home");
   const { workStates, warnings } = readWorkStates(properties);
+  warnings.push(...unmappedCredentialOptionWarnings(properties));
 
   const employeePayload = {
     externalSystemId: externalSystemIdForCreate(properties, recordId),
@@ -342,6 +402,16 @@ function buildBcbaPayload({ record, config }) {
       hubspotRecordUrl;
   } else if (!String(config?.hubspot?.hubspotPortalId || "").trim()) {
     warnings.push(buildMissingPortalWarning());
+  }
+
+  // B11 (O-17): Care Coordinator 140495, the same rule as the Case 138851. Not ready: the key is
+  // left out and the worker's omit list names 140495, so it is not sent and not cleared.
+  const coordinator = careCoordinatorValue(properties);
+  if (coordinator.warning) {
+    warnings.push(coordinator.warning);
+  }
+  if (!coordinator.omit) {
+    metadataValues[CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS.BCBA_CARE_COORDINATOR] = coordinator.value;
   }
 
   return {

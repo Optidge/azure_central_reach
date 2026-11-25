@@ -49,6 +49,7 @@
 // The token is HUBSPOT_PRIVATE_APP_TOKEN from local.settings.json, read at run time, never printed.
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 const SANDBOX_PORTAL = "52311591";
 const TYPES = { deal: "0-3", contact: "0-1", bcba: "2-72890322", bt: "2-72890325" };
@@ -252,13 +253,53 @@ const bcba = {
   // R1 also holds "Assign NY", which maps to no label.
   assign_states: pick("Assign NY;Assign NJ", "Assign CO", "Assign CO;Assign NJ"),
   lba_licensure__ny: pick("Yes", "Grad Permit", "No"),
-  ny_insurance_labels: pick("MCD FFS-NY", "Aetna-NY", ""),
+  // ny_insurance_labels, co_insurance_labels, nj_insurance_labels: set per round by
+  // applyCredentialPlan() below (BL5, BL6), after the sandbox options are checked.
   work_status: pick("Salaried", "Hourly", "Salaried"),
   cr_billing_hold_label: pick("Yes", "No", ""),
   centralreach_creates_only: CREATES_BOX,
   ...(WORKDAY_ROUND?.bcba ? { workday_id: WORKDAY_ROUND.bcba } : {}),
+  // B11 (build chat 3 item 2; spec batch3-verification-2026-11-25.md A4.8 B11-1): the sandbox BCBA
+  // coordinator workflow fills care_coordinator_first_name / _last_name / _email and sets
+  // coordinator_export_status from this owner (Team Member record for 161391908, run sheet P-2,
+  // P-21). The integration never reads the owner itself; it reads the four coordinator properties.
+  hubspot_owner_id: OWNER_ID,
   sandbox_test_field: "true"
 };
+
+// BL5, BL6 (build chat 3 item 3; guide G08 L691-692; ledger LBL-025 to LBL-035, BCBA-140b): the three
+// credential properties are read and SENT (src/mappings/employees/buildEmployeePayload.mjs
+// BCBA_CREDENTIAL_LABELS_BY_PROPERTY). Labels are stateless, so each round holds options whose labels
+// come from ONE option each, and every option is held by at least one round:
+//   NY pattern (1, 4, 7, 10): MCD FFS-NY (BL5 1107647), Cigna-NY 1107650, Carelon-NY 1132654;
+//                             MCD-NJ and Horizon-NJ (no label).
+//   round 2 (CO, webhook):    Aetna-NY 1107649; MCD-CO 1107651, Cigna-CO 1107650, Carelon-CO 1132654;
+//                             MCD-NJ (no label).
+//   round 5 (CO, poller):     MCD-CO 1107651, Aetna-CO 1107649, Cigna-CO 1107650, Carelon-CO 1132654;
+//                             MCD-NJ (no label). No NY option, so 1107649 comes from Aetna-CO alone.
+//   round 3 (NJ, poller):     NJ `Aetna` 1107649; MCD-NJ (no label).
+//   round 6 (NJ, webhook):    NJ `Cigna` 1107650; MCD-NJ and Horizon-NJ (no label).
+// MCD-NJ is in every round (ledger LBL-034). A blank list is sent as "" so a re-run (--refresh) clears
+// the old decoy values (before build chat 3, co_ and nj_insurance_labels were decoys set to their first
+// option). Each option is checked against the sandbox property first; a missing option is left out
+// with a FALLBACK line, and the options actually set go to round-N.json (`credentialOptions`), which
+// check-cr-record.mjs reads for the BL6 expectation. NJ `Aetna` / `Cigna` exist in production only
+// until Zeke adds them to the sandbox (run sheet P-20).
+const CREDENTIAL_PROPERTIES = ["ny_insurance_labels", "co_insurance_labels", "nj_insurance_labels"];
+const NY_PATTERN_CREDENTIALS = {
+  ny_insurance_labels: ["MCD FFS-NY", "Cigna-NY", "Carelon-NY"],
+  co_insurance_labels: [],
+  nj_insurance_labels: ["MCD-NJ", "Horizon-NJ"]
+};
+const CREDENTIAL_ROUNDS = {
+  2: { ny_insurance_labels: ["Aetna-NY"], co_insurance_labels: ["MCD-CO", "Cigna-CO", "Carelon-CO"],
+    nj_insurance_labels: ["MCD-NJ"] },
+  5: { ny_insurance_labels: [], co_insurance_labels: ["MCD-CO", "Aetna-CO", "Cigna-CO", "Carelon-CO"],
+    nj_insurance_labels: ["MCD-NJ"] },
+  3: { ny_insurance_labels: [], co_insurance_labels: [], nj_insurance_labels: ["Aetna", "MCD-NJ"] },
+  6: { ny_insurance_labels: [], co_insurance_labels: [], nj_insurance_labels: ["Cigna", "MCD-NJ", "Horizon-NJ"] }
+};
+const CREDENTIAL_PLAN = CREDENTIAL_ROUNDS[round] ?? pick(NY_PATTERN_CREDENTIALS, CREDENTIAL_ROUNDS[2], CREDENTIAL_ROUNDS[3]);
 
 // BCBA 2: HubSpot only, never pushed. It is the Case's RE BCBA (so the IA and RE fields hold
 // different names, C11) and its Potential IA and Potential Supervising BCBA (never synced, C16).
@@ -395,8 +436,9 @@ const deal = {
 const DECOYS = {
   deal: ["n2_what_type_of_insurance", "total_hours_bt_12_work_schedule",
     "ongoing_auth_period_start_date_f", "ongoing_auth_period_end_date_f", "care_coordinator_name"],
-  bcba: ["credentialed_insurances__ny", "co_insurance_labels", "nj_insurance_labels", "external_system_id",
-    "dob"],
+  // co_insurance_labels and nj_insurance_labels are no longer decoys: they are sent (BL6, build chat 3
+  // item 3) and set by applyCredentialPlan().
+  bcba: ["credentialed_insurances__ny", "external_system_id", "dob"],
   bt: ["bt_to_rbt_path", "external_system_id"]
 };
 
@@ -499,6 +541,40 @@ async function upsert(typeId, key, props) {
 }
 const upsertContact = (props) => upsert(TYPES.contact, "email", props);
 
+// BL6: checks each planned credential option against the sandbox BCBA property (a GET, allowed in
+// plan mode), writes the options that exist onto `bcba` (";"-joined; "" clears), and returns what was
+// set plus one FALLBACK line per option left out. Option names only, never a record value.
+async function applyCredentialPlan() {
+  const options = {};
+  const fallbacks = [];
+  for (const name of CREDENTIAL_PROPERTIES) {
+    let d;
+    try {
+      d = await hs("GET", `/crm/v3/properties/${TYPES.bcba}/${name}`);
+    } catch {
+      throw new Error(`BCBA property ${name} not found in the sandbox: the integration requests it (BL5, BL6), ` +
+        "so every BCBA run would fail its read. Stopped: tell Zeke.");
+    }
+    const allowed = new Set((d.options || []).map((o) => o.value));
+    const planned = CREDENTIAL_PLAN[name] || [];
+    const kept = planned.filter((option) => allowed.has(option));
+    for (const option of planned.filter((o) => !allowed.has(o))) {
+      const hint = name === "nj_insurance_labels" && ["Aetna", "Cigna"].includes(option)
+        ? " Zeke adds the sandbox options Aetna and Cigna to nj_insurance_labels by hand (run sheet P-20), then re-run the plan."
+        : " Tell the testing chat: the ledger line for this option has no live proof on this round.";
+      const line = `FALLBACK (BL6): ${name} has no sandbox option "${option}"; round ${N} does not set it, so no label ` +
+        `is expected from it (check-cr-record.mjs reads the options set from round-${N}.json).${hint}`;
+      fallbacks.push(line);
+      console.log(line);
+    }
+    options[name] = kept;
+    bcba[name] = kept.join(";");
+  }
+  console.log(`Credential options (BL5, BL6), round ${N}: ${CREDENTIAL_PROPERTIES.map((p) =>
+    `${p} [${options[p].join(", ")}]`).join("; ")}.`);
+  return { options, fallbacks };
+}
+
 async function decoyValue(typeId, name, fixedValue) {
   const d = await hs("GET", `/crm/v3/properties/${typeId}/${name}`);
   if (d.calculated || d.modificationMetadata?.readOnlyValue) return null;
@@ -538,6 +614,9 @@ async function main() {
     return;
   }
   console.log(`Sandbox ${acct.portalId} confirmed. Round ${N} (${S.name}). Mode: ${WRITE ? "WRITE" : "plan only"}.`);
+  // Before the hand-made set too: it copies `bcba`, and an option missing in the sandbox would be a
+  // BAD OPTION there.
+  const credentials = await applyCredentialPlan();
   if (HANDMADE) {
     await handmade();
     return;
@@ -598,6 +677,11 @@ async function main() {
     bt2: await settable(TYPES.bt, bt("Jill", `zeke+bt2_azure_test_${N}@optidge.com`)),
     deal: await settable(TYPES.deal, deal)
   };
+  // BL6: a blank credential list is sent as "" (settable drops blanks), so a re-run clears the old
+  // decoy values. applyCredentialPlan() has already confirmed the three properties exist.
+  for (const name of CREDENTIAL_PROPERTIES) {
+    if (!(name in plan.bcba.set)) plan.bcba.set[name] = "";
+  }
   for (const [name, p] of Object.entries(plan)) {
     console.log(`${name}: ${Object.keys(p.set).length} to set` +
       (p.readOnly.length ? `; read-only, not sent: ${p.readOnly.join(", ")}` : "") +
@@ -694,37 +778,56 @@ async function main() {
     const blankMirrors = mirrorNames.filter((m) => !rec.properties?.[m]);
     return { differs: diffs, blankMirrors, properties: rec.properties || {} };
   };
+  // Review C O6 / C4: the coordinator fields C10 (Case, 138851) and B11 (BCBA, 140495) depend on, the
+  // R3 Case `location` (must be blank for U2-6) and `active_cases_count` (T7; question 13) are read
+  // back too. `coordinator` keeps only the status, whether the names are the test names "Zeke" /
+  // "Swanson", and a SHA-256 hash of the test coordinator's email (O-17: the value is
+  // "<first>\n<last>\n<email>"). The address itself is never saved or printed (Zeke 2026-11-25:
+  // "Hash: a small script change, and no address in the repo."); check-cr-record.mjs compares the
+  // third line by this hash.
+  const COORDINATOR_FIELDS = ["coordinator_export_status", "care_coordinator_first_name", "care_coordinator_last_name",
+    "care_coordinator_email"];
+  const coordinatorOf = ({ properties }) => {
+    const testNames = properties.care_coordinator_first_name === "Zeke" && properties.care_coordinator_last_name === "Swanson";
+    const email = String(properties.care_coordinator_email ?? "").trim();
+    const emailHash = testNames && email ? createHash("sha256").update(email).digest("hex") : null;
+    return { status: properties.coordinator_export_status || "blank", testNames, emailHash };
+  };
   const bcbaRead = await readBack(TYPES.bcba, ids.bcba, plan.bcba.set,
     ["address", "apartment__home", "city_home", "state_home", "postal_code_home", "employee_phone",
-      ...("email" in plan.bcba.set ? [] : ["email"])]);
+      ...("email" in plan.bcba.set ? [] : ["email"]), ...COORDINATOR_FIELDS]);
   const bcbaEmail = String(bcbaRead.properties.email ?? "").trim().toLowerCase();
   const emailVsContact = !bcbaEmail ? "blank (not set and the mirror did not run)"
     : bcbaEmail === String(bcbaContact.email).toLowerCase() ? "matches the Contact" : "differs from the Contact";
-  const strip = ({ properties, ...rest }) => rest; // property names only in the report, never values
-  // Review C O6 / C4: the coordinator fields C10 depends on, the R3 Case `location` (must be blank for
-  // U2-6) and `active_cases_count` (T7; question 13) are read back too. `coordinator` keeps only the
-  // status and whether the names are the test names "Zeke" / "Swanson" (no other value is saved).
-  const COORDINATOR_FIELDS = ["coordinator_export_status", "care_coordinator_first_name", "care_coordinator_last_name"];
+  const strip = ({ properties, ...rest }) => rest; // property names only, never values
   const dealRead = await readBack(TYPES.deal, ids.deal, plan.deal.set,
     [...plan.deal.readOnly, ...COORDINATOR_FIELDS, ...("location" in plan.deal.set ? [] : ["location"])]);
-  const coordinator = {
-    status: dealRead.properties.coordinator_export_status || "blank",
-    testNames: dealRead.properties.care_coordinator_first_name === "Zeke" &&
-      dealRead.properties.care_coordinator_last_name === "Swanson"
-  };
+  const coordinator = coordinatorOf(dealRead);
   const report = {
     deal: { ...strip(dealRead), coordinator },
-    bcba: { ...strip(bcbaRead), emailVsContact },
+    bcba: { ...strip(bcbaRead), emailVsContact, coordinator: coordinatorOf(bcbaRead) },
     bt1: strip(await readBack(TYPES.bt, ids.bt1, plan.bt1.set,
       ["street_home", "location_city", "state_home", "postal_code_home", "employee_phone", "email", "gender", "date_of_birth",
         "active_cases_count"]))
   };
-  if (coordinator.status !== "ready" || !coordinator.testNames) {
+  if (coordinator.status !== "ready" || !coordinator.testNames || !coordinator.emailHash) {
     console.log(`STOP before this round's Case push: coordinator_export_status is ${coordinator.status}` +
-      `${coordinator.testNames ? "" : " or the coordinator names are not Zeke / Swanson"} (C10; review C O6). ` +
+      `${coordinator.testNames ? "" : " or the coordinator names are not Zeke / Swanson"}` +
+      `${coordinator.emailHash ? "" : " or care_coordinator_email is blank"} (C10; review C O6). ` +
       "Re-save the Case owner after the Team Member record exists, then re-read.");
   }
-  console.log("Read-back (property names only):", JSON.stringify(report, null, 2));
+  // B11 (stop rule 10b): the BCBA push still runs when its coordinator is not ready (B11 then expects
+  // Employee Meta 140495 blank), but that round proves nothing for BCBA-137.
+  const bcbaCoordinator = report.bcba.coordinator;
+  if (bcbaCoordinator.status !== "ready" || !bcbaCoordinator.testNames || !bcbaCoordinator.emailHash) {
+    console.log(`NOTE (B11): the BCBA coordinator_export_status is ${bcbaCoordinator.status}` +
+      `${bcbaCoordinator.testNames ? "" : " or its names are not Zeke / Swanson"}` +
+      `${bcbaCoordinator.emailHash ? "" : " or its care_coordinator_email is blank"}: B11 expects 140495 blank on this ` +
+      "round and BCBA-137 is not proven by it. Check the sandbox BCBA coordinator workflow (run sheet P-21), " +
+      "re-save the BCBA owner, then re-read.");
+  }
+  console.log("Read-back (property names only; the coordinator email is a hash):",
+    JSON.stringify(report, null, 2));
 
   const outDir = resolve(ROUNDS_DIR);
   mkdirSync(outDir, { recursive: true });
@@ -746,6 +849,9 @@ async function main() {
     ...(workdayIds ? { workdayIds } : {}),
     ...(WORKDAY_ROUND?.bcbaLater ? { bcbaWorkdayIdLater: WORKDAY_ROUND.bcbaLater } : {}),
     ...(WORKDAY_ROUND?.bt1Later ? { bt1WorkdayIdLater: WORKDAY_ROUND.bt1Later } : {}),
+    // BL6: the credential options actually set (option names only), read by check-cr-record.mjs.
+    credentialOptions: credentials.options,
+    ...(credentials.fallbacks.length ? { credentialFallbacks: credentials.fallbacks } : {}),
     decoys, report
   }, null, 2));
   console.log(`\nSaved IDs and read-back to sandbox-rounds/round-${N}.json. Entered in CentralReach is blank on every record.`);

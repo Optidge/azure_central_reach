@@ -77,13 +77,18 @@ function runBt(record, input = {}, overrides = {}) {
 // The decision
 // ---------------------------------------------------------------------------------------------
 
-test("[BR4][3.12] gateProperties falls back to the record gate for a path setting that is not set", () => {
-  assert.deepEqual(gateProperties({ recordGateProperty: GATE }), { create: GATE, update: GATE });
-  assert.deepEqual(gateProperties({ recordGateProperty: null }), { create: null, update: null });
-  assert.deepEqual(gateProperties(TWO_GATES), { create: CREATES, update: UPDATES });
+test("[BR4][3.12] gateProperties: the record gate, when set, is on both paths, and each path setting adds its own property", () => {
+  assert.deepEqual(gateProperties({ recordGateProperty: GATE }), { create: [GATE], update: [GATE] });
+  assert.deepEqual(gateProperties({ recordGateProperty: null }), { create: [], update: [] });
+  assert.deepEqual(gateProperties(null), { create: [], update: [] });
+  assert.deepEqual(gateProperties(TWO_GATES), { create: [CREATES], update: [UPDATES] });
+  assert.deepEqual(gateProperties({ ...TWO_GATES, recordGateProperty: GATE }), {
+    create: [GATE, CREATES],
+    update: [GATE, UPDATES]
+  });
   assert.deepEqual(
     gateProperties({ recordGateProperty: GATE, createGateProperty: CREATES }),
-    { create: CREATES, update: GATE }
+    { create: [GATE, CREATES], update: [GATE] }
   );
 });
 
@@ -112,6 +117,59 @@ for (const [kind, eligibility, entry] of [
       }
     }
   });
+}
+
+// Zeke 2026-11-25: with the record gate set next to the two path settings, a record needs the
+// record gate AND its own path's box. Any record gate value but true (blank, false, "no") skips.
+// The two other modes are checked in the same matrix: the record gate alone (both boxes not read)
+// and the two path settings alone (the record gate not read).
+const RECORD_GATE_VALUES = ["true", "false", "no", "", null];
+const GATE_MODES = [
+  ["record gate and two path settings", { ...TWO_GATES, recordGateProperty: GATE }],
+  ["record gate only", { recordGateProperty: GATE }],
+  ["two path settings only", TWO_GATES]
+];
+
+function expectedEligible(mode, { hubspotHasCrId, record, creates, updates }) {
+  const box = hubspotHasCrId ? updates : creates;
+  if (mode === "record gate only") {
+    return record === "true";
+  }
+  if (mode === "two path settings only") {
+    return box === "true";
+  }
+  return record === "true" && box === "true";
+}
+
+for (const [kind, eligibility, entry] of [
+  ["Case", caseSyncEligibility, { enter_in_central_reach: "Yes", dealstage: "1" }],
+  ["employee", employeeSyncEligibility, { entered_in_centralreach: "Yes" }]
+]) {
+  for (const [mode, sync] of GATE_MODES) {
+    test(`[BR4][3.12] ${kind}, ${mode}: eligible only when every gate of the record's path is true; otherwise a record_gate skip that names the path`, () => {
+      for (const hubspotHasCrId of [false, true]) {
+        for (const record of RECORD_GATE_VALUES) {
+          for (const creates of BOX_VALUES) {
+            for (const updates of BOX_VALUES) {
+              const decision = eligibility({
+                properties: { ...entry, [GATE]: record, [CREATES]: creates, [UPDATES]: updates },
+                linked: hubspotHasCrId,
+                hubspotHasCrId,
+                gates: gateProperties(sync)
+              });
+              const label = JSON.stringify({ hubspotHasCrId, record, creates, updates });
+              const allowed = expectedEligible(mode, { hubspotHasCrId, record, creates, updates });
+              assert.equal(decision.eligible, allowed, label);
+              if (!allowed) {
+                const path = hubspotHasCrId ? "update" : "create";
+                assert.deepEqual(decision, { eligible: false, reason: "record_gate", gate: path }, label);
+              }
+            }
+          }
+        }
+      }
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -235,6 +293,71 @@ for (const [kind, makeRecord, run] of [
       }
     });
   }
+}
+
+// Zeke 2026-11-25: the record gate next to the two path settings.
+const COMBINED = Object.freeze({ ...TWO_GATES, recordGateProperty: GATE });
+const combinedConfig = { getConfig: () => workflowConfig({ sync: COMBINED }) };
+
+test("[BR4][3.12] with the record gate and two path settings, the Case and the BT/RBT workers request all three gate properties from HubSpot", async () => {
+  setup();
+  const caseRequested = [];
+  const caseRecord = stage3Case({ [GATE]: "true", [CREATES]: "true", [UPDATES]: null });
+  await runCase(caseRecord, {}, {
+    ...combinedConfig,
+    getDealById: async (_id, names) => {
+      caseRequested.push(...names);
+      return hubspotAnswer(caseRecord.read(), names);
+    }
+  });
+  const btRequested = [];
+  const btRecord = stage3Bt({ [GATE]: "true", [CREATES]: "true", [UPDATES]: null });
+  await runBt(btRecord, {}, {
+    ...combinedConfig,
+    getBtRbtRecordById: async (_id, _type, names) => {
+      btRequested.push(...names);
+      return hubspotAnswer(btRecord.read(), names);
+    }
+  });
+  for (const requested of [caseRequested, btRequested]) {
+    for (const name of [GATE, CREATES, UPDATES]) {
+      assert.equal(requested.includes(name), true, name);
+    }
+  }
+});
+
+for (const [kind, makeRecord, run, reader] of [
+  [
+    "Case",
+    (cr, linked, boxes) => (linked ? linkedCase(cr, boxes) : stage3Case(boxes)),
+    runCase,
+    (read) => ({ getDealById: async (_id, names) => read(names) })
+  ],
+  [
+    BT,
+    (cr, linked, boxes) => stage3Bt({ ...boxes, ...(linked ? { employee_id: "5001" } : {}) }),
+    runBt,
+    (read) => ({ getBtRbtRecordById: async (_id, _type, names) => read(names) })
+  ]
+]) {
+  test(`[BR4][3.12] with the record gate and two path settings, a ${kind} answer without the record gate key is a failed read on a linked and an unlinked record with both boxes ticked: no CentralReach call and no HubSpot write`, async () => {
+    for (const linked of [false, true]) {
+      const { cr } = setup();
+      const record = makeRecord(cr, linked, { [GATE]: "true", [CREATES]: "true", [UPDATES]: "true" });
+      const withoutRecordGate = (names) => {
+        const answer = hubspotAnswer(record.read(), names);
+        delete answer.properties[GATE];
+        return answer;
+      };
+      const callsBefore = cr.calls.length;
+      await assert.rejects(
+        run(record, {}, { ...combinedConfig, ...reader(withoutRecordGate) }),
+        (error) => error.code === "HUBSPOT_READ_FAILED"
+      );
+      assert.deepEqual(cr.calls.slice(callsBefore), [], String(linked));
+      assert.deepEqual(record.writes, [], String(linked));
+    }
+  });
 }
 
 const SOURCES = ["hubspotWorkflow", "intakePoller", "dailySweep", CONTACT_FAN_OUT_SOURCE, "linkedRecheck"];
@@ -544,4 +667,108 @@ test("[BR4][3.5] with two gates, the sweep's linked branch carries the update ga
   const swept = (messages) => messages.filter((message) => message.body.source === "dailySweep");
   assert.deepEqual(dealIds(swept(poller.queues.client)), ["1"]);
   assert.deepEqual(recordIds(swept(poller.queues.employee)), ["11"]);
+});
+
+// Zeke 2026-11-25: with the record gate next to the two path settings, every search group carries
+// the record gate AND its own path's box, so a record whose box is ticked but whose record gate is
+// not true is never queued.
+const combinedPollerConfig = () => ({ ...pollerConfig(), sync: { ...COMBINED } });
+
+test("[BR4][3.4] with the record gate and two path settings, the poller's linked group carries the record gate and the update gate, and its Entered = Yes group the record gate and the create gate", async () => {
+  const poller = setupPoller({ config: combinedPollerConfig(), now: "2026-11-20T07:00:00.000Z" });
+  const recent = poller.minutesAgo(30);
+  const add = (type, id, props) => poller.hubspot.add(type, id, { ...props, hs_lastmodifieddate: recent });
+  // Linked: queued only with the record gate and the updates box.
+  add(CASE_TYPE, "1", { client_id_number: "5001", [GATE]: "true", [UPDATES]: "true" });
+  add(CASE_TYPE, "2", { client_id_number: "5002", [GATE]: "false", [UPDATES]: "true" });
+  add(CASE_TYPE, "3", { client_id_number: "5003", [UPDATES]: "true" });
+  add(CASE_TYPE, "4", { client_id_number: "5004", [GATE]: "no", [UPDATES]: "true" });
+  add(CASE_TYPE, "5", { client_id_number: "5005", [GATE]: "true", [CREATES]: "true" });
+  // Entered = Yes and unlinked: queued only with the record gate and the creates box.
+  add(CASE_TYPE, "6", { enter_in_central_reach: "Yes", [GATE]: "true", [CREATES]: "true" });
+  add(CASE_TYPE, "7", { enter_in_central_reach: "Yes", [GATE]: "", [CREATES]: "true" });
+  add(CASE_TYPE, "8", { enter_in_central_reach: "Yes", [GATE]: "true", [UPDATES]: "true" });
+  add(SANDBOX_BT_TYPE, "11", { employee_id: "7001", [GATE]: "true", [UPDATES]: "true" });
+  add(SANDBOX_BT_TYPE, "12", { employee_id: "7002", [UPDATES]: "true" });
+  add(SANDBOX_BT_TYPE, "13", { entered_in_centralreach: "Yes", [GATE]: "false", [CREATES]: "true" });
+  add(SANDBOX_BCBA_TYPE, "21", { entered_in_centralreach: "Yes", [GATE]: "true", [CREATES]: "true" });
+  add(SANDBOX_BCBA_TYPE, "22", { entered_in_centralreach: "Yes", [CREATES]: "true" });
+  add(SANDBOX_BCBA_TYPE, "23", { employee_id: "7003", [GATE]: "true", [CREATES]: "true" });
+
+  await poller.run();
+
+  assert.equal(poller.hubspot.requests.length, 3);
+  for (const request of poller.hubspot.requests) {
+    assert.deepEqual(filtersOf(request, GATE), [gateFilter(GATE), gateFilter(GATE)]);
+    assert.deepEqual(filtersOf(request, UPDATES), [gateFilter(UPDATES), undefined]);
+    assert.deepEqual(filtersOf(request, CREATES), [undefined, gateFilter(CREATES)]);
+  }
+  assert.deepEqual(dealIds(poller.queues.client).sort(), ["1", "6"]);
+  assert.deepEqual(recordIds(poller.queues.employee).sort(), ["11", "21"]);
+});
+
+test("[BR4][3.5] with the record gate and two path settings, the sweep's linked branch carries the record gate and the update gate, and its waiting branch the record gate and the create gate", async () => {
+  const eight = "2026-11-20T08:00:00.000Z";
+  const old = "2026-11-10T12:00:00.000Z";
+  const poller = setupPoller({ config: combinedPollerConfig(), now: eight });
+  const add = (type, id, props) => poller.hubspot.add(type, id, { ...props, hs_lastmodifieddate: old });
+  add(CASE_TYPE, "1", { client_id_number: "5001", [GATE]: "true", [UPDATES]: "true" });
+  add(CASE_TYPE, "2", { client_id_number: "5002", [GATE]: "false", [UPDATES]: "true" });
+  add(CASE_TYPE, "3", { client_id_number: "5003", [GATE]: "true", [CREATES]: "true" });
+  add(SANDBOX_BT_TYPE, "11", { last_sync_status: "waiting", [GATE]: "true", [CREATES]: "true" });
+  add(SANDBOX_BT_TYPE, "12", { last_sync_status: "waiting", [CREATES]: "true" });
+  add(SANDBOX_BT_TYPE, "13", { last_sync_status: "waiting", [GATE]: "true", [UPDATES]: "true" });
+
+  await poller.run();
+
+  const sweepRequests = poller.hubspot.requests.filter(
+    (request) => request.body.sorts[0].propertyName === "hs_object_id"
+  );
+  assert.equal(sweepRequests.length, 3);
+  for (const request of sweepRequests) {
+    assert.deepEqual(filtersOf(request, GATE), [gateFilter(GATE), gateFilter(GATE)]);
+    assert.deepEqual(filtersOf(request, UPDATES), [gateFilter(UPDATES), undefined]);
+    assert.deepEqual(filtersOf(request, CREATES), [undefined, gateFilter(CREATES)]);
+  }
+  const swept = (messages) => messages.filter((message) => message.body.source === "dailySweep");
+  assert.deepEqual(dealIds(swept(poller.queues.client)), ["1"]);
+  assert.deepEqual(recordIds(swept(poller.queues.employee)), ["11"]);
+});
+
+// HubSpot allows six filters in a group. The Case block search (records that share one
+// millisecond, paged by record ID) is the longest group; with the record gate and a path gate it
+// must still fit, or HubSpot refuses the search and the Case poll stops at that block every run.
+test("[BR4][3.4] with the record gate and two path settings, a block of Cases with one timestamp is paged within HubSpot's six filters a group and queues only records with both gates true", async () => {
+  const poller = setupPoller({ config: combinedPollerConfig(), now: "2026-11-20T06:00:00.000Z" });
+  const blockTime = poller.minutesAgo(30);
+  for (let id = 1; id <= 250; id += 1) {
+    poller.hubspot.add(CASE_TYPE, id, {
+      client_id_number: String(9000 + id),
+      [GATE]: id % 10 === 0 ? "false" : "true",
+      [UPDATES]: "true",
+      hs_lastmodifieddate: blockTime
+    });
+  }
+
+  const summary = await poller.run();
+
+  assert.equal(summary.errorsCount, 0);
+  const blockSearches = poller.hubspot
+    .requestsFor(CASE_TYPE)
+    .filter((request) => request.body.sorts[0].propertyName === "hs_object_id");
+  assert.ok(blockSearches.length >= 2);
+  // The stage exclusion stays wherever it fits: the main search and the first block page.
+  for (const request of [poller.hubspot.requestsFor(CASE_TYPE)[0], blockSearches[0]]) {
+    assert.equal(filtersOf(request, "dealstage").every((filter) => filter?.operator === "NOT_IN"), true);
+  }
+  for (const request of poller.hubspot.requestsFor(CASE_TYPE)) {
+    for (const group of request.body.filterGroups) {
+      assert.ok(group.filters.length <= 6, JSON.stringify(group.filters));
+    }
+    assert.deepEqual(filtersOf(request, GATE), [gateFilter(GATE), gateFilter(GATE)]);
+  }
+  const expected = Array.from({ length: 250 }, (_, index) => String(index + 1)).filter(
+    (id) => Number(id) % 10 !== 0
+  );
+  assert.deepEqual([...new Set(dealIds(poller.queues.client))].sort(), expected.sort());
 });

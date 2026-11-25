@@ -12,6 +12,7 @@
 // The CR ID property (client_id_number) and the record gate property come from configuration;
 // the workflow adds them to the request.
 import { CASE_ENTRY_PROPERTY, TEST_RECORD_PROPERTY } from "../../constants/hubspot.mjs";
+import { CARE_COORDINATOR_PROPERTIES } from "../shared/careCoordinator.mjs";
 
 export const CASE_PROPERTIES = Object.freeze({
   mapped: Object.freeze([
@@ -83,13 +84,12 @@ export const CASE_PROPERTIES = Object.freeze({
     "referral_source",
     // C36 (item 2): the "Referral - Other" text, sent when referral_source is Other.
     "referral_other",
-    // C10 (item 6, replaces decision 39): the Care Coordinator, from the fields Zeke's coordinator
-    // workflow keeps on the Case. care_coordinator_name is no longer read.
-    // These four properties exist in the sandbox only (production 404, 2026-11-24): a portal
-    // without them ends every Case run HUBSPOT_PROPERTY_MISSING (row 4.18).
-    "care_coordinator_first_name",
-    "care_coordinator_last_name",
-    "coordinator_export_status"
+    // C10 (item 6, replaces decision 39; O-17): the Care Coordinator, from the fields Zeke's
+    // coordinator workflow keeps on the Case: first name, last name, email (sent since 11.a,
+    // 2026-11-25) and coordinator_export_status. care_coordinator_name is no longer read.
+    // These properties exist in the sandbox only (production 404, 2026-11-24): a portal without
+    // them ends every Case run HUBSPOT_PROPERTY_MISSING (row 4.18).
+    ...CARE_COORDINATOR_PROPERTIES
   ]),
   // dealstage, and the guide's five staffing-name signals: a HubSpot workflow cannot trigger on an
   // association, so it triggers on the name property that changes with it. No mapper reads them

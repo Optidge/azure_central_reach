@@ -56,6 +56,7 @@ const DISTINCT = Object.freeze({
   policyHolder: "Wilhelmina Fitzgibbon",
   careCoordinatorFirst: "Ottoline",
   careCoordinatorLast: "Brightwater",
+  careCoordinatorEmail: "ottoline.bright@coordinator.example",
   staff: "Peregrine Thistlewood"
 });
 
@@ -70,6 +71,7 @@ function distinctiveCase(properties = {}) {
     policy_holder_name: DISTINCT.policyHolder,
     care_coordinator_first_name: DISTINCT.careCoordinatorFirst,
     care_coordinator_last_name: DISTINCT.careCoordinatorLast,
+    care_coordinator_email: DISTINCT.careCoordinatorEmail,
     coordinator_export_status: "ready",
     severity_level_clinical: "Level 2",
     ...properties
@@ -186,7 +188,7 @@ test("[BR15][3.20] the line carries only names, IDs, codes and counts: no field 
   // The values did go to CentralReach and the staff and Care Coordinator names were read, so the
   // test means something: they are in the requests, and not in the line.
   const requests = JSON.stringify(cr.calls);
-  for (const value of [DISTINCT.firstName, DISTINCT.email, DISTINCT.street, DISTINCT.staff, "Ottoline Brightwater"]) {
+  for (const value of [DISTINCT.firstName, DISTINCT.email, DISTINCT.street, DISTINCT.staff, DISTINCT.careCoordinatorEmail]) {
     assert.equal(requests.includes(value), true, value);
   }
   const line = JSON.stringify(onlySummary(logs).meta);

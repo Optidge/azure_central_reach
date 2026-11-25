@@ -42,6 +42,14 @@
 //       CHANGED / ABSENT, then UNMAPPED_KEPT = yes | no (exit 1 on no). Run `save` after Zeke sets
 //       the markers on the CR screen and before the push; `compare` after the run. Both print the
 //       "SSN shape" line (row UW-3): absent / blank / sendable / NOT SENDABLE, never the value.
+//
+//   --fresh-label-read [--run]   (row R6-1; build chat 3 item 4, R-6). One label GET on test employee
+//       5338681 (no HubSpot record, so no integration run touches it) in the integration's combined
+//       form: Cache-Control: no-cache, Pragma: no-cache AND ?_t=<ms> on the same request
+//       (src/lib/centralReachClient.mjs readContactLabelIds). Dry run unless --run (2 CR calls: the
+//       token and the GET). Prints PASS when the answer is HTTP 200 with a readable label list. Run
+//       only when label testing resumes (paused on Zeke's word, 2026-11-25). --round / --record are
+//       not needed.
 // Exit code 1 when any row FAILs or the run stops.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -61,11 +69,12 @@ const recordName = argValue("--record");
 const crIdOverride = argValue("--cr-id");
 const step = argValue("--step") || "create";
 const SHOW_KEYS = args.includes("--keys");
-if (!Number.isInteger(round) || round < 1 || round > 99 || !["bt1", "bcba", "case"].includes(recordName)) {
+const FRESH_LABEL_READ = args.includes("--fresh-label-read");
+if (!FRESH_LABEL_READ && (!Number.isInteger(round) || round < 1 || round > 99 || !["bt1", "bcba", "case"].includes(recordName))) {
   console.error("Give --round N (1 to 99) and --record bt1|bcba|case.");
   process.exit(1);
 }
-if (!["create", "u1"].includes(step) || (step === "u1" && ![1, 2, 3].includes(round))) {
+if (!FRESH_LABEL_READ && (!["create", "u1"].includes(step) || (step === "u1" && ![1, 2, 3].includes(round)))) {
   console.error("--step is create, or u1 with --round 1, 2 or 3.");
   process.exit(1);
 }
@@ -179,16 +188,49 @@ function caseServiceAddress() {
     `${N}01 Azure Test St Apt ${N}A\n${S.city}`); // R3: state and ZIP blank at create (U2-6)
 }
 
-// C10 (build package item 6): 138851 = care_coordinator_first_name + care_coordinator_last_name when
-// coordinator_export_status is `ready` (src/mappings/client/buildClientMetadata.mjs careCoordinatorValue);
-// any other status leaves 138851 out (a create then holds nothing). The round file's read-back
-// (create-test-records.mjs) keeps only the status and whether the names are the test names.
-function careCoordinatorRow(roundFile) {
-  const c = roundFile?.report?.deal?.coordinator;
+// C10 (build package item 6; O-17 11.a, 11.b): 138851 = first name, last name and email, one per line
+// ("\n", a blank part skipped), when coordinator_export_status is `ready`
+// (src/mappings/shared/careCoordinator.mjs careCoordinatorValue); any other status leaves 138851 out (a
+// create then holds nothing). The round file's read-back (create-test-records.mjs) keeps the status,
+// whether the names are the test names, and a SHA-256 hash of the test coordinator's email (no address
+// in the repo, Zeke 2026-11-25). Compared byte for byte ("coordinator"): the line breaks must survive
+// in CentralReach (open point CC-1); a line holding "@" is hashed on both sides before the compare and
+// before printing, so the address is never printed.
+// B11 (spec A4.9): the same rule for the BCBA, Employee Meta 140495, from the BCBA read-back.
+function careCoordinatorRow(roundFile, record = "deal", fieldId = 138851) {
+  const c = roundFile?.report?.[record]?.coordinator;
   if (!c) return skip("the round file has no coordinator read-back: re-run create-test-records.mjs (plan) and compare by hand");
-  if (c.status === "ready" && c.testNames) return [meta(138851, "Zeke Swanson")];
+  if (c.status === "ready" && c.testNames && !c.emailHash) return skip("status ready but the read-back has no coordinator email hash (older round file): re-run the read-back or compare by hand");
+  if (c.status === "ready" && c.testNames) return [meta(fieldId, `Zeke\nSwanson\nsha256:${c.emailHash}`, "coordinator")];
   if (c.status === "ready") return skip("status ready but the names are not Zeke / Swanson in the read-back; compare by hand");
-  return [meta(138851, "")]; // not ready at the read-back: the create sends nothing (run sheet stops before the push)
+  return [meta(fieldId, "")]; // not ready at the read-back: the create sends nothing (run sheet stops before the push)
+}
+
+// BL6 (build chat 3 item 3; guide G08 L691-692; handover item 3): the credential options a BCBA holds
+// → stateless CR labels. Written out here from the guide and the handover, not imported from src, so
+// the check does not prove the code against itself. MCD FFS-NY is BL5's (1107647, its own row).
+const EXPECTED_CREDENTIAL_LABELS = {
+  ny_insurance_labels: { "MCD FFS-NY": null, "Aetna-NY": 1107649, "Cigna-NY": 1107650, "Carelon-NY": 1132654 },
+  co_insurance_labels: { "MCD-CO": 1107651, "Aetna-CO": 1107649, "Cigna-CO": 1107650, "Carelon-CO": 1132654 },
+  nj_insurance_labels: { Aetna: 1107649, Cigna: 1107650, "MCD-NJ": null, "Horizon-NJ": null }
+};
+const CREDENTIAL_GROUP = [1107649, 1107650, 1132654, 1107651];
+
+// The options come from the round file (`credentialOptions`, written by create-test-records.mjs with
+// the options it actually set after its sandbox option check). `removed` = [property, option] taken
+// off by hand in S4 (BL6-U1, BL6-U2): a managed label must then be gone.
+function credentialRow(roundFile, removed = null) {
+  const held = roundFile?.credentialOptions;
+  if (!held) return skip("the round file has no credentialOptions (made before build chat 3): re-run create-test-records.mjs (--refresh at S1) or compare by hand");
+  const differs = (roundFile?.report?.bcba?.differs || []).filter((p) => Object.hasOwn(EXPECTED_CREDENTIAL_LABELS, p));
+  if (differs.length) return skip(`${differs.join(", ")} differs from the script value in the round read-back (a workflow changed it); compare by hand`);
+  const options = Object.entries(held).flatMap(([property, list]) => (list || [])
+    .filter((option) => !(removed && removed[0] === property && removed[1] === option))
+    .map((option) => [property, option]));
+  const unknown = options.filter(([property, option]) => !Object.hasOwn(EXPECTED_CREDENTIAL_LABELS[property] ?? {}, option));
+  if (unknown.length) return skip(`option(s) with no expected label here: ${unknown.map(([p, o]) => `${p} "${o}"`).join(", ")}; compare by hand`);
+  const want = [...new Set(options.map(([property, option]) => EXPECTED_CREDENTIAL_LABELS[property][option]).filter(Boolean))];
+  return [labels(want, CREDENTIAL_GROUP)];
 }
 
 // CL5 funding labels are never sent (G19 L226). On client 5384589 (round 1) Zeke hand-adds Aetna NY
@@ -306,7 +348,7 @@ function bcbaCreate(ids, roundFile, externalId) {
     // Source: the BCBA's own `personal_email` (decision 50), never `email` (B4's value).
     B9: [meta(138069, `zeke+bcba_personal_${N}@optidge.com`, "ci")],
     B10: [labels(pick([1132653], [], [1132653]), [1132653])],
-    B11: skip("open (O-17)"),
+    B11: careCoordinatorRow(roundFile, "bcba", 140495),
     B12: [meta(138703, recordLink(TYPES.bcba, ids.bcba))],
     B13: [meta(134444, "")],
     BL1: [labels([1130668], [1130668])],
@@ -314,7 +356,8 @@ function bcbaCreate(ids, roundFile, externalId) {
     BL3: skip("deferred (Zeke 2026-11-23): no New Mexico label"),
     BL4: [labels(pick([1124245, 1052629], [1124246, 1092164], [1124246, 1124245]), [1124246, 1124245, 1052629, 1092164])],
     BL5: [labels(pick([1107647], [], []), [1107647])],
-    BL6: [labels([], [1107649, 1107650, 1132654, 1107651])],
+    // Build chat 3 item 3: the credential labels are sent (was: none, decision 25).
+    BL6: credentialRow(roundFile),
     BL7: [labels(pick([1103437], [], []), [1103437])],
     BL8: [labels([1052618, 1052643], [1052618, 1052643])],
     // CLB-155, LBL-013: a staffing label is a client label; no employee ever holds one.
@@ -348,6 +391,8 @@ function btCreate(ids, roundFile, externalId) {
     T7: activeCasesRow(roundFile, pick("1", "0", "1")), // automated count: read it again if the Case changed later
     T8: [meta(138703, recordLink(TYPES.bt, ids.bt1))],
     T9: skip("held (Zeke 2026-11-23): confirm the BT/RBT personal email field with Danny and the client (O-51)"),
+    // B11-5 (spec A4.8): a BT/RBT never gets the BCBA Care Coordinator field.
+    "B11-5 (no 140495 on a BT/RBT)": [meta(140495, "")],
     // R3 (2026-11-24): New Jersey only at create; R3-U1 adds New York by hand (R3-7).
     TL1: [labels(pick([1132655], [1107687], [1107686]), [1132655, 1107687, 1107686])],
     TL2: skip("deferred (Zeke 2026-11-23): no Virginia label"),
@@ -364,7 +409,7 @@ function btCreate(ids, roundFile, externalId) {
 // step and paste the line in the round log.
 const later = (what) => skip(`changed again in a later step (${what}); check by hand there`);
 
-function caseU1(ids) {
+function caseU1(ids, roundFile) {
   return {
     C2: [core("FirstName", "Zeke"), core("LastName", "Swanson Azure Test R1 U1")],
     C3: [core("DateOfBirth", "2016-01-16", "date")],
@@ -374,8 +419,9 @@ function caseU1(ids) {
     // X07b-1 (review B): `location_city` -> "New York U1", `postal_code` -> "10011" in S4.
     C8: [core("AddressLine1", "101 Azure Test St U1"), core("City", "New York U1"), core("StateProvince", "NY", "state"),
       core("ZipPostalCode", "10011"), core("PhoneCell", "2125550121", "digits")],
-    // U-49: owner -> 167266469 with no Team Member: missing_match, 138851 not sent, CR keeps it.
-    C10: [meta(138851, "Zeke Swanson")],
+    // U-49: owner -> 167266469 with no Team Member: missing_match, 138851 not sent, CR keeps the S1
+    // value, which is the three-line value of the round read-back (build chat 3 item 2; was "Zeke Swanson").
+    C10: careCoordinatorRow(roundFile),
     C11: later("S5e: RE removed; BR17 relabel"),
     C12: later("S5a-S5d and S6: item 10 roles, typed supplier"),
     C14: later("S5a-S5f: Outgoing BT roles, swap"),
@@ -419,12 +465,16 @@ function bcbaU1(ids, roundFile, externalId) {
     B8: [meta(126216, ""), meta(138112, "AZTNJ001"), meta(138113, "AZTCO001A")], // S2 edit,
     B9: later("S5a: personal_email U1 (old line 16); S8a U2-7a clears it (Meta 138069 \"\")"),
     B10: [labels([], [1132653])],
+    // B11-4 (S4): owner -> 167266469 (no Team Member) -> missing_match: 140495 not sent, CR keeps the
+    // S1 three-line value of the round read-back.
+    B11: careCoordinatorRow(roundFile, "bcba", 140495),
     B12: [meta(138703, recordLink(TYPES.bcba, ids.bcba))],
     BL1: [labels([1130668], [1130668])],
     BL2: [labels([1107686], [1132655, 1107687, 1107686])],
     // In Process licence and assign_states -> Assign NY (U-22): no LBA NY, no BCBA LBA NJ.
     BL4: [labels([], [1124246, 1124245, 1052629, 1092164])],
     BL5: later("U-46: the payor-status workflow sets ny_insurance_labels; check by hand"),
+    BL6: later("U-46 / old line 28 change ny_insurance_labels (Cigna-NY, Carelon-NY are managed too); check by hand"),
     BL7: [labels([], [1103437])],
     BL8: [labels([1052618, 1052643], [1052618, 1052643])]
   };
@@ -498,8 +548,13 @@ function bcbaU1Later(ids, roundFile, externalId) {
     ? { ...base, // R2-23c medicaid_id__co; MIR-1 BCBA Contact address
       B7: [core("addressLine1", "204 Azure BCBA St U1"), core("addressLine2", "Apt 2B"), core("city", "Denver"),
         core("stateProvince", "CO", "state"), core("zipPostalCode", "80203"), core("phoneCell", phoneDigits("04"), "digits")],
-      B8: [meta(126216, "AZTNY002"), meta(138112, "AZTNJ002"), meta(138113, "AZTCO002A")] }
-    : { ...base, B8: [meta(126216, "AZTNY003"), meta(138112, "AZTNJ003A"), meta(138113, "AZTCO003")] }; // R3-13c
+      B8: [meta(126216, "AZTNY002"), meta(138112, "AZTNJ002"), meta(138113, "AZTCO002A")],
+      // BL6-U1 (S4): Carelon-CO removed from co_insurance_labels -> Carelon 1132654 gone (managed).
+      BL6: credentialRow(roundFile, ["co_insurance_labels", "Carelon-CO"]) }
+    : { ...base, B8: [meta(126216, "AZTNY003"), meta(138112, "AZTNJ003A"), meta(138113, "AZTCO003")], // R3-13c
+      // BL6-U2 (S4): NJ `Aetna` removed from nj_insurance_labels -> Aetna 1107649 gone (managed). If the
+      // round file shows Aetna was not set (fallback), S4 adds Horizon-NJ instead: no label either way.
+      BL6: credentialRow(roundFile, ["nj_insurance_labels", "Aetna"]) };
 }
 
 function btU1Later(ids, roundFile, externalId) {
@@ -679,7 +734,11 @@ function readMetadata(data) {
 
 // ---- Comparing ----
 const STATE_CODES = { "new york": "ny", colorado: "co", "new jersey": "nj" };
+// C10 / B11: a line holding "@" (the coordinator email) becomes "sha256:<hash of that exact line>".
+const hashEmailLines = (value) => String(value ?? "").split("\n")
+  .map((line) => (line.includes("@") ? `sha256:${createHash("sha256").update(line).digest("hex")}` : line)).join("\n");
 function normalize(value, kind) {
+  if (kind === "exact" || kind === "coordinator") return String(value ?? ""); // line breaks and spaces kept
   const text = String(value ?? "").trim().replace(/\s+/g, " ");
   if (kind === "ci") return text.toLowerCase();
   // The code sends exactly the 10 digits (decision 46), so a leading 1 in CR is a FAIL.
@@ -704,7 +763,8 @@ const report = (status, id, text) => {
 };
 
 function checkValue(id, label, row, found) {
-  const got = found === null || found === undefined ? "" : String(found);
+  const raw = found === null || found === undefined ? "" : String(found);
+  const got = row.kind === "coordinator" ? hashEmailLines(raw) : raw; // never print the address
   const pass = normalize(got, row.kind) === normalize(row.want, row.kind);
   const note = row.kind === "hours" && EXCLUDED_TOTALS.includes(got.trim()) ? " (an excluded total)" : "";
   report(pass ? "PASS" : "FAIL", id, `${label} expected "${row.want}" got "${got}"${note}`);
@@ -720,8 +780,42 @@ function checkLabels(id, held, row) {
   report(missing.length || unexpected.length ? "FAIL" : "PASS", id, text);
 }
 
+// ---- --fresh-label-read (row R6-1) ----
+// The integration's fresh label read (src/lib/centralReachClient.mjs FRESH_LABEL_READ_HEADERS and
+// readContactLabelIds: both headers and a throwaway `_t` on ONE request). Copied, not imported: that
+// module is not exported this constant. Only test employee 5338681.
+const FRESH_READ_CONTACT = "5338681";
+const FRESH_LABEL_READ_HEADERS = { "Cache-Control": "no-cache", Pragma: "no-cache" };
+async function freshLabelRead() {
+  if (!args.includes("--run")) {
+    console.log(`DRY RUN (R6-1): would request a token, then ONE GET /contacts/${FRESH_READ_CONTACT}/labels?_t=<ms> ` +
+      "with Cache-Control: no-cache and Pragma: no-cache (2 CentralReach calls, read-only). Nothing was sent. " +
+      "Add --run only when label testing resumes (Zeke's word).");
+    return;
+  }
+  SETTINGS = loadSettings();
+  token = await getToken();
+  const url = `${SETTINGS.CR_BASE_URL.replace(/\/+$/, "")}/contacts/${FRESH_READ_CONTACT}/labels?_t=${Date.now()}`;
+  const res = await guardedFetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, "x-api-key": SETTINGS.CR_API_KEY, Accept: "application/json",
+      ...FRESH_LABEL_READ_HEADERS }
+  });
+  const body = res.ok ? await res.json().catch(() => null) : null;
+  const held = readLabelIds(body);
+  const pass = res.status === 200 && held !== null;
+  report(pass ? "PASS" : "FAIL", "R6-1", `combined fresh label read (headers + _t) on test employee ${FRESH_READ_CONTACT}: ` +
+    `HTTP ${res.status}, ${held ? `labels [${held.join(", ")}]` : "answer is not a readable label list"}`);
+  console.log("The screen-edit case of R-6 stays unproven (label testing paused on Zeke's word).");
+  if (!pass) process.exitCode = 1;
+}
+
 // ---- Main ----
 async function main() {
+  if (FRESH_LABEL_READ) {
+    await freshLabelRead();
+    return;
+  }
   const roundPath = resolve(`docs/workstreams/architecture-update/sandbox-rounds/round-${N}.json`);
   const roundFile = JSON.parse(readFileSync(roundPath, "utf8"));
   const ids = roundFile.ids || {};

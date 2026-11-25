@@ -32,6 +32,12 @@ export const CENTRAL_REACH_EMPLOYEE_LABELS = {
   BCBA_LBA_NJ: 1124245,
   GRAD_STUDENT_LBA_NY: 1092164,
   NY_MEDICAID: 1107647,
+  // BL6: the stateless BCBA credential labels of the group "New Employee On-boarding" (Zeke
+  // 2026-11-25). CO Medicaid sits under Billing Hold Medicaid affiliation, like NY Medicaid.
+  AETNA: 1107649,
+  CIGNA: 1107650,
+  CARELON: 1132654,
+  CO_MEDICAID: 1107651,
   SALARIED: 1132653,
   BILLING_HOLD_MEDICAID_AFFILIATION: 1103437
 };
@@ -46,7 +52,10 @@ export const CENTRAL_REACH_EMPLOYEE_METADATA_FIELDS = {
   BCBA_MEDICAID_ID_NJ: 138112,
   BCBA_MEDICAID_ID_CO: 138113,
   // Field 134444 (Credentialed with Medicaid NY) is excluded by the guide and is not sent (B13).
-  HUBSPOT_LINK_TO_BCBA_RECORD: 138703
+  HUBSPOT_LINK_TO_BCBA_RECORD: 138703,
+  // B11 (O-17): "Care Coordinator", type `input`, BCBA only (Zeke's read, 2026-11-25). The same
+  // three-line value as the Client field 138851 (src/mappings/shared/careCoordinator.mjs).
+  BCBA_CARE_COORDINATOR: 140495
 };
 
 export const CENTRAL_REACH_CLIENT_LABELS = {
@@ -85,8 +94,8 @@ export const CENTRAL_REACH_REMOVE_ONLY_LABEL_IDS = Object.freeze([
 // BUILD-PLAN section 9, and the New Mexico and Virginia Employee constants. The label sender
 // (row L.1) posts no ID the integration adds unless it is in this list.
 // The list is written out on purpose: adding a constant above does not make it sendable.
-// Not in the list: the parent label Staffing Status, the remove-only IDs, and the BCBA credential
-// labels the guide does not document (BL6: Aetna, Cigna, Carelon, CO Medicaid).
+// Not in the list: the parent label Staffing Status and the remove-only IDs. The Case funding-source
+// labels ([G07C], group "Funding Source") are not constants here and are never sent.
 export const CENTRAL_REACH_SENDABLE_LABEL_IDS = Object.freeze([
   // Client, base (CL6)
   CENTRAL_REACH_CLIENT_LABELS.ALL_CLIENTS,
@@ -111,13 +120,17 @@ export const CENTRAL_REACH_SENDABLE_LABEL_IDS = Object.freeze([
   // Employee, New Mexico and Virginia (BL3, TL2): sendable, but no mapping reads them yet
   CENTRAL_REACH_EMPLOYEE_LABELS.NM_EMPLOYEE,
   CENTRAL_REACH_EMPLOYEE_LABELS.VA_EMPLOYEE,
-  // BCBA, managed: assignment and licensure (BL4), NY Medicaid (BL5), Salaried (B10, row 5.7),
-  // Billing Hold (BL7)
+  // BCBA, managed: assignment and licensure (BL4), NY Medicaid (BL5), the other credentials (BL6),
+  // Salaried (B10, row 5.7), Billing Hold (BL7)
   CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_COLORADO,
   CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NJ,
   CENTRAL_REACH_EMPLOYEE_LABELS.BCBA_LBA_NY,
   CENTRAL_REACH_EMPLOYEE_LABELS.GRAD_STUDENT_LBA_NY,
   CENTRAL_REACH_EMPLOYEE_LABELS.NY_MEDICAID,
+  CENTRAL_REACH_EMPLOYEE_LABELS.AETNA,
+  CENTRAL_REACH_EMPLOYEE_LABELS.CIGNA,
+  CENTRAL_REACH_EMPLOYEE_LABELS.CARELON,
+  CENTRAL_REACH_EMPLOYEE_LABELS.CO_MEDICAID,
   CENTRAL_REACH_EMPLOYEE_LABELS.SALARIED,
   CENTRAL_REACH_EMPLOYEE_LABELS.BILLING_HOLD_MEDICAID_AFFILIATION,
   // BT/RBT, managed: role by state (TL3)

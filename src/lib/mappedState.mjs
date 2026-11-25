@@ -1,9 +1,13 @@
 import { sha256 } from "./hash.mjs";
 
-// Saved hashes count only for the mapping version they were made with (row 3.7). Change this
-// value whenever the compared state changes shape or a mapper changes what it sends: every field
-// is then sent once. Stage 3 changed the employee state (built from HubSpot data only). Stage 7
-// is the build package of 2026-11-23: one change for the whole deploy.
+// Saved hashes count only for the mapping version they were made with (row 3.7). Changing this
+// value sends every field of every linked record once (within a day, by the daily sweep).
+// Package item 22, the rule: change it only when the request format or a write rule changes
+// outside the mapped values (for example metadataPutBody, or a clear or send-back rule), or when
+// CentralReach is known to hold wrong data. A mapper-only change needs no new value: a changed
+// output changes its field hash, and a new field ID is a new key, so only those are sent.
+// Stage 3 changed the employee state (built from HubSpot data only). Stage 7 is the build
+// package of 2026-11-23: one change for the whole deploy.
 export const MAPPING_VERSION = "stage7-2026-11-23";
 
 // Row 3.9: the queue message sources that are the backup path, not a webhook. intakePoller and

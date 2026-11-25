@@ -616,11 +616,12 @@ test("[C12][4.15] with no BCBA in a supervising role, Supervising BCBA is the ty
 const READY_COORDINATOR = Object.freeze({
   coordinator_export_status: "ready",
   care_coordinator_first_name: " Casey ",
-  care_coordinator_last_name: "Jordan "
+  care_coordinator_last_name: "Jordan ",
+  care_coordinator_email: " casey.jordan@example.com"
 });
 
-test("[C10][4.16] Care Coordinator is \"<first> <last>\" in field 138851 when the status is ready; care_coordinator_name and hubspot_owner_id are not read", () => {
-  assert.equal(meta(READY_COORDINATOR)[138851], "Casey Jordan");
+test("[C10][4.16] Care Coordinator is \"<first>\\n<last>\\n<email>\" in field 138851 when the status is ready; care_coordinator_name and hubspot_owner_id are not read", () => {
+  assert.equal(meta(READY_COORDINATOR)[138851], "Casey\nJordan\ncasey.jordan@example.com");
   assert.equal(meta({ care_coordinator_name: "Riley Chen", hubspot_owner_id: "77" })[138851], null);
 });
 
@@ -824,7 +825,7 @@ test("[BR16][4.16] omitFieldIds null or undefined is an empty list, not a crash"
       { omitFieldIds }
     );
     assert.equal(values[126222], "Pediatrician");
-    assert.equal(values[138851], "Casey Jordan");
+    assert.equal(values[138851], "Casey\nJordan\ncasey.jordan@example.com");
   }
 });
 

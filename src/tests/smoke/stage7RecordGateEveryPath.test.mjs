@@ -45,6 +45,9 @@ const TWO_GATES = Object.freeze({
   createGateProperty: CREATES,
   updateGateProperty: UPDATES
 });
+// Zeke 2026-11-25: the record gate next to the two path settings. A record needs the record gate
+// AND its own path's box.
+const COMBINED = Object.freeze({ ...TWO_GATES, recordGateProperty: GATE });
 
 // processClientQueue.mjs ALLOWED_SOURCES that a sender uses today, and the employee senders'
 // sources (the webhook, the employee poller and the daily sweep).
@@ -52,6 +55,8 @@ const CLIENT_SOURCES = ["hubspotWorkflow", "intakePoller", "dailySweep", CONTACT
 const EMPLOYEE_SOURCES = ["hubspotWorkflow", "employeePoller", "dailySweep"];
 const ATTEMPTS = [0, 1, MAX_RETRIES];
 const GATE_VALUES = ["false", null];
+// A record gate that is not true: false, "no", blank or not set.
+const RECORD_GATE_CLOSED = ["false", "no", "", null];
 
 const queueContext = () => ({
   functionName: "item18",
@@ -114,10 +119,10 @@ async function throughQueue(worker, record, { sync = ONE_GATE, body }) {
 }
 
 // Every source and attempt, for a linked and an unlinked record whose boxes put it in no segment.
-async function assertSkippedEverywhere(worker, sync, closed) {
+async function assertSkippedEverywhere(worker, sync, closed, gateValues = GATE_VALUES) {
   for (const source of worker.sources) {
     for (const attempt of ATTEMPTS) {
-      for (const gate of GATE_VALUES) {
+      for (const gate of gateValues) {
         for (const linked of [true, false]) {
           const label = JSON.stringify({ source, attempt, gate, linked });
           const { cr } = setup();
@@ -153,13 +158,64 @@ for (const worker of WORKERS) {
       [GATE]: "true"
     }));
   });
+
+  // Both boxes ticked, so a linked record is in the updates segment and an unlinked one in the
+  // creates segment; only the record gate is not true.
+  test(`[BR4][3.12] ${worker.kind} worker, record gate with two path settings, both boxes ticked and the record gate false, "no", blank or not set: every source and attempt skips a linked and an unlinked record, with no CentralReach call, no HubSpot write and no retry`, async () => {
+    await assertSkippedEverywhere(
+      worker,
+      COMBINED,
+      (gate) => ({ [CREATES]: "true", [UPDATES]: "true", [GATE]: gate }),
+      RECORD_GATE_CLOSED
+    );
+  });
+
+  // The record gate true: only the box of the record's own path lets it on.
+  test(`[BR4][3.12] ${worker.kind} worker, record gate with two path settings and the record gate true: a linked record goes on only with the updates box and an unlinked one only with the creates box; the other path's box alone or no box is a record_gate skip with no CentralReach call`, async () => {
+    for (const linked of [true, false]) {
+      const ownBox = linked ? UPDATES : CREATES;
+      const otherBox = linked ? CREATES : UPDATES;
+      for (const [boxes, eligible] of [
+        [{ [ownBox]: "true" }, true],
+        [{ [ownBox]: "true", [otherBox]: "true" }, true],
+        [{ [otherBox]: "true" }, false],
+        [{ [ownBox]: "false", [otherBox]: "true" }, false],
+        [{}, false]
+      ]) {
+        const label = JSON.stringify({ linked, boxes });
+        const { cr } = setup();
+        const props = { [CREATES]: null, [UPDATES]: null, ...boxes, [GATE]: "true" };
+        const record = linked ? worker.linked(cr, props) : worker.unlinked(props);
+        const body = { ...worker.message, portalId: SANDBOX_PORTAL, source: "hubspotWorkflow", attempt: 0 };
+
+        const { runs } = await throughQueue(worker, record, { sync: COMBINED, body });
+
+        assert.equal(runs.length, 1, label);
+        if (eligible) {
+          // Past the gate. (The unlinked BCBA fixture then ends as a mapping error before any
+          // CentralReach call, so only the outcome is checked here.)
+          assert.notEqual(runs[0].result.status, "skipped", label);
+        } else {
+          assert.equal(runs[0].result.status, "skipped", label);
+          assert.equal(runs[0].result.reason, "record_gate", label);
+          assert.deepEqual(cr.calls, [], label);
+          assert.deepEqual(record.writes, [], label);
+        }
+      }
+    }
+  });
 }
 
 // The fan-out queues every linked Case and leaves the gate to the Case worker
 // (contactFanOutWorkflow.mjs, by design).
 for (const [name, sync, closedGate] of [
   ["the sandbox record gate", ONE_GATE, { [GATE]: "false" }],
-  ["two gates", TWO_GATES, { [CREATES]: "false", [UPDATES]: "false" }]
+  ["two gates", TWO_GATES, { [CREATES]: "false", [UPDATES]: "false" }],
+  [
+    "the record gate and two path settings (both boxes ticked)",
+    COMBINED,
+    { [CREATES]: "true", [UPDATES]: "true", [GATE]: "false" }
+  ]
 ]) {
   test(`[BR4] with ${name}, the Contact fan-out queues a Case whose gate is false and the Case worker then skips it with no CentralReach call`, async () => {
     const { cr } = setup();
@@ -245,6 +301,14 @@ for (const [worker, failRoute] of [
       sync: TWO_GATES,
       open: { [CREATES]: null, [UPDATES]: "true", [GATE]: "true" },
       close: { [UPDATES]: "false" }
+    });
+  });
+
+  test(`[BR4][3.12] ${worker.kind}: with the record gate and two path settings, a record gate that turns false between a failed run and its scheduled retry (updates box still ticked): the retry is skipped, with no CentralReach call and no HubSpot write`, async () => {
+    await assertRetrySkipped(worker, failRoute, {
+      sync: COMBINED,
+      open: { [CREATES]: null, [UPDATES]: "true", [GATE]: "true" },
+      close: { [GATE]: "false" }
     });
   });
 }

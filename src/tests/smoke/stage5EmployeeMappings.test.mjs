@@ -43,8 +43,12 @@ const RBT_NJ = 1132651;
 const RBT_CO = 1107692;
 const ROLE_LABELS = [BT_NY, BT_NJ, BT_CO, RBT_NY, RBT_NJ, RBT_CO];
 const STATE_LABELS = [CO_EMPLOYEE, NJ_EMPLOYEE, NY_EMPLOYEE];
-// BL6: recorded in the guide, not documented, not built (decision 25).
-const BL6_NOT_BUILT = [1107649, 1107650, 1132654, 1107651];
+// BL6 (Zeke 2026-11-25): the stateless credential labels of the group "New Employee On-boarding".
+const AETNA = 1107649;
+const CIGNA = 1107650;
+const CARELON = 1132654;
+const CO_MEDICAID = 1107651;
+const CREDENTIAL_LABELS = [NY_MEDICAID, AETNA, CIGNA, CARELON, CO_MEDICAID];
 
 const byNumber = (values) => [...values].sort((left, right) => left - right);
 
@@ -55,7 +59,8 @@ function map(employeeType, properties) {
     record: { id: "9001", properties: { hs_object_id: "9001", ...properties } }
   });
 }
-const bcba = (properties) => map("bcba", properties);
+// B11: a BCBA with no Care Coordinator owner, so 140495 is a blank and raises no warning.
+const bcba = (properties) => map("bcba", { coordinator_export_status: "no_owner", ...properties });
 const bt = (properties) => map("bt_rbt", properties);
 
 // --- 5.1, B6: BCBA gender ---
@@ -232,13 +237,125 @@ test("[BL5][5.6] NY Medicaid is managed and is not required without MCD FFS-NY",
   assert.equal(mapped.managedLabelIds.includes(NY_MEDICAID), true);
 });
 
-test("[BL6][5.6] the other credential options send nothing: Aetna, Cigna, Carelon and CO Medicaid are never required or managed", () => {
+// The option stored values are the 2026-11-25 option reads of both portals
+// (label-group-and-1pm-verification-2026-11-25.md). NJ Aetna and Cigna exist in production only.
+const CREDENTIAL_OPTION_TABLE = [
+  ["ny_insurance_labels", "MCD FFS-NY", NY_MEDICAID],
+  ["ny_insurance_labels", "Aetna-NY", AETNA],
+  ["ny_insurance_labels", "Cigna-NY", CIGNA],
+  ["ny_insurance_labels", "Carelon-NY", CARELON],
+  ["co_insurance_labels", "MCD-CO", CO_MEDICAID],
+  ["co_insurance_labels", "Aetna-CO", AETNA],
+  ["co_insurance_labels", "Cigna-CO", CIGNA],
+  ["co_insurance_labels", "Carelon-CO", CARELON],
+  ["nj_insurance_labels", "Aetna", AETNA],
+  ["nj_insurance_labels", "Cigna", CIGNA],
+  ["nj_insurance_labels", "MCD-NJ", null],
+  ["nj_insurance_labels", "Horizon-NJ", null]
+];
+
+const credentialLabelsOf = (mapped) =>
+  byNumber(mapped.requiredLabelIds.filter((id) => CREDENTIAL_LABELS.includes(id)));
+
+for (const [property, option, labelId] of CREDENTIAL_OPTION_TABLE) {
+  test(`[BL6][5.6] ${property} option ${option} requires ${labelId ?? "no credential label"}, with no warning`, () => {
+    const mapped = bcba({ [property]: option });
+    assert.deepEqual(credentialLabelsOf(mapped), labelId ? [labelId] : []);
+    assert.deepEqual(mapped.warnings, []);
+  });
+}
+
+test("[BL6][5.6] the same payor ticked in two or three states requires its label once", () => {
+  const mapped = bcba({
+    ny_insurance_labels: "Aetna-NY;Cigna-NY;Carelon-NY",
+    co_insurance_labels: "Aetna-CO;Cigna-CO;Carelon-CO",
+    nj_insurance_labels: "Aetna;Cigna"
+  });
+  assert.deepEqual(credentialLabelsOf(mapped), byNumber([AETNA, CIGNA, CARELON]));
+  assert.equal(new Set(mapped.requiredLabelIds).size, mapped.requiredLabelIds.length);
+});
+
+test("[BL6][5.6] every option ticked requires the five credential labels once; MCD-NJ and Horizon-NJ add nothing", () => {
   const mapped = bcba({
     ny_insurance_labels: "MCD FFS-NY;Aetna-NY;Cigna-NY;Carelon-NY",
     co_insurance_labels: "MCD-CO;Aetna-CO;Cigna-CO;Carelon-CO",
-    nj_insurance_labels: "MCD-NJ;Horizon-NJ"
+    nj_insurance_labels: "MCD-NJ;Horizon-NJ;Aetna;Cigna"
   });
-  for (const id of BL6_NOT_BUILT) {
+  assert.deepEqual(credentialLabelsOf(mapped), byNumber(CREDENTIAL_LABELS));
+  assert.equal(new Set(mapped.requiredLabelIds).size, mapped.requiredLabelIds.length);
+  assert.deepEqual(mapped.warnings, []);
+});
+
+test("[BL6][5.6] the five credential labels are managed, so an option unticked in every state removes its label", () => {
+  const before = bcba({ ny_insurance_labels: "Aetna-NY", co_insurance_labels: "Aetna-CO;MCD-CO" });
+  assert.deepEqual(credentialLabelsOf(before), byNumber([AETNA, CO_MEDICAID]));
+  // Aetna unticked in NY only: still required. Then unticked in CO too: no longer required.
+  const nyOff = bcba({ ny_insurance_labels: "", co_insurance_labels: "Aetna-CO;MCD-CO" });
+  assert.deepEqual(credentialLabelsOf(nyOff), byNumber([AETNA, CO_MEDICAID]));
+  const allOff = bcba({ ny_insurance_labels: "", co_insurance_labels: "", nj_insurance_labels: "" });
+  assert.deepEqual(credentialLabelsOf(allOff), []);
+  for (const id of CREDENTIAL_LABELS) {
+    assert.equal(allOff.managedLabelIds.includes(id), true, `${id} is managed`);
+  }
+});
+
+test("[BL6][B13][5.6] credentialed_insurances__ny alone requires no credential label", () => {
+  // Real NY option values too, so a mapping that read this property would be caught.
+  for (const value of ["Aetna", "Cigna", "Medicaid", "Aetna;Cigna;Medicaid", "Aetna-NY", "MCD FFS-NY;Aetna-NY;Cigna-NY;Carelon-NY"]) {
+    const mapped = bcba({
+      credentialed_insurances__ny: value,
+      ny_insurance_labels: "",
+      co_insurance_labels: "",
+      nj_insurance_labels: ""
+    });
+    assert.deepEqual(credentialLabelsOf(mapped), []);
+    assert.deepEqual(mapped.warnings, []);
+  }
+});
+
+test("[BL6][BR21][5.6] an option the mapping does not know sends nothing and raises unmapped_credential_option per property, by name only", () => {
+  const mapped = bcba({ ny_insurance_labels: "Other-NY", co_insurance_labels: "Other-CO", nj_insurance_labels: "Other" });
+  assert.deepEqual(credentialLabelsOf(mapped), []);
+  assert.deepEqual(
+    mapped.warnings.map((warning) => warning.code),
+    ["unmapped_credential_option", "unmapped_credential_option", "unmapped_credential_option"]
+  );
+  for (const [index, property] of ["ny_insurance_labels", "co_insurance_labels", "nj_insurance_labels"].entries()) {
+    assert.equal(mapped.warnings[index].message.includes(property), true);
+  }
+  assert.equal(/Other/.test(JSON.stringify(mapped.warnings)), false);
+});
+
+test("[BL6][5.6] an unknown option beside known ones still sends the known labels; one warning names its property", () => {
+  const mapped = bcba({ ny_insurance_labels: "Aetna-NY;Renamed-NY", co_insurance_labels: "MCD-CO" });
+  assert.deepEqual(credentialLabelsOf(mapped), byNumber([AETNA, CO_MEDICAID]));
+  assert.equal(mapped.warnings.length, 1);
+  assert.equal(mapped.warnings[0].code, "unmapped_credential_option");
+  assert.equal(mapped.warnings[0].message.includes("ny_insurance_labels"), true);
+  assert.equal(JSON.stringify(mapped.warnings).includes("Renamed-NY"), false);
+});
+
+test("[BL6][5.6] option matching is exact: a different case sends no label and raises the warning", () => {
+  for (const [property, option] of [
+    ["ny_insurance_labels", "aetna-ny"],
+    ["co_insurance_labels", "MCD-co"],
+    ["nj_insurance_labels", "aetna"]
+  ]) {
+    const mapped = bcba({ [property]: option });
+    assert.deepEqual(credentialLabelsOf(mapped), [], `${option} sends no label`);
+    assert.deepEqual(mapped.warnings.map((warning) => warning.code), ["unmapped_credential_option"]);
+  }
+});
+
+test("[BL6][TL3] no BT/RBT mapping reads the credential properties or requires or manages a credential label", () => {
+  const mapped = bt({
+    location: "New York;New Jersey;Colorado",
+    bt_rbt_type: "BT",
+    ny_insurance_labels: "MCD FFS-NY;Aetna-NY",
+    co_insurance_labels: "MCD-CO",
+    nj_insurance_labels: "Aetna;Cigna"
+  });
+  for (const id of CREDENTIAL_LABELS) {
     assert.equal(mapped.requiredLabelIds.includes(id), false, `${id} is not required`);
     assert.equal(mapped.managedLabelIds.includes(id), false, `${id} is not managed`);
   }
@@ -272,7 +389,7 @@ test("[BL7][5.8] cr_billing_hold_label No or blank does not require Billing Hold
   }
 });
 
-test("[BL2][BL4][BL5][B10][BL7] the BCBA managed list is exactly the state, assignment, licensure, NY Medicaid, Salaried and Billing Hold labels", () => {
+test("[BL2][BL4][BL5][BL6][B10][BL7] the BCBA managed list is exactly the state, assignment, licensure, credential, Salaried and Billing Hold labels", () => {
   assert.deepEqual(
     byNumber(bcba({}).managedLabelIds),
     byNumber([
@@ -281,7 +398,7 @@ test("[BL2][BL4][BL5][B10][BL7] the BCBA managed list is exactly the state, assi
       BCBA_LBA_NJ,
       BCBA_LBA_NY,
       GRAD_STUDENT_LBA_NY,
-      NY_MEDICAID,
+      ...CREDENTIAL_LABELS,
       SALARIED,
       BILLING_HOLD
     ])
@@ -553,7 +670,9 @@ test("[BR19][5.12] every label an employee can require is sendable, base labels 
           location,
           lba_licensure__ny: lba,
           assign_states: "Assign CO;Assign NJ",
-          ny_insurance_labels: "MCD FFS-NY",
+          ny_insurance_labels: "MCD FFS-NY;Aetna-NY;Cigna-NY;Carelon-NY",
+          co_insurance_labels: "MCD-CO;Aetna-CO;Cigna-CO;Carelon-CO",
+          nj_insurance_labels: "MCD-NJ;Horizon-NJ;Aetna;Cigna",
           work_status: "Salaried",
           cr_billing_hold_label: "Yes"
         })

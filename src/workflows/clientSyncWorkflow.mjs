@@ -55,6 +55,7 @@ import {
   FAILURE_KINDS,
   classifyFailure,
   createStillPendingError,
+  isLastAttempt,
   labelPostUnconfirmedError,
   metadataWriteFailedError,
   permanentFailureReason
@@ -113,14 +114,6 @@ const DECIDED_CODES = Object.freeze({
 // A run that is held on purpose and retried: another run holds the record, or a create was sent
 // a short time ago and CentralReach does not show it yet. The summary line says `waiting`.
 const WAITING_CODES = new Set(["SYNC_IN_PROGRESS", "CR_CREATE_PENDING"]);
-
-// Failures createOrUpdateClient throws before it sends any write: the client read before an
-// update (item B21) and the SSN guard, and its lookup by External System ID.
-const CLIENT_FAILED_BEFORE_WRITE = new Set([
-  "CR_CLIENT_READ_FAILED",
-  "CR_LOOKUP_UNKNOWN",
-  "CR_LOOKUP_UNREADABLE"
-]);
 
 function hashPayload(payload) {
   return hashMappedState(payload);
@@ -224,7 +217,9 @@ function statusIsShown(properties, status, reason) {
 }
 
 // lastAttempt is set by the queue worker when this message has used its five retries. attempt is
-// the number of retries the message has already used; it is only logged (row 3.20).
+// the number of retries the message has already used (row 3.20, the summary line); with source it
+// also decides whether a failure is the last attempt (item 20: one retry for a daily sweep
+// message, isLastAttempt in retry.mjs).
 export async function runClientSyncWorkflow(
   { dealId, hsLastModifiedDate, source, context, lastAttempt = false, attempt = null },
   dependencies = {}
@@ -753,21 +748,23 @@ export async function runClientSyncWorkflow(
         onCall
       });
     } catch (error) {
+      // SG-1: createOrUpdateClient marks every error it throws before any write was sent (the
+      // lookup inside it, the client read of item B21 and the SSN guard), whatever the error.
+      const nothingWritten = error?.crWriteNotSent === true;
       // Nothing is pending when no create can have reached CentralReach: it said no (a permanent
       // failure; this includes CR_CLIENT_READ_FAILED, item B21: the lookup found the client and
-      // its read before the update could not be used), or the lookup inside createOrUpdateClient
-      // failed before any create was sent (CR_LOOKUP_UNKNOWN, CR_LOOKUP_UNREADABLE). An unknown
-      // create outcome and an error with no code keep the marker.
+      // its read before the update could not be used), or createOrUpdateClient failed before
+      // any write was sent (its lookup: CR_LOOKUP_UNKNOWN, CR_LOOKUP_UNREADABLE). An unknown
+      // create outcome and any other error keep the marker.
       const createNotSent =
+        nothingWritten ||
         classifyFailure(error) === FAILURE_KINDS.PERMANENT ||
         error?.code === "CR_LOOKUP_UNKNOWN" ||
         error?.code === "CR_LOOKUP_UNREADABLE";
-      // BR16 (review finding 7): the client read and its checks (item B21, the SSN guard) and the
-      // lookup inside createOrUpdateClient fail before any CentralReach write, but after the
+      // BR16 (review finding 7, SG-1): a failure before any CentralReach write, but after the
       // in-progress save above. Nothing reached CentralReach, so the clean flag and the
       // in-progress hashes go back to what this run found; otherwise the next run would count
       // this run's HubSpot values as written (rule 5.8) and could clear a value never written.
-      const nothingWritten = CLIENT_FAILED_BEFORE_WRITE.has(error?.code);
       const changes = {
         ...(nothingWritten ? inProgressAsBefore(prior) : {}),
         ...(creating && createNotSent ? NO_PENDING_CREATE : {})
@@ -976,9 +973,14 @@ export async function runClientSyncWorkflow(
     // retry. HubSpot keeps its last status until the last attempt (decision 1).
     const failureKind = classifyFailure(error);
     const permanent = failureKind === FAILURE_KINDS.PERMANENT;
+    // Item 20: no retry is left for this failure. The worker says so when all five are used; a
+    // daily sweep message has one, except for the failures that keep the full schedule.
+    const retriesUsedUp =
+      Boolean(lastAttempt) ||
+      (Number.isInteger(attempt) && isLastAttempt({ attempt, source, error }));
     summary.setOutcome(WAITING_CODES.has(error?.code) ? "waiting" : "error", reasonCodeOfError(error));
     logger(
-      permanent || lastAttempt ? "error" : "warn",
+      permanent || retriesUsedUp ? "error" : "warn",
       "Client sync workflow failed.",
       buildError({
         workflow: "clientSync",
@@ -987,7 +989,7 @@ export async function runClientSyncWorkflow(
         recordId: normalizedDealId,
         extra: {
           failureKind,
-          lastAttempt: Boolean(lastAttempt),
+          lastAttempt: retriesUsedUp,
           invocationId: context?.invocationId || null,
           hsLastModifiedDate: hsLastModifiedDate ? String(hsLastModifiedDate) : null
         }
@@ -1002,7 +1004,7 @@ export async function runClientSyncWorkflow(
     // Row 3.7: a status and reason HubSpot already shows are not written again.
     const errorReason = permanent ? permanentFailureReason(error) : RETRIES_USED_UP;
     const errorPatch = {
-      ...((permanent || lastAttempt) && !statusIsShown(shown, "error", errorReason)
+      ...((permanent || retriesUsedUp) && !statusIsShown(shown, "error", errorReason)
         ? statusProperties("error", errorReason)
         : {}),
       ...(knownContactId && !hubspotHasContactId
