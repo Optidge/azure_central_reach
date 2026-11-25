@@ -56,7 +56,7 @@ const EMPLOYEE_SOURCES = ["hubspotWorkflow", "employeePoller", "dailySweep"];
 const ATTEMPTS = [0, 1, MAX_RETRIES];
 const GATE_VALUES = ["false", null];
 // A record gate that is not true: false, "no", blank or not set.
-const RECORD_GATE_CLOSED = ["false", "no", "", null];
+const RECORD_GATE_CLOSED = ["false", "no", "yes", "Yes", "", null];
 
 const queueContext = () => ({
   functionName: "item18",

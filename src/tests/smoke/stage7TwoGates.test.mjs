@@ -123,7 +123,7 @@ for (const [kind, eligibility, entry] of [
 // record gate AND its own path's box. Any record gate value but true (blank, false, "no") skips.
 // The two other modes are checked in the same matrix: the record gate alone (both boxes not read)
 // and the two path settings alone (the record gate not read).
-const RECORD_GATE_VALUES = ["true", "false", "no", "", null];
+const RECORD_GATE_VALUES = ["true", "false", "no", "yes", "Yes", "", null];
 const GATE_MODES = [
   ["record gate and two path settings", { ...TWO_GATES, recordGateProperty: GATE }],
   ["record gate only", { recordGateProperty: GATE }],
