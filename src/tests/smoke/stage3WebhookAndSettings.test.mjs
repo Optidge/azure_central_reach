@@ -7,6 +7,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { computeHubSpotV2Signature, readWebhookSettings } from "../../lib/hubspotWebhook.mjs";
 import { hubspotWebhook } from "../../functions/hubspotWebhook.mjs";
+import axios from "axios";
+import { processClientQueue } from "../../functions/processClientQueue.mjs";
+import { processEmployeeQueue } from "../../functions/processEmployeeQueue.mjs";
+import { intakePoller } from "../../functions/intakePoller.mjs";
+import { intakePollerHttpTest } from "../../functions/intakePollerHttpTest.mjs";
+import { connectivityTest } from "../../functions/connectivityTest.mjs";
+import { runClientSyncWorkflow } from "../../workflows/clientSyncWorkflow.mjs";
+import { runEmployeeSyncWorkflow } from "../../workflows/employeeSyncWorkflow.mjs";
+import { runContactFanOutWorkflow } from "../../workflows/contactFanOutWorkflow.mjs";
 import { useStateContainer } from "../../lib/cosmosState.mjs";
 import {
   getConfig,
@@ -371,13 +380,18 @@ test("[BR4][3.12] production with the exact two names and no SYNC_RECORD_GATE_PR
   }
 });
 
-test("[BR4][3.12] the sandbox accepts any two gate names, SYNC_RECORD_GATE_PROPERTY = none and INCLUDE_TEST_RECORDS = true", () => {
+// Decision 77: the two path names next to the record gate (the sandbox needs the record gate with
+// any path setting); "none" only with no path setting.
+test("[BR4][3.12] the sandbox accepts any two gate names with the record gate, SYNC_RECORD_GATE_PROPERTY = none without a path setting, and INCLUDE_TEST_RECORDS = true", () => {
   withEnv(
-    { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: "box_a", SYNC_UPDATE_GATE_PROPERTY: "box_b", SYNC_RECORD_GATE_PROPERTY: undefined },
+    { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: "box_a", SYNC_UPDATE_GATE_PROPERTY: "box_b" },
     () => {
       assert.equal(validateConfig().isValid, true);
       assert.equal(validateIntakePollerConfig().isValid, true);
-      assert.deepEqual(gateProperties(getConfig().sync), { create: ["box_a"], update: ["box_b"] });
+      assert.deepEqual(gateProperties(getConfig().sync), {
+        create: ["sandbox_test_field", "box_a"],
+        update: ["sandbox_test_field", "box_b"]
+      });
     }
   );
   withEnv({ ...GATE_ENV, SYNC_RECORD_GATE_PROPERTY: "none", INCLUDE_TEST_RECORDS: "true" }, () => {
@@ -417,7 +431,9 @@ test("[BR4][3.12] every combination of the record gate and the two path settings
     for (const { record, creates, updates } of combos) {
       const label = JSON.stringify({ portal, record, creates, updates });
       const bothPaths = Boolean(creates && updates);
-      const expectedMissing = !record && !bothPaths ? ["SYNC_RECORD_GATE_PROPERTY"] : [];
+      // Decision 77: only production may leave the record gate out, and only with both paths.
+      const recordOptional = portal === PRODUCTION_PORTAL && bothPaths;
+      const expectedMissing = !record && !recordOptional ? ["SYNC_RECORD_GATE_PROPERTY"] : [];
       // Production: each path setting must be its exact name, so a missing one is invalid.
       const expectedInvalid =
         portal === PRODUCTION_PORTAL
@@ -457,11 +473,415 @@ test("[BR4][3.12] every combination of the record gate and the two path settings
   }
 });
 
-test("[BR4][3.12] SYNC_RECORD_GATE_PROPERTY = none with the two path settings: the sandbox gates on the two boxes only, production refuses it", () => {
+test("[BR4][3.12] SYNC_RECORD_GATE_PROPERTY = none with the two path settings is refused on the sandbox (decision 77) and in production", () => {
   const env = { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES, SYNC_RECORD_GATE_PROPERTY: "none" };
-  withEnv(env, () => {
-    assert.equal(validateConfig().isValid, true);
-    assert.deepEqual(gateProperties(getConfig().sync), { create: [CREATES], update: [UPDATES] });
-  });
+  assertRefused(env, "SYNC_RECORD_GATE_PROPERTY");
   assertRefused({ ...env, HUBSPOT_PORTAL_ID: PRODUCTION_PORTAL }, "SYNC_RECORD_GATE_PROPERTY");
 });
+
+// ---------------------------------------------------------------------------------------------
+// Decision 77 (Zeke 2026-11-25, "Build the guard"): on the sandbox a path gate setting never runs
+// without the record gate. A missing, blank or "none" SYNC_RECORD_GATE_PROPERTY next to one or
+// both path settings is refused before any HubSpot or CentralReach call. Production unchanged.
+// ---------------------------------------------------------------------------------------------
+
+// Not set, blank, spaces, "none" in two cases. The first three are reported missing, "none" invalid.
+const RECORD_GATE_REFUSED = [
+  [undefined, "missing"],
+  ["", "missing"],
+  ["   ", "missing"],
+  ["none", "invalid"],
+  [" NONE ", "invalid"]
+];
+const SANDBOX_PATH_SETTINGS = [
+  ["both path settings", { SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES }],
+  ["the create path setting only", { SYNC_CREATE_GATE_PROPERTY: CREATES }],
+  ["the update path setting only", { SYNC_UPDATE_GATE_PROPERTY: UPDATES }]
+];
+
+// The worker and the poller both refuse it, name SYNC_RECORD_GATE_PROPERTY and print no value.
+function assertRecordGateRefused(env, kind, label) {
+  withEnv(env, () => {
+    for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+      assert.equal(validation.isValid, false, label);
+      assert.equal(validation[kind].includes("SYNC_RECORD_GATE_PROPERTY"), true, label);
+    }
+    for (const load of [getConfig, getIntakePollerConfig]) {
+      let message = "";
+      assert.throws(() => {
+        try {
+          load();
+        } catch (error) {
+          message = error.message;
+          throw error;
+        }
+      }, label);
+      const heading = kind === "missing" ? "Missing variables" : "Invalid variables";
+      assert.match(message, new RegExp(`${heading}: .*SYNC_RECORD_GATE_PROPERTY`), label);
+      assert.doesNotMatch(message, /none|sandbox_test_field|centralreach_/i, label);
+    }
+  });
+}
+
+test("[BR4][3.12] decision 77: on the sandbox, one or both path settings with SYNC_RECORD_GATE_PROPERTY not set, blank, spaces or none is refused and names the setting without its value", () => {
+  for (const [paths, pathEnv] of SANDBOX_PATH_SETTINGS) {
+    for (const [record, kind] of RECORD_GATE_REFUSED) {
+      assertRecordGateRefused(
+        { ...GATE_ENV, ...pathEnv, SYNC_RECORD_GATE_PROPERTY: record },
+        kind,
+        `${paths}, record gate ${JSON.stringify(record)}`
+      );
+    }
+  }
+});
+
+test("[BR4][3.12] decision 77: on the sandbox, one or both path settings with the record gate set are accepted and gate on the record gate too", () => {
+  for (const [paths, pathEnv] of SANDBOX_PATH_SETTINGS) {
+    withEnv({ ...GATE_ENV, ...pathEnv, SYNC_RECORD_GATE_PROPERTY: " sandbox_test_field " }, () => {
+      for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+        assert.equal(validation.isValid, true, paths);
+      }
+      const expected = {
+        create: ["sandbox_test_field", pathEnv.SYNC_CREATE_GATE_PROPERTY].filter(Boolean),
+        update: ["sandbox_test_field", pathEnv.SYNC_UPDATE_GATE_PROPERTY].filter(Boolean)
+      };
+      for (const config of [getConfig(), getIntakePollerConfig()]) {
+        assert.deepEqual(gateProperties(config.sync), expected, paths);
+      }
+    });
+  }
+});
+
+test("[BR4][3.12] decision 77: on the sandbox with no path setting, the record gate alone is unchanged (set: gated; none: off; not set or blank: missing)", () => {
+  withEnv(GATE_ENV, () => {
+    assert.deepEqual(gateProperties(getConfig().sync), {
+      create: ["sandbox_test_field"],
+      update: ["sandbox_test_field"]
+    });
+  });
+  for (const none of ["none", " NONE "]) {
+    withEnv({ ...GATE_ENV, SYNC_RECORD_GATE_PROPERTY: none }, () => {
+      for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+        assert.equal(validation.isValid, true, none);
+      }
+      for (const config of [getConfig(), getIntakePollerConfig()]) {
+        assert.deepEqual(gateProperties(config.sync), { create: [], update: [] }, none);
+      }
+    });
+  }
+  for (const blank of [undefined, "", "   "]) {
+    withEnv({ ...GATE_ENV, SYNC_RECORD_GATE_PROPERTY: blank }, () => {
+      for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+        assert.deepEqual(validation.missing, ["SYNC_RECORD_GATE_PROPERTY"], JSON.stringify(blank));
+        assert.deepEqual(validation.invalid, [], JSON.stringify(blank));
+      }
+    });
+  }
+});
+
+// Production, the 8 combinations of record gate (not set / set) x create path x update path,
+// plus "none": the outcomes from before decision 77, written out by hand.
+test("[BR4][3.12] decision 77: production behaves exactly as before in every combination of the record gate and the two path settings", () => {
+  const RECORD = "sandbox_test_field";
+  const C = "SYNC_CREATE_GATE_PROPERTY";
+  const U = "SYNC_UPDATE_GATE_PROPERTY";
+  const R = "SYNC_RECORD_GATE_PROPERTY";
+  // [record, creates, updates, expected missing, expected invalid, gates when valid]
+  const table = [
+    [undefined, undefined, undefined, [R], [C, U]],
+    [undefined, CREATES, undefined, [R], [U]],
+    [undefined, undefined, UPDATES, [R], [C]],
+    [undefined, CREATES, UPDATES, [], [], { create: [CREATES], update: [UPDATES] }],
+    [RECORD, undefined, undefined, [], [C, U]],
+    [RECORD, CREATES, undefined, [], [U]],
+    [RECORD, undefined, UPDATES, [], [C]],
+    [RECORD, CREATES, UPDATES, [], [], { create: [RECORD, CREATES], update: [RECORD, UPDATES] }],
+    ["none", CREATES, UPDATES, [], [R]],
+    ["none", undefined, undefined, [], [C, U, R]]
+  ];
+  for (const [record, creates, updates, missing, invalid, gates] of table) {
+    const label = JSON.stringify({ record, creates, updates });
+    withEnv(
+      { ...PRODUCTION_ENV, SYNC_RECORD_GATE_PROPERTY: record, [C]: creates, [U]: updates },
+      () => {
+        for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+          assert.deepEqual(validation.missing, missing, label);
+          assert.deepEqual(validation.invalid, invalid, label);
+        }
+        if (!gates) {
+          assert.throws(() => getConfig(), /Configuration validation failed/, label);
+          assert.throws(() => getIntakePollerConfig(), /Configuration validation failed/, label);
+          return;
+        }
+        for (const config of [getConfig(), getIntakePollerConfig()]) {
+          assert.deepEqual(gateProperties(config.sync), gates, label);
+        }
+      }
+    );
+  }
+});
+
+// A record gate named the same as a path property would be merged into that path's property by
+// gateProperties, gating the path on that checkbox alone.
+test("[BR4][3.12] decision 77: on the sandbox, a record gate that names a path property (any case) is refused without its value; a different name is accepted", () => {
+  const pathEnvs = [
+    { SYNC_CREATE_GATE_PROPERTY: "box_a", SYNC_UPDATE_GATE_PROPERTY: "box_b" },
+    { SYNC_CREATE_GATE_PROPERTY: "box_a" },
+    { SYNC_UPDATE_GATE_PROPERTY: "box_b" }
+  ];
+  for (const pathEnv of pathEnvs) {
+    const sameNames = [
+      ...Object.values(pathEnv),
+      ...Object.values(pathEnv).map((name) => ` ${name.toUpperCase()} `),
+      CREATES,
+      UPDATES,
+      "CentralReach_Creates_Only"
+    ];
+    for (const record of sameNames) {
+      assertRecordGateRefused(
+        { ...GATE_ENV, ...pathEnv, SYNC_RECORD_GATE_PROPERTY: record },
+        "invalid",
+        `${JSON.stringify(pathEnv)}, record gate ${JSON.stringify(record)}`
+      );
+    }
+  }
+  for (const record of [CREATES, UPDATES]) {
+    assertRecordGateRefused(
+      { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES, SYNC_RECORD_GATE_PROPERTY: record },
+      "invalid",
+      `production names, record gate ${record}`
+    );
+  }
+  withEnv(
+    { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES, SYNC_RECORD_GATE_PROPERTY: "box_c" },
+    () => {
+      assert.equal(validateConfig().isValid, true);
+      assert.deepEqual(gateProperties(getConfig().sync), {
+        create: ["box_c", CREATES],
+        update: ["box_c", UPDATES]
+      });
+    }
+  );
+});
+
+// The portal ID is trimmed before the production check, so a padded production ID gets production
+// rules: the record gate may be left out, and INCLUDE_TEST_RECORDS = true is refused.
+test("[BR4][3.12] a space-padded production HUBSPOT_PORTAL_ID gets the production gate rules", () => {
+  const padded = { ...PRODUCTION_ENV, HUBSPOT_PORTAL_ID: ` ${PRODUCTION_PORTAL} ` };
+  withEnv(padded, () => {
+    for (const validation of [validateConfig(), validateIntakePollerConfig()]) {
+      assert.deepEqual(validation.missing, []);
+      assert.deepEqual(validation.invalid, []);
+    }
+    assert.deepEqual(gateProperties(getConfig().sync), { create: [CREATES], update: [UPDATES] });
+  });
+  assertRefused({ ...padded, INCLUDE_TEST_RECORDS: "true" }, "INCLUDE_TEST_RECORDS");
+});
+
+// ---------------------------------------------------------------------------------------------
+// Decision 77, run level: with the guard tripped (sandbox, both path settings, record gate not
+// set or "none"), every entry point stops before any HubSpot or CentralReach call. The real
+// getConfig / getIntakePollerConfig run; every HubSpot, CentralReach, Cosmos and Service Bus
+// dependency only counts its calls, and any axios request is counted too.
+// ---------------------------------------------------------------------------------------------
+
+const GUARD_TRIPPED_ENVS = [
+  ["record gate not set", { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES, SYNC_RECORD_GATE_PROPERTY: undefined }],
+  ["record gate none", { ...GATE_ENV, SYNC_CREATE_GATE_PROPERTY: CREATES, SYNC_UPDATE_GATE_PROPERTY: UPDATES, SYNC_RECORD_GATE_PROPERTY: "none" }]
+];
+
+// The outside calls of the workers, the fan-out and the poller.
+const OUTSIDE_CALLS = [
+  "createHubSpotClient",
+  "createCentralReachClient",
+  "createStateClient",
+  "createServiceBusClient",
+  "ensureServiceBusClient",
+  "getDealById",
+  "getContactById",
+  "getBtRbtRecordById",
+  "getBcbaRecordById",
+  "listAssociations",
+  "readObjectsBatch",
+  "updateDealProperties",
+  "writeEmployeeWriteback",
+  "findHubSpotRecordsByEmployeeId",
+  "searchObjectPage",
+  "createOrUpdateClient",
+  "findClientByExternalSystemId",
+  "updateClientMetadata",
+  "createOrUpdateEmployee",
+  "findEmployeeByExternalSystemId",
+  "getEmployeeByContactId",
+  "sendClientSyncMessage",
+  "acquireLease",
+  "releaseLease",
+  "getState",
+  "putState"
+];
+
+function countingDependencies(calls) {
+  const dependencies = Object.fromEntries(
+    OUTSIDE_CALLS.map((name) => [
+      name,
+      (...args) => {
+        void args;
+        calls.push(name);
+        return undefined;
+      }
+    ])
+  );
+  return { ...dependencies, safeLog: () => {}, buildErrorLog: ({ stage }) => ({ stage }) };
+}
+
+// Sets the settings for an async run, and counts every axios request made meanwhile.
+async function withGuardTripped(env, run) {
+  const previous = {};
+  for (const [name, value] of Object.entries(env)) {
+    previous[name] = process.env[name];
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+  const previousAdapter = axios.defaults.adapter;
+  const httpCalls = [];
+  axios.defaults.adapter = async (requestConfig) => {
+    httpCalls.push(requestConfig.url);
+    throw new Error("no HTTP call is expected");
+  };
+  try {
+    await run();
+  } finally {
+    axios.defaults.adapter = previousAdapter;
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+  return httpCalls;
+}
+
+// A queue run that fails is either thrown (dead-letter) or retried; both are a failed run.
+async function queueOutcome(run) {
+  const scheduled = [];
+  let thrown = null;
+  try {
+    await run(async (message) => {
+      scheduled.push(message);
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  return { failed: Boolean(thrown) || scheduled.length > 0, scheduled };
+}
+
+const QUEUE_RUNS = [
+  [
+    "Case worker",
+    (calls) => (scheduleRetry) =>
+      processClientQueue(
+        { dealId: "deal-1", workflow: "clientSync", source: "hubspotWorkflow", portalId: SANDBOX_PORTAL },
+        {},
+        { runWorkflow: (input) => runClientSyncWorkflow(input, countingDependencies(calls)), scheduleRetry }
+      )
+  ],
+  [
+    "Contact fan-out on the Case queue",
+    (calls) => (scheduleRetry) =>
+      processClientQueue(
+        { contactId: "c-1", workflow: "contactChange", source: "hubspotWorkflow", portalId: SANDBOX_PORTAL },
+        {},
+        { runContactFanOut: (input) => runContactFanOutWorkflow(input, countingDependencies(calls)), scheduleRetry }
+      )
+  ],
+  [
+    "BT/RBT worker",
+    (calls) => (scheduleRetry) =>
+      processEmployeeQueue(
+        { recordId: "HS1", employeeType: "bt_rbt", workflow: "employeeSync", source: "hubspotWorkflow", portalId: SANDBOX_PORTAL },
+        {},
+        { runWorkflow: (input) => runEmployeeSyncWorkflow(input, countingDependencies(calls)), scheduleRetry }
+      )
+  ],
+  [
+    "BCBA worker",
+    (calls) => (scheduleRetry) =>
+      processEmployeeQueue(
+        { recordId: "HS2", employeeType: "bcba", workflow: "employeeSync", source: "hubspotWorkflow", portalId: SANDBOX_PORTAL },
+        {},
+        { runWorkflow: (input) => runEmployeeSyncWorkflow(input, countingDependencies(calls)), scheduleRetry }
+      )
+  ]
+];
+
+for (const [label, env] of GUARD_TRIPPED_ENVS) {
+  for (const [kind, makeRun] of QUEUE_RUNS) {
+    test(`[BR4][3.12] decision 77: sandbox, two path settings, ${label}: the ${kind} fails the run with no HubSpot or CentralReach call`, async () => {
+      const calls = [];
+      let outcome;
+      const httpCalls = await withGuardTripped(env, async () => {
+        outcome = await queueOutcome(makeRun(calls));
+      });
+      assert.equal(outcome.failed, true);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(httpCalls, []);
+    });
+  }
+
+  test(`[BR4][3.12] decision 77: sandbox, two path settings, ${label}: the hourly poller fails the run with no HubSpot search and nothing queued`, async () => {
+    const calls = [];
+    const httpCalls = await withGuardTripped(env, async () => {
+      await assert.rejects(
+        intakePoller({}, {}, countingDependencies(calls)),
+        /SYNC_RECORD_GATE_PROPERTY/
+      );
+    });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(httpCalls, []);
+  });
+
+  test(`[BR4][3.12] decision 77: sandbox, two path settings, ${label}: the HTTP test functions refuse with no HubSpot or CentralReach call`, async () => {
+    const httpCalls = await withGuardTripped(env, async () => {
+      const poller = await intakePollerHttpTest({}, {});
+      assert.equal(poller.status, 500);
+      assert.equal(poller.jsonBody.error.code, "MISSING_REQUIRED_CONFIG");
+
+      const connectivity = await connectivityTest({}, {});
+      assert.equal(connectivity.jsonBody.ok, false);
+      const named = [...connectivity.jsonBody.env.missingNames, ...connectivity.jsonBody.env.invalidNames];
+      assert.deepEqual(named, ["SYNC_RECORD_GATE_PROPERTY"]);
+      assert.deepEqual(connectivity.jsonBody.clients, {
+        hubspot: false,
+        centralReach: false,
+        cosmos: false,
+        serviceBus: false
+      });
+    });
+    assert.deepEqual(httpCalls, []);
+  });
+
+  // The webhook reads no gate and makes no HubSpot or CentralReach call: it only queues the
+  // record ID, and the worker that takes the message refuses it (the tests above).
+  test(`[BR4][3.12] decision 77: sandbox, two path settings, ${label}: the webhook only queues the record ID, with no HubSpot or CentralReach call`, async () => {
+    const sent = [];
+    const httpCalls = await withGuardTripped(env, async () => {
+      const settings = readWebhookSettings(process.env);
+      const rawBody = JSON.stringify({ objectTypeId: "0-3", recordId: "12345" });
+      const response = await hubspotWebhook(signedRequest(rawBody, settings), {}, {
+        settings,
+        rawBody,
+        sendClientSyncMessage: async (message) => {
+          sent.push(message);
+        }
+      });
+      assert.equal(response.status, 202);
+    });
+    assert.deepEqual(sent.map((message) => message.dealId), ["12345"]);
+    assert.deepEqual(httpCalls, []);
+  });
+}

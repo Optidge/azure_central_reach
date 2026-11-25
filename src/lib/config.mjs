@@ -14,8 +14,9 @@
  * poller's six-field NCRONTAB schedule. Hourly when it is not set.
  * Optional, read here: SYNC_CREATE_GATE_PROPERTY and SYNC_UPDATE_GATE_PROPERTY (item 24), the gate
  * of the create path and of the update path. Required in production (exact names); with both set,
- * SYNC_RECORD_GATE_PROPERTY is optional, and when it is set a record needs it true as well
- * (Zeke 2026-11-25; src/lib/syncEligibility.mjs gateProperties).
+ * SYNC_RECORD_GATE_PROPERTY is optional in production, and when it is set a record needs it true
+ * as well (Zeke 2026-11-25; src/lib/syncEligibility.mjs gateProperties). On the sandbox it is
+ * always required, and "none" is invalid next to a path setting (decision 77).
  * See README.md → Configuration Notes for optional keys that are read elsewhere in src/.
  */
 const REQUIRED_ENV_NAMES = [
@@ -217,13 +218,25 @@ function isNoneSetting(value) {
   return settingValue(value).toLowerCase() === "none";
 }
 
-// Both path settings are set: SYNC_RECORD_GATE_PROPERTY may then be left out. When it is set it
-// is still enforced, on both paths, together with each path's own property (gateProperties).
+// Both path settings are set: in production SYNC_RECORD_GATE_PROPERTY may then be left out. When
+// it is set it is still enforced, on both paths, together with each path's own property
+// (gateProperties).
 function pathGatesSet(env) {
   return PATH_GATE_ENV_NAMES.every((name) => settingValue(env[name]) !== "");
 }
 
-// Required app setting, unless both path settings are set. "none" turns the gate off on purpose.
+function anyPathGateSet(env) {
+  return PATH_GATE_ENV_NAMES.some((name) => settingValue(env[name]) !== "");
+}
+
+// Decision 77: the record gate may be left out only in production with both path settings. On
+// the sandbox it is always required, so a record is never let through on a path checkbox alone
+// (a HubSpot workflow ticks the creates box, and CentralReach has no sandbox).
+function recordGateOptional(env) {
+  return settingValue(env.HUBSPOT_PORTAL_ID) === PRODUCTION_PORTAL_ID && pathGatesSet(env);
+}
+
+// Required app setting, unless recordGateOptional. "none" turns the gate off on purpose.
 // Anything else is the HubSpot checkbox property a record must have set to true.
 export function syncRecordGateProperty(
   value = process.env.SYNC_RECORD_GATE_PROPERTY,
@@ -261,7 +274,7 @@ export function syncPathGateProperty(name, value = process.env[name]) {
 function gateSettings(env = process.env) {
   return {
     recordGateProperty: syncRecordGateProperty(env.SYNC_RECORD_GATE_PROPERTY, {
-      optional: pathGatesSet(env)
+      optional: recordGateOptional(env)
     }),
     createGateProperty: syncPathGateProperty(
       "SYNC_CREATE_GATE_PROPERTY",
@@ -274,13 +287,35 @@ function gateSettings(env = process.env) {
   };
 }
 
+// Decision 77 on the sandbox: the record gate must be its own property. Named the same as either
+// path setting or either production path property (any case), gateProperties would merge it into
+// that path's property and gate the path on that checkbox alone.
+function recordGateIsPathProperty(env) {
+  const recordGate = settingValue(env.SYNC_RECORD_GATE_PROPERTY).toLowerCase();
+  const pathProperties = [
+    ...PATH_GATE_ENV_NAMES.map((name) => env[name]),
+    ...Object.values(PRODUCTION_GATE_PROPERTIES)
+  ];
+  return (
+    recordGate !== "" &&
+    pathProperties.some((value) => settingValue(value).toLowerCase() === recordGate)
+  );
+}
+
 // Items 14 and 24 (R-28, row 3.12): settings that would open a gate. A path setting of "none" is
 // invalid everywhere. In production, each path setting must be exactly its production name, and
 // SYNC_RECORD_GATE_PROPERTY = none and INCLUDE_TEST_RECORDS = true are invalid. The sandbox keeps
-// both options.
+// both options, except that SYNC_RECORD_GATE_PROPERTY = none next to a path setting is invalid
+// there (decision 77): "none" is the sandbox's off switch for the record gate alone. So is a
+// record gate that names a path property (recordGateIsPathProperty).
 function invalidGateEnvNames(env) {
   const invalid = PATH_GATE_ENV_NAMES.filter((name) => isNoneSetting(env[name]));
   if (settingValue(env.HUBSPOT_PORTAL_ID) !== PRODUCTION_PORTAL_ID) {
+    const recordGateRefused =
+      isNoneSetting(env.SYNC_RECORD_GATE_PROPERTY) || recordGateIsPathProperty(env);
+    if (anyPathGateSet(env) && recordGateRefused) {
+      invalid.push("SYNC_RECORD_GATE_PROPERTY");
+    }
     return invalid;
   }
   for (const [name, exactName] of Object.entries(PRODUCTION_GATE_PROPERTIES)) {
@@ -337,9 +372,11 @@ function invalidLeaseEnvNames(env) {
   return outlivesTheRun ? [] : ["LEASE_TTL_SECONDS"];
 }
 
-// SYNC_RECORD_GATE_PROPERTY is required only while one of the two path settings is not set.
+// SYNC_RECORD_GATE_PROPERTY is required except in production with both path settings set.
 function requiredEnvNames(names, env) {
-  return pathGatesSet(env) ? names.filter((name) => name !== "SYNC_RECORD_GATE_PROPERTY") : names;
+  return recordGateOptional(env)
+    ? names.filter((name) => name !== "SYNC_RECORD_GATE_PROPERTY")
+    : names;
 }
 
 function validateEnvNames(requiredNames) {

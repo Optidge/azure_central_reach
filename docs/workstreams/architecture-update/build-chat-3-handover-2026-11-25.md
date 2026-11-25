@@ -7,7 +7,7 @@ Stage 8 follow-up build. Branch `architecture-update`, on top of `fcb300e` (loca
 - **Commit `f213e02` (2026-11-25 14:14 -0600, not made by this chat):** "Stage 8 follow-up build: combined record gate, Care Coordinator on both fields, BCBA credential labels, fresh label read, sweep retry cap." 49 files; local is 1 ahead of origin (not pushed by this chat). It was made while the gate review was still running. Where this note says "uncommitted", read it as committed in `f213e02`, except the five files below.
 - **Uncommitted after `f213e02` (review follow-ups, no source-code change):** `README.md` (gate wording), `docs/workstreams/architecture-update/BUILD-PLAN.md` (decision 76), this handover, `src/tests/smoke/stage7TwoGates.test.mjs` and `src/tests/smoke/stage7RecordGateEveryPath.test.mjs` (`yes` / `Yes` added to the closed gate values). The deployable code in `src/` (outside tests) is identical to `f213e02`.
 
-- `npm test`: **1507 pass, 0 fail** (1413 before this build). `npm run check:requirements` passes. `npm run check:triggers` exits 0.
+- `npm test`: **1527 pass, 0 fail** (1413 before this build). `npm run check:requirements` passes. `npm run check:triggers` exits 0.
 - `MAPPING_VERSION` is unchanged (`stage7-2026-11-23`). The deployed code (`655b385`) predates it, so every field is sent once after the deploy anyway; run sheet step SU-1 still holds.
 - Each item had one Opus 5.5 (high) builder and one independent Opus 5.5 (high) reviewer working from snapshots. No must-fix is open.
 - Snapshots (scratchpad, a reboot can clear them): `/private/tmp/claude-501/-Users-zeke-Desktop-projects-client-projects-Optidge-azure-central-reach/c459ab4c-ab86-48a9-a80f-53936bc654ac/scratchpad/snap/` with `p0` (start, = `fcb300e` source), `pBL6`, `pA`, `pCC`, `pR6`.
@@ -86,7 +86,17 @@ Stage 8 follow-up build. Branch `architecture-update`, on top of `fcb300e` (loca
 - **Files:** `src/lib/syncEligibility.mjs`, `src/workflows/intakePollerWorkflow.mjs`, `src/lib/config.mjs` (comments), `README.md`, `local.settings.example.json`; tests `stage7TwoGates.test.mjs`, `stage7RecordGateEveryPath.test.mjs`, `stage3WebhookAndSettings.test.mjs`, `stage3PollerFakes.mjs` (the fake now enforces HubSpot's search limits).
 - **Review:** safe to deploy to the sandbox. No must-fix. No path bypasses the gate; search bodies checked for all 8 setting combinations; 21 of 22 mutations killed, the survivor (`yes` accepted) closed with a test value. README wording corrected.
 - **Side effect to know:** one Case search (paging a block of records that share a timestamp) leaves out the stage exclusion when both gates are set, to stay within HubSpot's 6 filters per group. The worker still skips those stages before any CentralReach call; the cost is a few extra queue messages.
-- **Open for Zeke (review F1):** on the sandbox, if `SYNC_RECORD_GATE_PROPERTY` is blank or missing while both path settings are set, the app still starts and gates on the two checkboxes only. A code guard (refuse to run on portal 52311591 in that case) is a small change, not built because the "path settings only" mode was to stay as it is. Recommended: build it; until then the deploy step must confirm the setting is present.
+- **Review F1 closed by decision 77** (below).
+
+### Item 7. Sandbox guard for a missing record gate (decision 77)
+
+- **Zeke, 2026-11-25:** "Build the guard".
+- **What changed:** on any portal that is not production, when either path gate setting is set, the app refuses to run unless `SYNC_RECORD_GATE_PROPERTY` names a property of its own. Refused: blank, spaces, not set (reported missing); `none` (invalid); the same name as a path setting or a production path property (invalid). The error names the setting, never a value.
+- **Where it stops:** the queue workers, Contact fan-out, the poller and the HTTP test functions validate before any HubSpot or CentralReach call. The webhook still queues the record ID; the worker refuses the message with no call and no write; the message retries and then dead-letters.
+- **Unchanged:** production in every combination; the sandbox with the record gate alone.
+- **Files:** `src/lib/config.mjs`, `README.md`, `src/tests/smoke/stage3WebhookAndSettings.test.mjs` (20 tests added).
+- **Review:** safe to deploy to the sandbox, no must-fix. A 504-cell before/after table: no production cell changed, nothing looser. Two should-fixes applied (the same-name bypass; README wording) and one test gap closed.
+- **Committed state:** `f213e02` and `fc61eb8` (made by the testing chat on Zeke's word) hold everything up to decision 76. **Uncommitted now:** `src/lib/config.mjs`, `src/tests/smoke/stage3WebhookAndSettings.test.mjs`, `README.md`, `BUILD-PLAN.md` (decision 77, one line of 76), this handover. The deploy must include `src/lib/config.mjs`.
 
 #### Sandbox Function App settings for this build (names only)
 
@@ -104,12 +114,12 @@ No other setting name was added or removed in `src/lib/config.mjs` since `655b38
 
 - **Production:** nothing. Production's additional gate property is confirmed by Zeke after the sandbox end-to-end test (final production deploy item). If production keeps `SYNC_RECORD_GATE_PROPERTY` naming `sandbox_test_field`, every record without that box is blocked there.
 - **Poller:** stays off through the deploy until the three settings are confirmed on the app.
-- **Sandbox deploy:** do not deploy without `SYNC_RECORD_GATE_PROPERTY` set (F1 above).
+- **Sandbox deploy:** deploy the tree that includes the decision 77 guard (`src/lib/config.mjs`, uncommitted at the time of writing). With the guard, a sandbox app missing `SYNC_RECORD_GATE_PROPERTY` refuses to run.
 - Still unproven and to be settled at the retest, not blockers for the sandbox deploy: CC-1 (line breaks), the R-6 screen-edit case and the combined fresh-read form.
 
 ## 3. Docs
 
-`BUILD-PLAN.md`: status rows at lines 301 and 704 (BL6 built), 634 (C10 three lines), 691 (B11 built), 913 (row 5.6 serves BL5 and BL6); `checkRequirements.test.mjs` BL6 assertion to match. **Decisions 70 to 76 are written** (section 4 table, after decision 69), with Zeke's words quoted from the "Eighth set" sections of the build package: 70 item 20 and its three exemptions; 71 SG-1 / SG-2 and the README command; 72 Care Coordinator (format, two fields, not-ready omit, `no_owner` clear); 73 BL6 mapping and the unknown-option warning; 74 the fresh label read (unproven for a screen edit until the retest); 75 the hashed test coordinator email; 76 the combined gate. Nothing in the testing chat's files was edited apart from the two scripts above.
+`BUILD-PLAN.md`: status rows at lines 301 and 704 (BL6 built), 634 (C10 three lines), 691 (B11 built), 913 (row 5.6 serves BL5 and BL6); `checkRequirements.test.mjs` BL6 assertion to match. **Decisions 70 to 77 are written** (section 4 table, after decision 69), with Zeke's words quoted from the "Eighth set" sections of the build package: 70 item 20 and its three exemptions; 71 SG-1 / SG-2 and the README command; 72 Care Coordinator (format, two fields, not-ready omit, `no_owner` clear); 73 BL6 mapping and the unknown-option warning; 74 the fresh label read (unproven for a screen edit until the retest); 75 the hashed test coordinator email; 76 the combined gate. Nothing in the testing chat's files was edited apart from the two scripts above.
 
 ## 4. Open questions for Zeke
 
