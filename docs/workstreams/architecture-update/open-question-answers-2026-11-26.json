@@ -1,0 +1,558 @@
+{
+ "A1": {
+  "choice": "Yes, confirmed as built",
+  "note": "",
+  "saved_at": "2026-11-26T18:05:22.584Z",
+  "question": "Care Coordinator when the status is not ready or no_owner",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-046",
+  "requirement_ids": [
+   "CASE-R-031",
+   "BCBA-F-021"
+  ]
+ },
+ "A2": {
+  "choice": "Map them to new CentralReach fields",
+  "note": " please see the Client Metadata tab under the spreadsheet \n\nspreadsheet = United Care ABA - Client Metadata Flow - HubSpot to Central Reach\nhttps://docs.google.com/spreadsheets/d/19z3vue0JSkE0QlBO34_83EirCok4q65i/edit?gid=1765935504#gid=1765935504\nThe total assigned hours: 97153 map to BT/RBT Work Schedule 1 Details and Hours  BT/RBT Work Schedule   and BT/RBT Work Schedule 2 Details and Hours BT/RBT Work Schedule in hubspot\n\n and \n\nApproved Auth Hours  map to hours/units- approved cpt codes- ongoing line 2  97153 hours 00/Units 000 (the zeros get filled in) in hubspot \n\n\n\nThese are referenced in Client Metadata Flow tab on the United Care ABA - Client Metadata Flow - HubSpot to Central Reach \n\nHave a background worker confirm\n\n\n",
+  "saved_at": "2026-11-26T18:12:43.137Z",
+  "question": "Per-BT hours as their own CentralReach fields",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-048",
+  "requirement_ids": [
+   "CASE-F-063"
+  ]
+ },
+ "A3": {
+  "choice": "Yes, confirmed as built",
+  "note": "",
+  "saved_at": "2026-11-26T18:12:56.370Z",
+  "question": "insurance_id_3 mapping",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-049",
+  "requirement_ids": [
+   "CASE-F-068"
+  ]
+ },
+ "A4": {
+  "choice": "Yes, confirmed as built",
+  "note": "",
+  "saved_at": "2026-11-26T18:13:07.186Z",
+  "question": "insurance_id_4 mapping",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-050",
+  "requirement_ids": [
+   "CASE-F-069"
+  ]
+ },
+ "A5": {
+  "choice": "Yes, confirmed as built",
+  "note": "",
+  "saved_at": "2026-11-26T18:14:07.637Z",
+  "question": "Physician field when the insurance type is Unsure or blank",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-051",
+  "requirement_ids": [
+   "CASE-F-036"
+  ]
+ },
+ "A6": {
+  "choice": "Yes, a go-live checklist item",
+  "note": "",
+  "saved_at": "2026-11-26T18:15:17.942Z",
+  "question": "Coordinator Team Member records before the first production sync",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, a go-live checklist item",
+  "guide_question": "Q-047",
+  "requirement_ids": [
+   "CASE-R-034"
+  ]
+ },
+ "A7": {
+  "choice": "Show 'Yes-F84.0' (as built)",
+  "note": "",
+  "saved_at": "2026-11-26T18:21:14.751Z",
+  "question": "Diagnosis text sent for the Yes-F84.0 option",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-030",
+  "requirement_ids": [
+   "CASE-F-039"
+  ]
+ },
+ "A10": {
+  "choice": "Yes, stop the poller creating Cases (webhook only)",
+  "note": "",
+  "saved_at": "2026-11-26T18:21:33.241Z",
+  "question": "Can the poller create a Case in production",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-006",
+  "requirement_ids": [
+   "CASE-R-014"
+  ]
+ },
+ "A13": {
+  "choice": "Send a blank (as built)",
+  "note": "The spreadsheet says this for HubSpot. \n\nBT/RBT Work Schedule 1 Details and Hours  BT/RBT Work Schedule   and BT/RBT Work Schedule 2 Details and Hours BT/RBT Work Schedule -> maps to Total Assigned Hours (97153) in central reach. \n\n\nVia the API, send a worker to find a contact with the BT hours filled in, and then see how and if they map into CentralReach to determine how they should map over. ",
+  "saved_at": "2026-11-26T18:32:55.494Z",
+  "question": "Total Assigned Hours when both hours are blank",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-007",
+  "requirement_ids": [
+   "CASE-F-054"
+  ]
+ },
+ "A15": {
+  "choice": "Semicolon with no space, as HubSpot stores it (as built)",
+  "note": "",
+  "saved_at": "2026-11-26T18:33:33.829Z",
+  "question": "Separator for several Maladaptive Behaviors",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-031",
+  "requirement_ids": [
+   "CASE-F-028"
+  ]
+ },
+ "A21": {
+  "choice": "No, change it; see note",
+  "note": "Per BT hours is not specified on the client mapping doc. There are no separate per PT/BT hour fields. ",
+  "saved_at": "2026-11-26T18:36:05.250Z",
+  "question": "Ledger CASE-113: per-BT hours",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-048",
+  "requirement_ids": [
+   "CASE-F-063"
+  ]
+ },
+ "A22": {
+  "choice": "Yes, confirmed as built",
+  "note": "",
+  "saved_at": "2026-11-26T18:36:17.189Z",
+  "question": "Ledger CASE-147: insurance_id_3",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-049",
+  "requirement_ids": [
+   "CASE-F-068"
+  ]
+ },
+ "A23": {
+  "choice": "Yes, confirmed as built",
+  "note": "",
+  "saved_at": "2026-11-26T18:36:25.313Z",
+  "question": "Ledger CASE-148: insurance_id_4",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, confirmed as built",
+  "guide_question": "Q-050",
+  "requirement_ids": [
+   "CASE-F-069"
+  ]
+ },
+ "B4": {
+  "choice": "List as offline-only exceptions with their unit tests",
+  "note": "",
+  "saved_at": "2026-11-26T18:37:09.230Z",
+  "question": "Test the error when another record holds the Workday employee",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-009",
+  "requirement_ids": [
+   "BCBA-R-008",
+   "BCBA-R-010"
+  ]
+ },
+ "B5": {
+  "choice": "List as offline-only exceptions with their unit tests",
+  "note": "",
+  "saved_at": "2026-11-26T18:39:01.663Z",
+  "question": "Test the waiting result for an employee already in CentralReach",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-010",
+  "requirement_ids": [
+   "BCBA-R-008",
+   "BCBA-R-010"
+  ]
+ },
+ "B6": {
+  "choice": "List as offline-only exceptions with their unit tests",
+  "note": "We don't need to test creating an employee record in CentralReach with the Workday ID. ",
+  "saved_at": "2026-11-26T18:39:30.592Z",
+  "question": "Test the 7-digit Workday ID error on a create",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-011",
+  "requirement_ids": [
+   "BCBA-R-008"
+  ]
+ },
+ "B7": {
+  "choice": "One per state: NY, CO and NJ",
+  "note": "",
+  "saved_at": "2026-11-26T18:40:00.981Z",
+  "question": "Hand edit in CentralReach for the Workday success test",
+  "waiting_on": "Zeke",
+  "recommended": "One per state: NY, CO and NJ",
+  "guide_question": "Q-012",
+  "requirement_ids": [
+   "BCBA-R-011"
+  ]
+ },
+ "B9": {
+  "choice": "Never clear: keep what CentralReach holds",
+  "note": "For records that already exist in HubSpot and in CentralReach, if a personal email is blank in HubSpot, do not clear the personal email metadata field in CentralReach if a value exists in CentralReach. ",
+  "saved_at": "2026-11-26T18:41:38.900Z",
+  "question": "Blank personal email: clear CentralReach or keep it",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-013",
+  "requirement_ids": [
+   "BCBA-F-008"
+  ]
+ },
+ "B10": {
+  "choice": "Clear only a value the integration wrote (as built)",
+  "note": "",
+  "saved_at": "2026-11-26T18:42:13.885Z",
+  "question": "Blank Medicaid ID: clear CentralReach or keep it",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-014",
+  "requirement_ids": [
+   "BCBA-F-018"
+  ]
+ },
+ "B14": {
+  "choice": "Error, no CentralReach write (as built)",
+  "note": "The code needs to be set up to normalize the values so that they can be pushed into CentralReach. ",
+  "saved_at": "2026-11-26T18:49:41.687Z",
+  "question": "Unreadable gender, phone, state or birth date ends the run",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-015",
+  "requirement_ids": []
+ },
+ "C1": {
+  "choice": "",
+  "note": "This is still pending an answer from United Care. For now, we are sending the placeholder date of birth date value. ",
+  "saved_at": "2026-11-26T18:50:19.475Z",
+  "question": "Who enters the real date of birth, and where",
+  "waiting_on": "United Care",
+  "recommended": "Staff enter it on the employee's Contact during onboarding; the next update sends it",
+  "guide_question": "Q-020",
+  "requirement_ids": [
+   "ALL-R-033",
+   "BCBA-F-006",
+   "BT-F-006"
+  ]
+ },
+ "C2": {
+  "choice": "Leave it out for Phase I",
+  "note": "",
+  "saved_at": "2026-11-26T18:50:54.786Z",
+  "question": "Should a BT/RBT personal email go to CentralReach",
+  "waiting_on": "United Care",
+  "recommended": "Leave it out for Phase I",
+  "guide_question": "Q-043",
+  "requirement_ids": [
+   "BT-F-025"
+  ]
+ },
+ "C3": {
+  "choice": "Another format (United Care to describe)",
+  "note": "",
+  "saved_at": "2026-11-26T18:51:04.319Z",
+  "question": "Is every Workday ID exactly 7 digits",
+  "waiting_on": "United Care",
+  "recommended": "Exactly 7 digits, leading 0 possible",
+  "guide_question": "Q-021",
+  "requirement_ids": [
+   "BCBA-R-009",
+   "BT-R-019",
+   "BT-R-022"
+  ]
+ },
+ "C8": {
+  "choice": "Error: nothing is sent until someone fixes the date (as built)",
+  "note": "",
+  "saved_at": "2026-11-26T18:51:20.487Z",
+  "question": "What happens when date of birth text cannot be read",
+  "waiting_on": "Zeke",
+  "recommended": "Error: nothing is sent until someone fixes the date (as built)",
+  "guide_question": "Q-005",
+  "requirement_ids": [
+   "ALL-R-038",
+   "BT-F-006",
+   "BCBA-F-006",
+   "BCBA-F-023",
+   "BCBA-R-013"
+  ]
+ },
+ "D1": {
+  "choice": "Yes, send them alongside Active Client",
+  "note": "It should be this Option A: Follow the Workbook (Send Active Client IA and stage sublabels).\n\nBe sure to get the matching sandbox values, please. \n",
+  "saved_at": "2026-11-26T19:02:16.853Z",
+  "question": "Send the Initial Assessment stage labels to CentralReach?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-033",
+  "requirement_ids": [
+   "CASE-L-031",
+   "CASE-L-032",
+   "CASE-L-033",
+   "CASE-L-034",
+   "CASE-L-035",
+   "CASE-L-036"
+  ]
+ },
+ "D2": {
+  "choice": "Defer to phase 2",
+  "note": "I need to follow up with Danny on this. ",
+  "saved_at": "2026-11-26T19:11:40.976Z",
+  "question": "Send the Active Client stage sub-labels to CentralReach?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-034",
+  "requirement_ids": [
+   "CASE-L-037",
+   "CASE-L-038",
+   "CASE-L-039",
+   "CASE-L-040",
+   "CASE-L-041",
+   "CASE-L-042",
+   "CASE-L-043"
+  ]
+ },
+ "D3": {
+  "choice": "Yes, send Discharged for stage 1315313037 only",
+  "note": "Review with Danny. ",
+  "saved_at": "2026-11-26T19:15:09.968Z",
+  "question": "Send a Discharged label under Inactive Client?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-035",
+  "requirement_ids": [
+   "CASE-L-044"
+  ]
+ },
+ "D4": {
+  "choice": "Yes, send Paused while the stage is 1344955718, removed when it changes",
+  "note": "",
+  "saved_at": "2026-11-26T19:15:01.553Z",
+  "question": "Send a Paused label when the Case is paused?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-036",
+  "requirement_ids": [
+   "CASE-L-045"
+  ]
+ },
+ "D14": {
+  "choice": "Make CentralReach the source",
+  "note": "Here's the flow and what's established.\n\nFor net new employee records that are created in CentralReach, the HubSpot record ID populates the external system ID as a temporary hold because, in most cases, United Care does not have the Workday ID ready. They do not need the Workday ID to create employees in CentralReach.\n\nTherefore, the HubSpot record ID will be populating the external system ID in CentralReach on creates. Once United Care gets the Workday ID, they have a process for that in HubSpot. They will update the external system ID to the Workday ID, as well as, in CentralReach, updating and replacing the external system ID that's holding the temporary HubSpot ID with the new Workday ID. ",
+  "saved_at": "2026-11-26T19:22:30.516Z",
+  "question": "Show the CentralReach External System ID back in HubSpot?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-019",
+  "requirement_ids": [
+   "ALL-R-009",
+   "BCBA-F-028",
+   "BT-F-021",
+   "ALL-R-007"
+  ]
+ },
+ "D15": {
+  "choice": "",
+  "note": "Here's the flow and what's established.\n\nFor net new employee records that are created in CentralReach, the HubSpot record ID populates the external system ID as a temporary hold because, in most cases, United Care does not have the Workday ID ready. They do not need the Workday ID to create employees in CentralReach.\n\nTherefore, the HubSpot record ID will be populating the external system ID in CentralReach on creates. Once United Care gets the Workday ID, they have a process for that in HubSpot. They will update the external system ID to the Workday ID, as well as, in CentralReach, updating and replacing the external system ID that's holding the temporary HubSpot ID with the new Workday ID. \n\nBecause of this, I don't think we need to write the on create. We need to write the HubSpot record ID back into the external system ID in CentralReach. That doesn't make sense because it's just a temporary hold. ",
+  "saved_at": "2026-11-26T19:23:44.290Z",
+  "question": "Show the CentralReach External System ID back in HubSpot?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-019",
+  "requirement_ids": [
+   "ALL-R-009",
+   "BCBA-F-028",
+   "BT-F-021",
+   "ALL-R-007"
+  ]
+ },
+ "D16": {
+  "choice": "Email holds the work address: keep it",
+  "note": "",
+  "saved_at": "2026-11-26T19:23:59.105Z",
+  "question": "Which field holds the BCBA's United Care work email?",
+  "waiting_on": "United Care",
+  "recommended": "Email holds the work address: keep it",
+  "guide_question": "Q-040",
+  "requirement_ids": [
+   "BCBA-F-005",
+   "BCBA-F-024"
+  ]
+ },
+ "D17": {
+  "choice": "",
+  "note": "Review the fields here on the record and determine which one we should read from. \nhttps://app.hubspot.com/contacts/50317927/record/2-48354212/59730370403/",
+  "saved_at": "2026-11-26T19:28:28.669Z",
+  "question": "Are BCBA record fields the contact card values staff see?",
+  "waiting_on": "United Care",
+  "recommended": "Yes, same values: keep reading the BCBA record",
+  "guide_question": "Q-041",
+  "requirement_ids": [
+   "BCBA-F-002",
+   "BCBA-F-003",
+   "BCBA-F-007"
+  ]
+ },
+ "D18": {
+  "choice": "",
+  "note": "Eve, open to confirm with Danny. ",
+  "saved_at": "2026-11-26T19:29:16.453Z",
+  "question": "Fill the CentralReach 'Credentialed with' fields, or labels only?",
+  "waiting_on": "United Care",
+  "recommended": "Labels only; the four fields stay empty",
+  "guide_question": "Q-042",
+  "requirement_ids": [
+   "BCBA-F-030"
+  ]
+ },
+ "D20": {
+  "choice": "Full address (as built)",
+  "note": "",
+  "saved_at": "2026-11-26T19:29:34.702Z",
+  "question": "BT/RBT Work Address: street and city only, or full?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-044",
+  "requirement_ids": [
+   "BT-F-014"
+  ]
+ },
+ "D25": {
+  "choice": "UCABA Email Address (ucaba_email_address)",
+  "note": "",
+  "saved_at": "2026-11-26T19:29:49.477Z",
+  "question": "Which property is 'United Care Work Email'?",
+  "waiting_on": "United Care",
+  "recommended": "Email (email)",
+  "guide_question": "Q-040",
+  "requirement_ids": [
+   "BCBA-F-005",
+   "BCBA-F-024"
+  ]
+ },
+ "D27": {
+  "choice": "The home state: state_home (as built)",
+  "note": "",
+  "saved_at": "2026-11-26T19:30:05.453Z",
+  "question": "What does 'Location' mean in the BT/RBT mailing address?",
+  "waiting_on": "Zeke",
+  "recommended": "",
+  "guide_question": "Q-017",
+  "requirement_ids": [
+   "BT-F-011",
+   "BT-F-026"
+  ]
+ },
+ "D28": {
+  "choice": "Specific Service Location is Child's House or More Than One Location (as built)",
+  "note": "pending google drive doc",
+  "saved_at": "2026-11-26T19:33:44.537Z",
+  "question": "Which properties are 'Service Address Home / School / Clinic'?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-032",
+  "requirement_ids": [
+   "CASE-L-007",
+   "CASE-L-008",
+   "CASE-L-009"
+  ]
+ },
+ "D30": {
+  "choice": "Read filled production values; no change if they hold state and ID",
+  "note": "",
+  "saved_at": "2026-11-26T19:34:00.985Z",
+  "question": "Does CentralReach need the state with the referring physician Medicaid ID?",
+  "waiting_on": "Zeke",
+  "recommended": "Read filled production values; no change if they hold state and ID",
+  "guide_question": "Q-008",
+  "requirement_ids": [
+   "CASE-F-037"
+  ]
+ },
+ "D31": {
+  "choice": "The Contact email (contact card)",
+  "note": "Confirm in production. ",
+  "saved_at": "2026-11-26T19:36:08.568Z",
+  "question": "Is the BT/RBT record email the contact card email?",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-045",
+  "requirement_ids": [
+   "BT-F-005",
+   "BT-F-027"
+  ]
+ },
+ "O1": {
+  "choice": "Yes, that is the rule",
+  "note": "",
+  "saved_at": "2026-11-26T02:03:35.355Z",
+  "question": "Inclusion rule for the matrix",
+  "waiting_on": "Zeke",
+  "recommended": "Yes, that is the rule",
+  "guide_question": "Q-001",
+  "requirement_ids": [
+   "ALL-R-047"
+  ]
+ },
+ "O2": {
+  "choice": "Include them as rows with their own tests",
+  "note": "BCBA and BT/RBT · UNRESOLVED: \"Employee ID\"\n\nThis is the contactId from central reach.\n\nPlease update this where necessary, as a requirement or BCBA in ABT/IDT, and some supervisor notes on what to create. This HubSpot field HubSpot Record Id\nhs_object_id\n\npopulates the ExternalSystemId\n\nHubSpot. It's a temporary hold until United United Care sees the work ID and then updates the work ID in HubSpot and CentralReach. \nUpdate this in the google doc and meta data sheet  with background workers",
+  "saved_at": "2026-11-26T17:07:23.266Z",
+  "question": "Workbook rows that flow CentralReach to HubSpot",
+  "waiting_on": "United Care",
+  "recommended": "",
+  "guide_question": "Q-019",
+  "requirement_ids": [
+   "ALL-R-009",
+   "BCBA-F-028",
+   "BT-F-021",
+   "ALL-R-007"
+  ]
+ },
+ "O3": {
+  "choice": "Drop L186; the guide wins everywhere",
+  "note": "Guide wins ",
+  "saved_at": "2026-11-26T17:59:33.138Z",
+  "question": "Guide line L186: repo build files win over the guide",
+  "waiting_on": "Zeke",
+  "recommended": "Drop L186 and the L201 note; the guide wins everywhere",
+  "guide_question": "Q-002",
+  "requirement_ids": [
+   "ALL-R-052"
+  ]
+ },
+ "O4": {
+  "choice": "Add the checked IDs and exact names to the guide insert",
+  "note": "If there's a label marked \"not in CR yet\" and it is shown in the map to be added. Then it needs to be required.",
+  "saved_at": "2026-11-26T18:04:27.662Z",
+  "question": "CentralReach IDs that exist only in code",
+  "waiting_on": "Zeke",
+  "recommended": "Add the checked IDs and exact names to the guide insert",
+  "guide_question": "Q-003",
+  "requirement_ids": [
+   "ALL-R-049",
+   "CASE-L-015",
+   "CASE-L-016",
+   "CASE-L-017"
+  ]
+ }
+}
